@@ -1,0 +1,6 @@
+{
+  "name": "EduAssess AI — Sistem CBT Terintegrasi Gemini",
+  "description": "Aplikasi Computer Based Test (CBT) Terintegrasi Google Gemini AI dan PostgreSQL dengan evaluasi kognitif LOTS vs HOTS, manajemen soal CSV, token ujian siswa, dan deteksi anti-cheat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
