@@ -1,0 +1,240 @@
+{
+  "entities": {
+    "Exam": {
+      "title": "Exam",
+      "description": "Represents a CBT exam package distributed to a specific grade level (10, 11, 12, or SEMUA) and class.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "Numeric identifier of the exam."
+        },
+        "judul_ujian": {
+          "type": "string",
+          "description": "Title of the exam package.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "durasi_menit": {
+          "type": "number",
+          "description": "Duration of the exam in minutes."
+        },
+        "target_tingkat": {
+          "type": "string",
+          "description": "Target grade level: 10, 11, 12, or SEMUA.",
+          "enum": ["10", "11", "12", "SEMUA"],
+          "maxLength": 16
+        },
+        "target_kelas": {
+          "type": "string",
+          "description": "Target specific class name or SEMUA.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last synchronization.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "judul_ujian", "durasi_menit", "target_tingkat", "target_kelas", "updatedAt"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Represents a student registered in the CBT database with a unique 6-character exam token.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "Numeric identifier of the student."
+        },
+        "nama": {
+          "type": "string",
+          "description": "Full name of the student.",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "kelas": {
+          "type": "string",
+          "description": "Class/rombel of the student (e.g. X MIPA 1, XI IPS 1, XII MIPA 2).",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "token_ujian": {
+          "type": "string",
+          "description": "Unique 6-character alphanumeric exam token.",
+          "minLength": 6,
+          "maxLength": 6,
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "status_ujian": {
+          "type": "string",
+          "description": "Current exam status of the student.",
+          "enum": ["Belum Mulai", "Sedang Ujian", "Selesai"],
+          "maxLength": 32
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last synchronization.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "nama", "kelas", "token_ujian", "status_ujian", "updatedAt"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Represents a CBT question (PG Biasa or PG Kompleks) belonging to an exam package.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "Numeric identifier of the question."
+        },
+        "exam_id": {
+          "type": "number",
+          "description": "Foreign key ID of the parent exam package."
+        },
+        "teks_soal": {
+          "type": "string",
+          "description": "Main question text.",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "tipe_soal": {
+          "type": "string",
+          "description": "Question type: PG or Kompleks.",
+          "enum": ["PG", "Kompleks"],
+          "maxLength": 20
+        },
+        "data_opsi": {
+          "type": "object",
+          "description": "Option map A-E and optional stimulus wacana."
+        },
+        "kunci_jawaban": {
+          "type": "array",
+          "description": "Array of correct option keys (A-E)."
+        },
+        "bobot": {
+          "type": "number",
+          "description": "Maximum point weight for the question."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last synchronization.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "exam_id", "teks_soal", "tipe_soal", "data_opsi", "kunci_jawaban", "bobot", "updatedAt"]
+    },
+    "Result": {
+      "title": "Result",
+      "description": "Represents a student's submitted exam score, answers, anti-cheat tab logs, and Gemini AI evaluation.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "Numeric identifier of the exam result."
+        },
+        "student_id": {
+          "type": "number",
+          "description": "Numeric identifier of the student."
+        },
+        "exam_id": {
+          "type": "number",
+          "description": "Numeric identifier of the exam."
+        },
+        "skor_angka": {
+          "type": "number",
+          "description": "Normalized score (0-100)."
+        },
+        "jawaban_siswa": {
+          "type": "object",
+          "description": "Map of questionId to selected option keys."
+        },
+        "analisis_ai": {
+          "type": "object",
+          "description": "Optional AI cognitive evaluation result."
+        },
+        "pelanggaran_tab": {
+          "type": "number",
+          "description": "Number of tab switch violations detected during the exam."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Submission timestamp.",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last synchronization.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "student_id", "exam_id", "skor_angka", "jawaban_siswa", "pelanggaran_tab", "created_at", "updatedAt"]
+    },
+    "CbtSyncPulse": {
+      "title": "CbtSyncPulse",
+      "description": "Real-time synchronization state document broadcasting changes across teacher and student portals.",
+      "type": "object",
+      "properties": {
+        "lastSyncedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of the latest synchronization event.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "lastEvent": {
+          "type": "string",
+          "description": "Description of the latest CBT synchronization event.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "totalExams": {
+          "type": "number",
+          "description": "Total active exam packages."
+        },
+        "totalStudents": {
+          "type": "number",
+          "description": "Total registered students."
+        },
+        "totalQuestions": {
+          "type": "number",
+          "description": "Total questions in bank."
+        },
+        "totalResults": {
+          "type": "number",
+          "description": "Total submitted exam results."
+        }
+      },
+      "required": ["lastSyncedAt", "lastEvent", "totalExams", "totalStudents", "totalQuestions", "totalResults"]
+    }
+  },
+  "firestore": {
+    "/exams/{examId}": {
+      "schema": { "$ref": "#/entities/Exam" },
+      "description": "Synchronized CBT exam packages and 3-grade class distributions."
+    },
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Synchronized CBT student records and 6-character exam tokens."
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/Question" },
+      "description": "Synchronized CBT question bank items."
+    },
+    "/results/{resultId}": {
+      "schema": { "$ref": "#/entities/Result" },
+      "description": "Synchronized CBT student exam results and AI evaluations."
+    },
+    "/cbt_sync/{syncId}": {
+      "schema": { "$ref": "#/entities/CbtSyncPulse" },
+      "description": "Real-time synchronization pulse document for live cross-client updates."
+    }
+  }
+}

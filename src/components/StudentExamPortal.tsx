@@ -12,7 +12,12 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, AnalisisAI } from '../types/cbt';
-import { calculateExamScore } from '../utils/cbtLogic';
+import {
+  loginStudentExamCbt,
+  submitStudentExamCbt,
+  generateAiAnalysisCbt,
+  safeApiJson,
+} from '../lib/cbtFirestoreService';
 
 interface StudentExamPortalProps {
   exams: ExamItem[];
@@ -76,31 +81,23 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
     setIsLoggingIn(true);
     try {
-      const res = await fetch('/api/exam/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nama: namaInput.trim(),
-          token_ujian: tokenInput.toUpperCase().trim(),
-          examId: selectedExamId ? Number(selectedExamId) : undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setLoginError(data.error || 'Gagal memulai sesi ujian.');
-        return;
-      }
+      const session = await loginStudentExamCbt(
+        namaInput.trim(),
+        tokenInput.toUpperCase().trim(),
+        selectedExamId ? Number(selectedExamId) : undefined
+      );
 
-      setActiveStudent(data.student);
-      setActiveExam(data.exam);
-      setExamQuestions(data.questions || []);
-      setRemainingSeconds((data.exam?.durasi_menit || 60) * 60);
+      setActiveStudent(session.student);
+      setActiveExam(session.exam);
+      setExamQuestions(session.questions || []);
+      setRemainingSeconds((session.exam?.durasi_menit || 60) * 60);
       setCurrentIndex(0);
       setAnswers({});
       setTabViolations(0);
       setSubmittedSummary(null);
+      onExamCompleted();
     } catch (err: any) {
-      setLoginError(err.message || 'Terjadi kesalahan koneksi ke server.');
+      setLoginError(err.message || 'Gagal memulai sesi ujian.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -108,10 +105,26 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   const triggerViolation = useCallback(() => {
     if (!activeStudent || submittedSummary) return;
-    setTabViolations((prev) => prev + 1);
+    setTabViolations((prev) => {
+      const nextCount = prev + 1;
+      const answeredNow = Object.keys(answers).filter(
+        (k) => answers[k] && answers[k].length > 0
+      ).length;
+      safeApiJson('/api/exam/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nama: activeStudent.nama,
+          kelas: activeStudent.kelas,
+          pelanggaranTab: nextCount,
+          answeredCount: answeredNow,
+        }),
+      });
+      return nextCount;
+    });
     setShowCheatBanner(true);
     setLastViolationTime(new Date().toLocaleTimeString('id-ID'));
-  }, [activeStudent, submittedSummary]);
+  }, [activeStudent, submittedSummary, answers]);
 
   // Basic Anti-Cheat: Detect window blur and visibilitychange
   useEffect(() => {
@@ -142,48 +155,22 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     setConfirmSubmitModal(false);
 
     try {
-      const res = await fetch('/api/exam/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          studentId: activeStudent.id,
-          examId: activeExam.id,
-          jawabanSiswa: answers,
-          pelanggaranTab: tabViolations,
-        }),
+      const outcome = await submitStudentExamCbt({
+        student: activeStudent,
+        exam: activeExam,
+        questions: examQuestions,
+        jawabanSiswa: answers,
+        pelanggaranTab: tabViolations,
       });
-      const data = await res.json();
-      if (res.ok && data.result) {
-        setSubmittedSummary({
-          resultId: data.result.id,
-          skor: data.scoreSummary.normalizedScore,
-          kategori: data.scoreSummary.kategoriNilai,
-          rawEarned: data.scoreSummary.rawEarned,
-          rawMax: data.scoreSummary.rawMax,
-          aiResult: null,
-        });
-        onExamCompleted();
-      } else {
-        const localSummary = calculateExamScore(examQuestions, answers);
-        setSubmittedSummary({
-          resultId: 0,
-          skor: localSummary.normalizedScore,
-          kategori: localSummary.kategoriNilai,
-          rawEarned: localSummary.rawEarned,
-          rawMax: localSummary.rawMax,
-          aiResult: null,
-        });
-      }
-    } catch {
-      const localSummary = calculateExamScore(examQuestions, answers);
       setSubmittedSummary({
-        resultId: 0,
-        skor: localSummary.normalizedScore,
-        kategori: localSummary.kategoriNilai,
-        rawEarned: localSummary.rawEarned,
-        rawMax: localSummary.rawMax,
+        resultId: outcome.resultId,
+        skor: outcome.skor,
+        kategori: outcome.kategori,
+        rawEarned: outcome.rawEarned,
+        rawMax: outcome.rawMax,
         aiResult: null,
       });
+      onExamCompleted();
     } finally {
       setIsSubmitting(false);
     }
@@ -248,23 +235,16 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     if (!activeStudent || !submittedSummary) return;
     setIsGeneratingStudentAi(true);
     try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resultId: submittedSummary.resultId || undefined,
-          nama_siswa: activeStudent.nama,
-          questions: examQuestions,
-          jawaban_siswa: answers,
-        }),
+      const aiData = await generateAiAnalysisCbt({
+        resultId: submittedSummary.resultId || undefined,
+        nama_siswa: activeStudent.nama,
+        questions: examQuestions,
+        jawaban_siswa: answers,
       });
-      const aiData = await res.json();
-      if (res.ok) {
-        setSubmittedSummary((prev) =>
-          prev ? { ...prev, aiResult: aiData } : null
-        );
-        onExamCompleted();
-      }
+      setSubmittedSummary((prev) =>
+        prev ? { ...prev, aiResult: aiData } : null
+      );
+      onExamCompleted();
     } catch (error) {
       console.error('Error requesting AI evaluation:', error);
     } finally {

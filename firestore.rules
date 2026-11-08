@@ -1,0 +1,125 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidExam(data) {
+      return data.keys().hasAll(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'authorUid', 'updatedAt']) &&
+        data.id is number && data.id >= 1 &&
+        data.judul_ujian is string && data.judul_ujian.size() >= 1 && data.judul_ujian.size() <= 200 &&
+        data.durasi_menit is number && data.durasi_menit >= 1 && data.durasi_menit <= 300 &&
+        data.target_tingkat is string && data.target_tingkat.size() >= 1 && data.target_tingkat.size() <= 16 &&
+        (data.target_tingkat == '10' || data.target_tingkat == '11' || data.target_tingkat == '12' || data.target_tingkat == 'SEMUA') &&
+        data.target_kelas is string && data.target_kelas.size() >= 1 && data.target_kelas.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'authorUid', 'updatedAt']) &&
+        data.id is number && data.id >= 1 &&
+        data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 150 &&
+        data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 64 &&
+        data.token_ujian is string && data.token_ujian.size() == 6 && data.token_ujian.matches('^[A-Z0-9]{6}$') &&
+        data.status_ujian is string && data.status_ujian.size() >= 1 && data.status_ujian.size() <= 32 &&
+        (data.status_ujian == 'Belum Mulai' || data.status_ujian == 'Sedang Ujian' || data.status_ujian == 'Selesai') &&
+        data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    function isValidQuestion(data) {
+      return data.keys().hasAll(['id', 'exam_id', 'teks_soal', 'tipe_soal', 'bobot', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'exam_id', 'teks_soal', 'tipe_soal', 'data_opsi', 'kunci_jawaban', 'bobot', 'authorUid', 'updatedAt']) &&
+        data.id is number && data.id >= 1 &&
+        data.exam_id is number && data.exam_id >= 1 &&
+        data.teks_soal is string && data.teks_soal.size() >= 1 && data.teks_soal.size() <= 4000 &&
+        data.tipe_soal is string && data.tipe_soal.size() >= 2 && data.tipe_soal.size() <= 20 &&
+        (data.tipe_soal == 'PG' || data.tipe_soal == 'Kompleks') &&
+        data.bobot is number && data.bobot >= 1 && data.bobot <= 100 &&
+        data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    function isValidResult(data) {
+      return data.keys().hasAll(['id', 'student_id', 'exam_id', 'skor_angka', 'pelanggaran_tab', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'student_id', 'exam_id', 'skor_angka', 'jawaban_siswa', 'analisis_ai', 'pelanggaran_tab', 'created_at', 'authorUid', 'updatedAt']) &&
+        data.id is number && data.id >= 1 &&
+        data.student_id is number && data.student_id >= 1 &&
+        data.exam_id is number && data.exam_id >= 1 &&
+        data.skor_angka is number && data.skor_angka >= 0 && data.skor_angka <= 100 &&
+        data.pelanggaran_tab is number && data.pelanggaran_tab >= 0 && data.pelanggaran_tab <= 1000 &&
+        data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    function isValidCbtSyncPulse(data) {
+      return data.keys().hasAll(['lastSyncedAt', 'lastEvent', 'totalExams', 'totalStudents', 'totalQuestions', 'totalResults']) &&
+        data.keys().hasOnly(['lastSyncedAt', 'lastEvent', 'totalExams', 'totalStudents', 'totalQuestions', 'totalResults', 'authorUid']) &&
+        data.lastSyncedAt is string && data.lastSyncedAt.size() >= 1 && data.lastSyncedAt.size() <= 64 &&
+        data.lastEvent is string && data.lastEvent.size() >= 1 && data.lastEvent.size() <= 200 &&
+        data.totalExams is number && data.totalExams >= 0 &&
+        data.totalStudents is number && data.totalStudents >= 0 &&
+        data.totalQuestions is number && data.totalQuestions >= 0 &&
+        data.totalResults is number && data.totalResults >= 0;
+    }
+
+    match /test/{docId} {
+      allow get: if isValidId(docId) && docId == 'connection';
+      allow list, create, update, delete: if false;
+    }
+
+    match /cbt_sync/{syncId} {
+      allow get: if isValidId(syncId) && syncId == 'live_state';
+      allow list: if resource.data.totalExams >= 0;
+      allow create: if isValidId(syncId) && isValidCbtSyncPulse(incoming());
+      allow update: if isValidId(syncId) && isValidCbtSyncPulse(incoming());
+      allow delete: if isValidId(syncId);
+    }
+
+    match /exams/{examId} {
+      allow get: if isValidId(examId);
+      allow list: if resource.data.id >= 1;
+      allow create: if isValidId(examId) && isValidExam(incoming());
+      allow update: if isValidId(examId) && isValidExam(incoming()) && incoming().id == existing().id;
+      allow delete: if isValidId(examId);
+    }
+
+    match /students/{studentId} {
+      allow get: if isValidId(studentId);
+      allow list: if resource.data.id >= 1;
+      allow create: if isValidId(studentId) && isValidStudent(incoming());
+      allow update: if isValidId(studentId) && isValidStudent(incoming()) && incoming().id == existing().id;
+      allow delete: if isValidId(studentId);
+    }
+
+    match /questions/{questionId} {
+      allow get: if isValidId(questionId);
+      allow list: if resource.data.id >= 1;
+      allow create: if isValidId(questionId) && isValidQuestion(incoming());
+      allow update: if isValidId(questionId) && isValidQuestion(incoming()) && incoming().id == existing().id;
+      allow delete: if isValidId(questionId);
+    }
+
+    match /results/{resultId} {
+      allow get: if isValidId(resultId);
+      allow list: if resource.data.id >= 1;
+      allow create: if isValidId(resultId) && isValidResult(incoming());
+      allow update: if isValidId(resultId) && isValidResult(incoming()) && incoming().id == existing().id;
+      allow delete: if isValidId(resultId);
+    }
+  }
+}

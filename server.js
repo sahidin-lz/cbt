@@ -52,6 +52,10 @@ var exams = pgTable("exams", {
   id: serial("id").primaryKey(),
   judul_ujian: text("judul_ujian").notNull(),
   durasi_menit: integer("durasi_menit").notNull().default(60),
+  target_tingkat: text("target_tingkat").default("SEMUA").notNull(),
+  // 'SEMUA' | '10' | '11' | '12'
+  target_kelas: text("target_kelas").default("SEMUA").notNull(),
+  // 'SEMUA' or specific class e.g. 'XII MIPA 1'
   created_at: timestamp("created_at").defaultNow()
 });
 var questions = pgTable("questions", {
@@ -130,6 +134,32 @@ function generateExamToken(seed) {
     token += chars[randIndex];
   }
   return token;
+}
+function extractTingkatFromKelas(kelas) {
+  const upper = (kelas || "").toUpperCase().trim();
+  if (/^(XII|12)\b/.test(upper) || /\b(XII|12)\b/.test(upper)) {
+    return "12";
+  }
+  if (/^(XI|11)\b/.test(upper) || /\b(XI|11)\b/.test(upper)) {
+    return "11";
+  }
+  if (/^(X|10)\b/.test(upper) || /\b(X|10)\b/.test(upper)) {
+    return "10";
+  }
+  return "LAINNYA";
+}
+function isExamMatchedForStudentClass(exam, studentKelas) {
+  const cleanTargetKelas = (exam.target_kelas || "SEMUA").toUpperCase().trim();
+  const cleanStudentKelas = (studentKelas || "").toUpperCase().trim();
+  if (cleanTargetKelas !== "SEMUA" && cleanTargetKelas !== "") {
+    return cleanTargetKelas === cleanStudentKelas;
+  }
+  const cleanTargetTingkat = (exam.target_tingkat || "SEMUA").toUpperCase().trim();
+  if (cleanTargetTingkat === "SEMUA" || cleanTargetTingkat === "") {
+    return true;
+  }
+  const studentTingkat = extractTingkatFromKelas(studentKelas);
+  return cleanTargetTingkat === studentTingkat;
 }
 function normalizeAnswerKeys(keys) {
   if (!keys) return [];
@@ -242,7 +272,7 @@ function splitCsvLine(line) {
       } else {
         inQuotes = !inQuotes;
       }
-    } else if (ch === "," && !inQuotes) {
+    } else if ((ch === "," || ch === ";") && !inQuotes) {
       result.push(current.trim());
       current = "";
     } else {
@@ -251,6 +281,62 @@ function splitCsvLine(line) {
   }
   result.push(current.trim());
   return result;
+}
+function parseStudentsCsv(csvText) {
+  const lines = csvText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  if (lines.length === 0) {
+    return {
+      rows: [],
+      errors: ["File CSV atau daftar siswa kosong."]
+    };
+  }
+  const firstCells = splitCsvLine(lines[0]).map(
+    (c) => c.toLowerCase().replace(/^["']|["']$/g, "").trim()
+  );
+  const hasHeader = firstCells.includes("nama") || firstCells.includes("nama_siswa") || firstCells.includes("nama lengkap") || firstCells.includes("kelas");
+  let namaIdx = 0;
+  let kelasIdx = 1;
+  let tokenIdx = -1;
+  if (hasHeader) {
+    namaIdx = firstCells.findIndex(
+      (c) => ["nama", "nama_siswa", "nama lengkap", "nama siswa"].includes(c)
+    );
+    kelasIdx = firstCells.findIndex(
+      (c) => ["kelas", "rombel", "tingkat_kelas"].includes(c)
+    );
+    tokenIdx = firstCells.findIndex(
+      (c) => ["token", "token_ujian"].includes(c)
+    );
+    if (namaIdx === -1) namaIdx = 0;
+    if (kelasIdx === -1) kelasIdx = 1;
+  }
+  const startRow = hasHeader ? 1 : 0;
+  const rows = [];
+  const errors = [];
+  for (let i = startRow; i < lines.length; i++) {
+    const cells = splitCsvLine(lines[i]).map(
+      (c) => c.replace(/^["']|["']$/g, "").trim()
+    );
+    const nama = cells[namaIdx] || "";
+    const kelas = cells[kelasIdx] || "";
+    const rawToken = tokenIdx >= 0 ? (cells[tokenIdx] || "").toUpperCase() : "";
+    if (!nama || !kelas) {
+      errors.push(
+        `Baris ${i + 1}: Kolom Nama Siswa dan Kelas wajib terisi.`
+      );
+      continue;
+    }
+    rows.push({
+      nama,
+      kelas,
+      tingkat: extractTingkatFromKelas(kelas),
+      token_ujian: rawToken.length === 6 ? rawToken : void 0
+    });
+  }
+  if (rows.length === 0 && errors.length === 0) {
+    errors.push("Tidak ada baris data siswa yang valid ditemukan di dalam CSV.");
+  }
+  return { rows, errors };
 }
 function parseQuestionsCsv(csvText) {
   const lines = csvText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
@@ -445,6 +531,34 @@ async function addStudentRecord(nama, kelas, token) {
     throw new Error("Gagal menambahkan data siswa ke database.", { cause: error });
   }
 }
+async function createStudentsFromCsv(csvRows, replaceExisting) {
+  try {
+    if (replaceExisting) {
+      await db.delete(students);
+    }
+    const existingStudents = await db.select().from(students);
+    const usedTokens = new Set(existingStudents.map((s) => s.token_ujian));
+    const values = csvRows.map((row) => {
+      let token = row.token_ujian && !usedTokens.has(row.token_ujian) ? row.token_ujian : generateExamToken();
+      while (usedTokens.has(token)) {
+        token = generateExamToken();
+      }
+      usedTokens.add(token);
+      return {
+        nama: row.nama.trim(),
+        kelas: row.kelas.trim(),
+        token_ujian: token,
+        status_ujian: "Belum Mulai"
+      };
+    });
+    return await db.insert(students).values(values).returning();
+  } catch (error) {
+    console.error("Database query failed in createStudentsFromCsv:", error);
+    throw new Error("Gagal menyimpan data upload massal siswa ke database.", {
+      cause: error
+    });
+  }
+}
 async function updateStudentRecord(studentId, nama, kelas) {
   try {
     const [updated] = await db.update(students).set({
@@ -474,11 +588,13 @@ async function deleteStudentRecord(studentId) {
     throw new Error("Gagal menghapus siswa.", { cause: error });
   }
 }
-async function createNewExamRecord(judul_ujian, durasi_menit) {
+async function createNewExamRecord(judul_ujian, durasi_menit, target_tingkat = "SEMUA", target_kelas = "SEMUA") {
   try {
     const [created] = await db.insert(exams).values({
       judul_ujian: judul_ujian.trim(),
-      durasi_menit: Math.max(5, durasi_menit)
+      durasi_menit: Math.max(5, durasi_menit),
+      target_tingkat: target_tingkat.trim() || "SEMUA",
+      target_kelas: target_kelas.trim() || "SEMUA"
     }).returning();
     return created;
   } catch (error) {
@@ -486,11 +602,13 @@ async function createNewExamRecord(judul_ujian, durasi_menit) {
     throw new Error("Gagal membuat paket ujian baru.", { cause: error });
   }
 }
-async function updateExamRecord(examId, judul_ujian, durasi_menit) {
+async function updateExamRecord(examId, judul_ujian, durasi_menit, target_tingkat = "SEMUA", target_kelas = "SEMUA") {
   try {
     const [updated] = await db.update(exams).set({
       judul_ujian: judul_ujian.trim(),
-      durasi_menit: Math.max(5, durasi_menit)
+      durasi_menit: Math.max(5, durasi_menit),
+      target_tingkat: target_tingkat.trim() || "SEMUA",
+      target_kelas: target_kelas.trim() || "SEMUA"
     }).where(eq(exams.id, examId)).returning();
     return updated;
   } catch (error) {
@@ -511,7 +629,9 @@ async function verifyStudentTokenForExam(namaInput, tokenInput, examIdInput) {
     const cleanToken = tokenInput.toUpperCase().trim();
     const matchedStudents = await db.select().from(students).where(eq(students.token_ujian, cleanToken));
     if (matchedStudents.length === 0) {
-      return { error: "Token Ujian tidak ditemukan di database siswa. Hubungi Guru/Pengawas Anda." };
+      return {
+        error: "Token Ujian tidak ditemukan di database siswa. Hubungi Guru/Pengawas Anda."
+      };
     }
     const student = matchedStudents[0];
     const cleanNama = namaInput.trim();
@@ -520,13 +640,23 @@ async function verifyStudentTokenForExam(namaInput, tokenInput, examIdInput) {
     }
     const allExams = await db.select().from(exams).orderBy(desc(exams.id));
     if (allExams.length === 0) {
-      return { error: "Belum ada Paket Ujian yang aktif. Silakan tunggu Guru mengaktifkan ujian." };
+      return {
+        error: "Belum ada Paket Ujian yang aktif. Silakan tunggu Guru mengaktifkan ujian."
+      };
     }
-    const activeExam = (examIdInput ? allExams.find((e) => e.id === examIdInput) : allExams[0]) || allExams[0];
+    const matchedExams = allExams.filter(
+      (ex) => isExamMatchedForStudentClass(ex, student.kelas)
+    );
+    if (matchedExams.length === 0) {
+      return {
+        error: `Tidak ditemukan Paket Ujian yang didistribusikan untuk kelas Anda (${student.kelas}). Hubungi Guru Pengawas.`
+      };
+    }
+    const activeExam = (examIdInput ? matchedExams.find((e) => e.id === examIdInput) : matchedExams[0]) || matchedExams[0];
     const examQuestions = await db.select().from(questions).where(eq(questions.exam_id, activeExam.id)).orderBy(questions.id);
     if (examQuestions.length === 0) {
       return {
-        error: `Paket ujian "${activeExam.judul_ujian}" belum memiliki daftar soal. Silakan hubungi Guru.`
+        error: `Paket ujian "${activeExam.judul_ujian}" untuk kelas ${student.kelas} belum memiliki butir soal. Silakan hubungi Guru.`
       };
     }
     const [updatedStudent] = await db.update(students).set({
@@ -536,6 +666,7 @@ async function verifyStudentTokenForExam(namaInput, tokenInput, examIdInput) {
     return {
       student: updatedStudent,
       exam: activeExam,
+      availableExams: matchedExams,
       questions: examQuestions
     };
   } catch (error) {
@@ -579,8 +710,9 @@ async function saveAiAnalysisToResult(resultId, analisisAi) {
 }
 
 // src/lib/firebase-admin.ts
-import { initializeApp, getApps } from "firebase-admin/app";
+import { initializeApp, getApps, getApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 
 // firebase-applet-config.json
 var firebase_applet_config_default = {
@@ -588,6 +720,7 @@ var firebase_applet_config_default = {
   appId: "1:121481033540:web:b68fa46310205e0ee44911",
   apiKey: "AIzaSyBWnZxDLeu1X8cpx6kAnj6SH_2f21JAmS8",
   authDomain: "ferrous-epoch-v6pck.firebaseapp.com",
+  firestoreDatabaseId: "ai-studio-eduassessaisiste-a2296655-657e-40ae-b3fd-26126203a6f1",
   storageBucket: "ferrous-epoch-v6pck.firebasestorage.app",
   messagingSenderId: "121481033540",
   measurementId: "",
@@ -596,12 +729,157 @@ var firebase_applet_config_default = {
 };
 
 // src/lib/firebase-admin.ts
-if (!getApps().length) {
-  initializeApp({
-    projectId: firebase_applet_config_default.projectId
-  });
+var adminApp = getApps().length ? getApp() : initializeApp({
+  projectId: firebase_applet_config_default.projectId
+});
+var adminAuth = getAuth(adminApp);
+var adminDb = getFirestore(
+  adminApp,
+  firebase_applet_config_default.firestoreDatabaseId
+);
+var DEFAULT_ADMIN_UID = "sahidin30@gmail.com";
+async function syncCbtStateToFirestore(data, eventDescription = "Sinkronisasi otomatis sistem CBT") {
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  try {
+    const batch = adminDb.batch();
+    const pulseRef = adminDb.collection("cbt_sync").doc("live_state");
+    const pulsePayload = {
+      lastSyncedAt: nowIso,
+      lastEvent: eventDescription.slice(0, 200),
+      totalExams: data.exams.length,
+      totalStudents: data.students.length,
+      totalQuestions: data.questions.length,
+      totalResults: data.results.length,
+      authorUid: DEFAULT_ADMIN_UID
+    };
+    batch.set(pulseRef, pulsePayload);
+    for (const ex of data.exams) {
+      const docRef = adminDb.collection("exams").doc(String(ex.id));
+      batch.set(docRef, {
+        id: Number(ex.id),
+        judul_ujian: String(ex.judul_ujian || "").slice(0, 200),
+        durasi_menit: Number(ex.durasi_menit) || 60,
+        target_tingkat: String(ex.target_tingkat || "SEMUA").slice(0, 16),
+        target_kelas: String(ex.target_kelas || "SEMUA").slice(0, 64),
+        authorUid: DEFAULT_ADMIN_UID,
+        updatedAt: nowIso
+      });
+    }
+    for (const st of data.students) {
+      const docRef = adminDb.collection("students").doc(String(st.id));
+      batch.set(docRef, {
+        id: Number(st.id),
+        nama: String(st.nama || "").slice(0, 150),
+        kelas: String(st.kelas || "").slice(0, 64),
+        token_ujian: String(st.token_ujian || "").slice(0, 6),
+        status_ujian: String(st.status_ujian || "Belum Mulai").slice(0, 32),
+        authorUid: DEFAULT_ADMIN_UID,
+        updatedAt: nowIso
+      });
+    }
+    for (const q of data.questions) {
+      const docRef = adminDb.collection("questions").doc(String(q.id));
+      batch.set(docRef, {
+        id: Number(q.id),
+        exam_id: Number(q.exam_id),
+        teks_soal: String(q.teks_soal || "").slice(0, 4e3),
+        tipe_soal: q.tipe_soal === "Kompleks" ? "Kompleks" : "PG",
+        data_opsi: q.data_opsi || { wacana: "", opsi: { A: "", B: "", C: "", D: "", E: "" } },
+        kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ["A"],
+        bobot: Number(q.bobot) || 2,
+        authorUid: DEFAULT_ADMIN_UID,
+        updatedAt: nowIso
+      });
+    }
+    for (const r of data.results) {
+      const docRef = adminDb.collection("results").doc(String(r.id));
+      batch.set(docRef, {
+        id: Number(r.id),
+        student_id: Number(r.student_id),
+        exam_id: Number(r.exam_id),
+        skor_angka: Number(r.skor_angka) || 0,
+        jawaban_siswa: r.jawaban_siswa || {},
+        analisis_ai: r.analisis_ai || null,
+        pelanggaran_tab: Number(r.pelanggaran_tab) || 0,
+        created_at: r.created_at ? new Date(r.created_at).toISOString() : nowIso,
+        authorUid: DEFAULT_ADMIN_UID,
+        updatedAt: nowIso
+      });
+    }
+    await batch.commit();
+    return {
+      synced: true,
+      databaseId: firebase_applet_config_default.firestoreDatabaseId,
+      projectId: firebase_applet_config_default.projectId,
+      pulse: pulsePayload
+    };
+  } catch (error) {
+    console.warn("Firestore sync warning:", error?.message || error);
+    return {
+      synced: false,
+      databaseId: firebase_applet_config_default.firestoreDatabaseId,
+      projectId: firebase_applet_config_default.projectId,
+      error: error?.message || "Gagal sinkronisasi ke Firestore"
+    };
+  }
 }
-var adminAuth = getAuth();
+async function removeDeletedDocFromFirestore(collectionName, docId) {
+  try {
+    await adminDb.collection(collectionName).doc(String(docId)).delete();
+  } catch (error) {
+    console.warn(
+      `Warning deleting ${collectionName}/${docId} from Firestore:`,
+      error?.message
+    );
+  }
+}
+async function getFirestoreSyncStatus(fallbackData) {
+  try {
+    const pulseSnap = await adminDb.collection("cbt_sync").doc("live_state").get();
+    if (!pulseSnap.exists) {
+      const seeded = await syncCbtStateToFirestore(
+        fallbackData,
+        "Inisialisasi koneksi Firebase Firestore"
+      );
+      return {
+        connected: seeded.synced,
+        databaseId: firebase_applet_config_default.firestoreDatabaseId,
+        projectId: firebase_applet_config_default.projectId,
+        pulse: seeded.pulse || {
+          lastSyncedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          lastEvent: "Siap Sinkronisasi",
+          totalExams: fallbackData.exams.length,
+          totalStudents: fallbackData.students.length,
+          totalQuestions: fallbackData.questions.length,
+          totalResults: fallbackData.results.length,
+          authorUid: DEFAULT_ADMIN_UID
+        }
+      };
+    }
+    return {
+      connected: true,
+      databaseId: firebase_applet_config_default.firestoreDatabaseId,
+      projectId: firebase_applet_config_default.projectId,
+      pulse: pulseSnap.data()
+    };
+  } catch (error) {
+    return {
+      connected: false,
+      databaseId: firebase_applet_config_default.firestoreDatabaseId,
+      projectId: firebase_applet_config_default.projectId,
+      error: error?.message || "Firestore belum terjangkau",
+      pulse: {
+        lastSyncedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        lastEvent: "Mode Lokal PostgreSQL",
+        totalExams: fallbackData.exams.length,
+        totalStudents: fallbackData.students.length,
+        totalQuestions: fallbackData.questions.length,
+        totalResults: fallbackData.results.length,
+        authorUid: DEFAULT_ADMIN_UID
+      }
+    };
+  }
+}
 
 // server.ts
 dotenv.config();
@@ -625,6 +903,15 @@ var SYSTEM_PROMPT_EVALUATOR = `Anda adalah AI Evaluator CBT. Tugas Anda:
 2. Analisis kekuatan dan kelemahan kognitif siswa (LOTS vs HOTS).
 3. Berikan 3 poin rekomendasi belajar.
 Keluarkan output HANYA dalam format JSON valid dengan struktur: { nama_siswa, skor_akhir, kategori_nilai, analisis_kompetensi: { kekuatan, kelemahan }, evaluasi_hots, rekomendasi_belajar }.`;
+async function broadcastFirestoreSync(eventDescription) {
+  try {
+    const latest = await getDashboardData();
+    return await syncCbtStateToFirestore(latest, eventDescription);
+  } catch (err) {
+    console.warn("Broadcast Firestore sync skipped:", err);
+    return null;
+  }
+}
 app.post("/api/auth/sync", async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -635,13 +922,36 @@ app.post("/api/auth/sync", async (req, res) => {
     const decoded = await adminAuth.verifyIdToken(token);
     const user = await getOrCreateAdminUser(
       decoded.uid,
-      decoded.email || "guru@cbt.sch.id",
+      decoded.email || "sahidin30@gmail.com",
       decoded.name
     );
+    await broadcastFirestoreSync(`Login Guru terverifikasi (${user.email})`);
     res.json({ user });
   } catch (error) {
     console.error("Auth sync error:", error);
     res.status(401).json({ error: "Gagal memverifikasi token Google Sign-In." });
+  }
+});
+app.get("/api/firebase/status", async (_req, res) => {
+  try {
+    const data = await getDashboardData();
+    const status = await getFirestoreSyncStatus(data);
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal memuat status Firebase." });
+  }
+});
+app.post("/api/firebase/sync", async (req, res) => {
+  try {
+    const reason = req.body?.reason || "Sinkronisasi manual oleh Guru dari Dashboard";
+    const data = await getDashboardData();
+    const syncOutcome = await syncCbtStateToFirestore(data, String(reason));
+    res.json({
+      ...syncOutcome,
+      data
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal melakukan sinkronisasi Firebase." });
   }
 });
 app.get("/api/dashboard", async (_req, res) => {
@@ -655,13 +965,18 @@ app.get("/api/dashboard", async (_req, res) => {
 });
 app.post("/api/exams", async (req, res) => {
   try {
-    const { judul_ujian, durasi_menit } = req.body;
+    const { judul_ujian, durasi_menit, target_tingkat, target_kelas } = req.body;
     if (!judul_ujian || !String(judul_ujian).trim()) {
       return res.status(400).json({ error: "Judul ujian wajib diisi." });
     }
     const created = await createNewExamRecord(
       String(judul_ujian),
-      Number(durasi_menit) || 60
+      Number(durasi_menit) || 60,
+      String(target_tingkat || "SEMUA"),
+      String(target_kelas || "SEMUA")
+    );
+    await broadcastFirestoreSync(
+      `Paket ujian baru dibuat: ${created.judul_ujian} (Tingkat ${created.target_tingkat})`
     );
     res.json({ exam: created });
   } catch (error) {
@@ -671,15 +986,18 @@ app.post("/api/exams", async (req, res) => {
 app.put("/api/exams/:id", async (req, res) => {
   try {
     const examId = Number(req.params.id);
-    const { judul_ujian, durasi_menit } = req.body;
+    const { judul_ujian, durasi_menit, target_tingkat, target_kelas } = req.body;
     if (!judul_ujian || !String(judul_ujian).trim()) {
       return res.status(400).json({ error: "Judul ujian wajib diisi." });
     }
     const updated = await updateExamRecord(
       examId,
       String(judul_ujian),
-      Number(durasi_menit) || 60
+      Number(durasi_menit) || 60,
+      String(target_tingkat || "SEMUA"),
+      String(target_kelas || "SEMUA")
     );
+    await broadcastFirestoreSync(`Distribusi ujian diperbarui: ${updated.judul_ujian}`);
     res.json({ exam: updated });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal memperbarui ujian." });
@@ -689,6 +1007,8 @@ app.delete("/api/exams/:id", async (req, res) => {
   try {
     const examId = Number(req.params.id);
     await deleteExamRecord(examId);
+    await removeDeletedDocFromFirestore("exams", examId);
+    await broadcastFirestoreSync(`Paket ujian #${examId} dihapus`);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal menghapus ujian." });
@@ -713,6 +1033,7 @@ app.post("/api/questions/manual", async (req, res) => {
       normalizedKeys,
       Number(bobot) || (tipe_soal === "Kompleks" ? 3 : 2)
     );
+    await broadcastFirestoreSync(`Butir soal baru ditambahkan ke ujian #${examId}`);
     res.json({ question: created });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal menambahkan soal." });
@@ -720,7 +1041,10 @@ app.post("/api/questions/manual", async (req, res) => {
 });
 app.delete("/api/questions/:id", async (req, res) => {
   try {
-    await deleteQuestionRecord(Number(req.params.id));
+    const qId = Number(req.params.id);
+    await deleteQuestionRecord(qId);
+    await removeDeletedDocFromFirestore("questions", qId);
+    await broadcastFirestoreSync(`Butir soal #${qId} dihapus`);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal menghapus soal." });
@@ -744,6 +1068,9 @@ app.post("/api/questions/upload-csv", async (req, res) => {
       parsed.rows,
       Boolean(replaceExisting)
     );
+    await broadcastFirestoreSync(
+      `Upload massal ${inserted.length} soal CSV ke paket ujian #${examId}`
+    );
     res.json({
       insertedCount: inserted.length,
       questions: inserted,
@@ -762,9 +1089,43 @@ app.post("/api/students", async (req, res) => {
     }
     const token = customToken && String(customToken).trim().length === 6 ? String(customToken).toUpperCase().trim() : generateExamToken();
     const student = await addStudentRecord(String(nama), String(kelas), token);
+    await broadcastFirestoreSync(
+      `Siswa baru ditambahkan: ${student.nama} (${student.kelas}) \u2014 Token ${student.token_ujian}`
+    );
     res.json({ student });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal menambahkan siswa." });
+  }
+});
+app.post("/api/students/upload-csv", async (req, res) => {
+  try {
+    const { csvText, replaceExisting = false } = req.body;
+    if (!csvText || !String(csvText).trim()) {
+      return res.status(400).json({ error: "Konten CSV siswa wajib diisi." });
+    }
+    const parsed = parseStudentsCsv(String(csvText));
+    if (parsed.rows.length === 0) {
+      return res.status(400).json({
+        error: parsed.errors.join(" | ") || "Format CSV siswa tidak valid."
+      });
+    }
+    const inserted = await createStudentsFromCsv(
+      parsed.rows,
+      Boolean(replaceExisting)
+    );
+    await broadcastFirestoreSync(
+      `Upload massal ${inserted.length} siswa CSV beserta token ujian`
+    );
+    res.json({
+      insertedCount: inserted.length,
+      students: inserted,
+      warnings: parsed.errors
+    });
+  } catch (error) {
+    console.error("Student CSV Upload Error:", error);
+    res.status(500).json({
+      error: error.message || "Gagal memproses upload massal siswa."
+    });
   }
 });
 app.put("/api/students/:id", async (req, res) => {
@@ -775,6 +1136,7 @@ app.put("/api/students/:id", async (req, res) => {
       return res.status(400).json({ error: "Nama siswa dan kelas wajib diisi." });
     }
     const updated = await updateStudentRecord(studentId, String(nama), String(kelas));
+    await broadcastFirestoreSync(`Data siswa diperbarui: ${updated.nama} (${updated.kelas})`);
     res.json({ student: updated });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal memperbarui data siswa." });
@@ -785,6 +1147,9 @@ app.post("/api/students/:id/regenerate-token", async (req, res) => {
     const studentId = Number(req.params.id);
     const newToken = generateExamToken();
     const updated = await regenerateStudentTokenRecord(studentId, newToken);
+    await broadcastFirestoreSync(
+      `Token baru dibuat untuk ${updated.nama}: ${updated.token_ujian}`
+    );
     res.json({ student: updated });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal membuat ulang token." });
@@ -794,6 +1159,8 @@ app.delete("/api/students/:id", async (req, res) => {
   try {
     const studentId = Number(req.params.id);
     await deleteStudentRecord(studentId);
+    await removeDeletedDocFromFirestore("students", studentId);
+    await broadcastFirestoreSync(`Data siswa #${studentId} dihapus`);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal menghapus siswa." });
@@ -813,9 +1180,23 @@ app.post("/api/exam/login", async (req, res) => {
     if ("error" in session) {
       return res.status(400).json({ error: session.error });
     }
+    await broadcastFirestoreSync(
+      `Siswa mulai ujian: ${session.student.nama} (${session.student.kelas}) \u2014 ${session.exam.judul_ujian}`
+    );
     res.json(session);
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal masuk ke sesi ujian." });
+  }
+});
+app.post("/api/exam/heartbeat", async (req, res) => {
+  try {
+    const { nama, kelas, pelanggaranTab = 0, answeredCount = 0 } = req.body;
+    await broadcastFirestoreSync(
+      `Peringatan Anti-Cheat: ${nama || "Siswa"} (${kelas || "-"}) pindah tab (${pelanggaranTab}x) \xB7 Terjawab ${answeredCount} soal`
+    );
+    res.json({ synced: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal sinkronisasi heartbeat." });
   }
 });
 app.post("/api/exam/submit", async (req, res) => {
@@ -829,6 +1210,9 @@ app.post("/api/exam/submit", async (req, res) => {
       Number(examId),
       jawabanSiswa,
       Number(pelanggaranTab) || 0
+    );
+    await broadcastFirestoreSync(
+      `Siswa mengumpulkan ujian (Skor: ${outcome.scoreSummary.normalizedScore}/100)`
     );
     res.json(outcome);
   } catch (error) {
@@ -964,6 +1348,9 @@ Berikan evaluasi kognitif mendalam (LOTS vs HOTS) dalam Bahasa Indonesia sesuai 
     if (resultId) {
       await saveAiAnalysisToResult(Number(resultId), aiAnalysis);
     }
+    await broadcastFirestoreSync(
+      `Evaluasi AI selesai untuk ${nama_siswa} (${aiAnalysis.skor_akhir}/100)`
+    );
     res.json(aiAnalysis);
   } catch (error) {
     console.error("Error in POST /api/analyze:", error);
@@ -988,6 +1375,7 @@ async function startServer() {
   }
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`CBT AI Server running on http://localhost:${PORT}`);
+    broadcastFirestoreSync("Server CBT aktif dan terhubung ke Firebase Firestore");
   });
 }
 startServer();

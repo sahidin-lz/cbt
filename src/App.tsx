@@ -3,10 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { StudentExamPortal } from './components/StudentExamPortal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from './types/cbt';
+import {
+  subscribeToCbtSyncPulse,
+  CbtSyncPulseData,
+} from './lib/firebase';
+import {
+  loadUnifiedDashboardData,
+  subscribeRealtimeFirestoreCollections,
+  pushSnapshotToFirestoreClient,
+  safeApiJson,
+} from './lib/cbtFirestoreService';
 
 type PortalView = 'student' | 'teacher';
 
@@ -19,15 +29,14 @@ export default function App() {
   const [results, setResults] = useState<ResultItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [syncPulse, setSyncPulse] = useState<CbtSyncPulseData | null>(null);
+  const [isSyncingFirebase, setIsSyncingFirebase] = useState(false);
+  const lastSeenSyncTimestamp = useRef<string>('');
 
   const fetchDashboardData = useCallback(async () => {
     try {
       setLoadError(null);
-      const res = await fetch('/api/dashboard');
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Gagal memuat data dari server.');
-      }
+      const data = await loadUnifiedDashboardData();
       setExams(data.exams || []);
       setQuestions(data.questions || []);
       setStudents(data.students || []);
@@ -40,8 +49,90 @@ export default function App() {
     }
   }, []);
 
+  const handleManualFirebaseSync = useCallback(async () => {
+    setIsSyncingFirebase(true);
+    try {
+      const apiRes = await safeApiJson<{
+        pulse?: CbtSyncPulseData;
+        data?: {
+          exams: ExamItem[];
+          questions: QuestionItem[];
+          students: StudentItem[];
+          results: ResultItem[];
+        };
+      }>('/api/firebase/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reason: 'Sinkronisasi penuh manual dari Dashboard Guru',
+        }),
+      });
+
+      if (apiRes.ok && apiRes.data) {
+        if (apiRes.data.pulse) {
+          setSyncPulse(apiRes.data.pulse);
+          lastSeenSyncTimestamp.current = apiRes.data.pulse.lastSyncedAt;
+        }
+        if (apiRes.data.data) {
+          setExams(apiRes.data.data.exams || []);
+          setQuestions(apiRes.data.data.questions || []);
+          setStudents(apiRes.data.data.students || []);
+          setResults(apiRes.data.data.results || []);
+        }
+      } else {
+        const clientPulse = await pushSnapshotToFirestoreClient(
+          { exams, students, questions, results },
+          'Sinkronisasi penuh manual dari Dashboard Guru'
+        );
+        if (clientPulse) {
+          setSyncPulse(clientPulse);
+          lastSeenSyncTimestamp.current = clientPulse.lastSyncedAt;
+        }
+        await fetchDashboardData();
+      }
+    } catch (error) {
+      console.error('Manual Firebase sync error:', error);
+    } finally {
+      setIsSyncingFirebase(false);
+    }
+  }, [exams, students, questions, results, fetchDashboardData]);
+
   useEffect(() => {
     fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  // Subscribe directly to Firebase Firestore collections for real-time updates on Vercel & AI Studio
+  useEffect(() => {
+    const unsubCollections = subscribeRealtimeFirestoreCollections({
+      onExams: (items) => {
+        if (items.length > 0) setExams(items);
+      },
+      onStudents: (items) => {
+        if (items.length > 0) setStudents(items);
+      },
+      onQuestions: (items) => {
+        if (items.length > 0) setQuestions(items);
+      },
+      onResults: (items) => {
+        if (items.length > 0) setResults(items);
+      },
+    });
+
+    const unsubPulse = subscribeToCbtSyncPulse((pulse) => {
+      setSyncPulse(pulse);
+      if (
+        pulse.lastSyncedAt &&
+        pulse.lastSyncedAt !== lastSeenSyncTimestamp.current
+      ) {
+        lastSeenSyncTimestamp.current = pulse.lastSyncedAt;
+        fetchDashboardData();
+      }
+    });
+
+    return () => {
+      unsubCollections();
+      unsubPulse();
+    };
   }, [fetchDashboardData]);
 
   return (
@@ -140,6 +231,9 @@ export default function App() {
             students={students}
             results={results}
             onRefreshData={fetchDashboardData}
+            syncPulse={syncPulse}
+            isSyncingFirebase={isSyncingFirebase}
+            onManualFirebaseSync={handleManualFirebaseSync}
           />
         )}
       </main>
@@ -147,7 +241,7 @@ export default function App() {
       {/* Quiet Footer */}
       <footer className="bg-white border-t border-slate-200 py-4 px-6 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-4">
         <span>EduAssess CBT — Sistem Ujian Berbasis Komputer Terintegrasi AI</span>
-        <span>Portal Siswa & Dashboard Manajemen Ujian Guru</span>
+        <span>Sinkronisasi Real-Time Firebase Firestore & PostgreSQL</span>
       </footer>
     </div>
   );

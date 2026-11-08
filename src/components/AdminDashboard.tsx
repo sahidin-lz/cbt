@@ -29,8 +29,25 @@ import {
   SAMPLE_STUDENT_CSV_TEMPLATE,
   extractTingkatFromKelas,
 } from '../utils/cbtLogic';
-import { auth, googleAuthProvider } from '../lib/firebase';
+import {
+  auth,
+  googleAuthProvider,
+  CbtSyncPulseData,
+} from '../lib/firebase';
 import { signInWithPopup } from 'firebase/auth';
+import {
+  safeApiJson,
+  saveExamCbt,
+  deleteExamCbt,
+  saveStudentCbt,
+  uploadStudentsCsvCbt,
+  regenerateStudentTokenCbt,
+  deleteStudentCbt,
+  addManualQuestionCbt,
+  uploadQuestionsCsvCbt,
+  deleteQuestionCbt,
+  generateAiAnalysisCbt,
+} from '../lib/cbtFirestoreService';
 
 interface AdminDashboardProps {
   exams: ExamItem[];
@@ -38,6 +55,9 @@ interface AdminDashboardProps {
   students: StudentItem[];
   results: ResultItem[];
   onRefreshData: () => Promise<void>;
+  syncPulse?: CbtSyncPulseData | null;
+  isSyncingFirebase?: boolean;
+  onManualFirebaseSync?: () => Promise<void>;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -46,6 +66,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   students,
   results,
   onRefreshData,
+  syncPulse,
+  isSyncingFirebase = false,
+  onManualFirebaseSync,
 }) => {
   // Separate Teacher Authentication State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -245,7 +268,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return;
       }
       const idToken = await cred.user.getIdToken();
-      await fetch('/api/auth/sync', {
+      await safeApiJson('/api/auth/sync', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${idToken}`,
@@ -278,41 +301,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     try {
+      const savedExam = await saveExamCbt(payload, editingExamId);
       if (editingExamId) {
-        const res = await fetch(`/api/exams/${editingExamId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          setExamFeedback('Paket ujian & distribusi kelas berhasil diperbarui.');
-          setEditingExamId(null);
-          setNewExamTitle('');
-          setNewExamDuration('60');
-          setNewExamTargetTingkat('10');
-          setNewExamTargetKelas('SEMUA');
-          await onRefreshData();
-        }
+        setExamFeedback('Paket ujian & distribusi kelas berhasil diperbarui.');
+        setEditingExamId(null);
+        setNewExamTitle('');
+        setNewExamDuration('60');
+        setNewExamTargetTingkat('10');
+        setNewExamTargetKelas('SEMUA');
       } else {
-        const res = await fetch('/api/exams', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const data = await res.json();
-        if (res.ok && data.exam) {
-          setExamFeedback(
-            `Paket ujian "${data.exam.judul_ujian}" berhasil dibuat untuk ${formatDistribusiLabel(
-              data.exam.target_tingkat,
-              data.exam.target_kelas
-            )}.`
-          );
-          setSelectedExamId(data.exam.id);
-          setNewExamTitle('');
-          setNewExamDuration('60');
-          await onRefreshData();
-        }
+        setExamFeedback(
+          `Paket ujian "${savedExam.judul_ujian}" berhasil dibuat untuk ${formatDistribusiLabel(
+            savedExam.target_tingkat,
+            savedExam.target_kelas
+          )}.`
+        );
+        setSelectedExamId(savedExam.id);
+        setNewExamTitle('');
+        setNewExamDuration('60');
       }
+      await onRefreshData();
     } finally {
       setIsSavingExam(false);
     }
@@ -320,11 +328,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDeleteExam = async (examId: number, title: string) => {
     setExamFeedback(null);
-    const res = await fetch(`/api/exams/${examId}`, { method: 'DELETE' });
-    if (res.ok) {
-      setExamFeedback(`Paket ujian "${title}" telah dihapus.`);
-      await onRefreshData();
-    }
+    await deleteExamCbt(examId, title);
+    setExamFeedback(`Paket ujian "${title}" telah dihapus.`);
+    await onRefreshData();
   };
 
   // --- Student Database CRUD & Bulk Upload Handlers ---
@@ -335,43 +341,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setStudentFeedback(null);
 
     try {
+      const existingSt = editingStudentId
+        ? students.find((s) => s.id === editingStudentId)
+        : undefined;
+      const savedStudent = await saveStudentCbt(
+        {
+          nama: studentNameInput.trim(),
+          kelas: studentClassInput.trim(),
+        },
+        editingStudentId,
+        existingSt
+      );
+
       if (editingStudentId) {
-        const res = await fetch(`/api/students/${editingStudentId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            nama: studentNameInput.trim(),
-            kelas: studentClassInput.trim(),
-          }),
+        setStudentFeedback({
+          type: 'success',
+          message: 'Data siswa berhasil diperbarui.',
         });
-        if (res.ok) {
-          setStudentFeedback({
-            type: 'success',
-            message: 'Data siswa berhasil diperbarui.',
-          });
-          setEditingStudentId(null);
-          setStudentNameInput('');
-          await onRefreshData();
-        }
+        setEditingStudentId(null);
+        setStudentNameInput('');
       } else {
-        const res = await fetch('/api/students', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            nama: studentNameInput.trim(),
-            kelas: studentClassInput.trim(),
-          }),
+        setStudentFeedback({
+          type: 'success',
+          message: `Siswa "${savedStudent.nama}" (${savedStudent.kelas}) berhasil disimpan dengan Token: ${savedStudent.token_ujian}`,
         });
-        const data = await res.json();
-        if (res.ok && data.student) {
-          setStudentFeedback({
-            type: 'success',
-            message: `Siswa "${data.student.nama}" (${data.student.kelas}) berhasil disimpan dengan Token: ${data.student.token_ujian}`,
-          });
-          setStudentNameInput('');
-          await onRefreshData();
-        }
+        setStudentNameInput('');
       }
+      await onRefreshData();
     } finally {
       setIsSavingStudent(false);
     }
@@ -409,33 +405,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsUploadingStudentsCsv(true);
     setStudentFeedback(null);
     try {
-      const res = await fetch('/api/students/upload-csv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          csvText: studentCsvText,
-          replaceExisting: replaceExistingStudents,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setStudentFeedback({
-          type: 'error',
-          message: data.error || 'Gagal mengimpor CSV siswa.',
-        });
-        return;
-      }
-
+      const outcome = await uploadStudentsCsvCbt(
+        studentCsvText,
+        replaceExistingStudents,
+        students
+      );
       setStudentFeedback({
         type: 'success',
-        message: `Berhasil mengimpor ${data.insertedCount} siswa beserta Token Ujian unik 6 karakter ke database.`,
+        message: `Berhasil mengimpor ${outcome.insertedCount} siswa beserta Token Ujian unik 6 karakter ke database.`,
       });
       setStudentCsvText('');
       await onRefreshData();
     } catch (err: any) {
       setStudentFeedback({
         type: 'error',
-        message: err.message || 'Gagal menghubungi server.',
+        message: err.message || 'Gagal mengimpor CSV siswa.',
       });
     } finally {
       setIsUploadingStudentsCsv(false);
@@ -458,31 +442,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleRegenerateToken = async (studentId: number, nama: string) => {
     setStudentFeedback(null);
-    const res = await fetch(`/api/students/${studentId}/regenerate-token`, {
-      method: 'POST',
+    const target = students.find((s) => s.id === studentId);
+    if (!target) return;
+    const updated = await regenerateStudentTokenCbt(target);
+    setStudentFeedback({
+      type: 'success',
+      message: `Token baru untuk ${nama}: ${updated.token_ujian}`,
     });
-    const data = await res.json();
-    if (res.ok && data.student) {
-      setStudentFeedback({
-        type: 'success',
-        message: `Token baru untuk ${nama}: ${data.student.token_ujian}`,
-      });
-      await onRefreshData();
-    }
+    await onRefreshData();
   };
 
   const handleDeleteStudent = async (studentId: number, nama: string) => {
     setStudentFeedback(null);
-    const res = await fetch(`/api/students/${studentId}`, {
-      method: 'DELETE',
+    await deleteStudentCbt(studentId, nama);
+    setStudentFeedback({
+      type: 'success',
+      message: `Data siswa "${nama}" telah dihapus dari database.`,
     });
-    if (res.ok) {
-      setStudentFeedback({
-        type: 'success',
-        message: `Data siswa "${nama}" telah dihapus dari database.`,
-      });
-      await onRefreshData();
-    }
+    await onRefreshData();
   };
 
   // --- Question Management Handlers ---
@@ -519,33 +496,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSavingQuestion(true);
     setUploadStatus(null);
     try {
-      const res = await fetch('/api/questions/manual', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          examId: currentExam.id,
-          tipe_soal: manualTipe,
-          wacana: manualWacana,
-          teks_soal: manualTeksSoal,
-          opsi: {
-            A: manualOpsiA,
-            B: manualOpsiB,
-            C: manualOpsiC,
-            D: manualOpsiD,
-            E: manualOpsiE,
-          },
-          kunci_jawaban: manualKunci,
-          bobot: Number(manualBobot) || (manualTipe === 'Kompleks' ? 3 : 2),
-        }),
+      await addManualQuestionCbt({
+        examId: currentExam.id,
+        tipe_soal: manualTipe,
+        wacana: manualWacana,
+        teks_soal: manualTeksSoal,
+        opsi: {
+          A: manualOpsiA,
+          B: manualOpsiB,
+          C: manualOpsiC,
+          D: manualOpsiD,
+          E: manualOpsiE,
+        },
+        kunci_jawaban: manualKunci,
+        bobot: Number(manualBobot) || (manualTipe === 'Kompleks' ? 3 : 2),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setUploadStatus({
-          type: 'error',
-          message: data.error || 'Gagal menyimpan soal.',
-        });
-        return;
-      }
       setUploadStatus({
         type: 'success',
         message: `Butir soal baru berhasil ditambahkan ke ujian "${currentExam.judul_ujian}".`,
@@ -559,18 +524,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setManualOpsiE('');
       setManualKunci(['A']);
       await onRefreshData();
+    } catch (err: any) {
+      setUploadStatus({
+        type: 'error',
+        message: err.message || 'Gagal menyimpan soal.',
+      });
     } finally {
       setIsSavingQuestion(false);
     }
   };
 
   const handleDeleteQuestion = async (questionId: number) => {
-    const res = await fetch(`/api/questions/${questionId}`, {
-      method: 'DELETE',
-    });
-    if (res.ok) {
-      await onRefreshData();
-    }
+    await deleteQuestionCbt(questionId);
+    await onRefreshData();
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -603,26 +569,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setUploadStatus(null);
 
     try {
-      const res = await fetch('/api/questions/upload-csv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          examId: currentExam.id,
-          csvText,
-          replaceExisting: replaceExistingQuestions,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setUploadStatus({
-          type: 'error',
-          message: data.error || 'Gagal mengunggah file CSV.',
-        });
-        return;
-      }
+      const outcome = await uploadQuestionsCsvCbt(
+        currentExam.id,
+        csvText,
+        replaceExistingQuestions,
+        questions
+      );
       setUploadStatus({
         type: 'success',
-        message: `Berhasil mengimpor ${data.insertedCount} butir soal ke ujian "${currentExam.judul_ujian}" (${formatDistribusiLabel(
+        message: `Berhasil mengimpor ${outcome.insertedCount} butir soal ke ujian "${currentExam.judul_ujian}" (${formatDistribusiLabel(
           currentExam.target_tingkat,
           currentExam.target_kelas
         )}).`,
@@ -632,7 +587,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch (err: any) {
       setUploadStatus({
         type: 'error',
-        message: err.message || 'Gagal menghubungi server.',
+        message: err.message || 'Gagal mengunggah file CSV.',
       });
     } finally {
       setIsUploadingCsv(false);
@@ -663,21 +618,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setAiErrorBanner(null);
 
     try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resultId: result.id,
-          nama_siswa: student.nama,
-          questions: examForResult,
-          jawaban_siswa: result.jawaban_siswa,
-        }),
+      const data = await generateAiAnalysisCbt({
+        resultId: result.id,
+        nama_siswa: student.nama,
+        questions: examForResult,
+        jawaban_siswa: result.jawaban_siswa,
+        existingResult: result,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setAiErrorBanner(data.error || 'Gagal menjalankan analisis AI.');
-        return;
-      }
       await onRefreshData();
       setSelectedAiModal({
         studentName: student.nama,
@@ -686,7 +633,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
     } catch (err: any) {
       setAiErrorBanner(
-        err.message || 'Gagal menghubungi endpoint /api/analyze.'
+        err.message || 'Gagal menjalankan analisis AI.'
       );
     } finally {
       setAnalyzingResultId(null);
@@ -864,6 +811,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
 
+            {onManualFirebaseSync && (
+              <button
+                type="button"
+                onClick={onManualFirebaseSync}
+                disabled={isSyncingFirebase}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    isSyncingFirebase ? 'animate-spin' : ''
+                  }`}
+                />
+                {isSyncingFirebase
+                  ? 'Menyinkronkan Firebase...'
+                  : 'Sinkronkan Firebase'}
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setIsAuthenticated(false)}
@@ -907,6 +872,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span className="text-xs font-normal text-slate-500">peserta</span>
             </div>
           </div>
+        </div>
+
+        {/* Real-Time Firebase Firestore Sync Status Bar */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-emerald-700">
+              Firebase Firestore Real-Time Sync Aktif:
+            </span>
+            <span>
+              {syncPulse?.lastEvent ||
+                'Siap menyinkronkan perubahan ujian, siswa, soal & hasil secara otomatis'}
+            </span>
+          </div>
+          {syncPulse?.lastSyncedAt && (
+            <span className="font-mono text-slate-500">
+              Update Terakhir:{' '}
+              {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
+            </span>
+          )}
         </div>
       </div>
 

@@ -30,7 +30,12 @@ import {
   normalizeAnswerKeys,
 } from './src/utils/cbtLogic.ts';
 import { AnalisisAI } from './src/db/schema.ts';
-import { adminAuth } from './src/lib/firebase-admin.ts';
+import {
+  adminAuth,
+  syncCbtStateToFirestore,
+  removeDeletedDocFromFirestore,
+  getFirestoreSyncStatus,
+} from './src/lib/firebase-admin.ts';
 
 dotenv.config();
 
@@ -59,6 +64,17 @@ const SYSTEM_PROMPT_EVALUATOR = `Anda adalah AI Evaluator CBT. Tugas Anda:
 3. Berikan 3 poin rekomendasi belajar.
 Keluarkan output HANYA dalam format JSON valid dengan struktur: { nama_siswa, skor_akhir, kategori_nilai, analisis_kompetensi: { kekuatan, kelemahan }, evaluasi_hots, rekomendasi_belajar }.`;
 
+// Helper to broadcast real-time sync to Firebase Firestore
+async function broadcastFirestoreSync(eventDescription: string) {
+  try {
+    const latest = await getDashboardData();
+    return await syncCbtStateToFirestore(latest, eventDescription);
+  } catch (err) {
+    console.warn('Broadcast Firestore sync skipped:', err);
+    return null;
+  }
+}
+
 // Sync Firebase Auth User
 app.post('/api/auth/sync', async (req, res) => {
   try {
@@ -70,13 +86,40 @@ app.post('/api/auth/sync', async (req, res) => {
     const decoded = await adminAuth.verifyIdToken(token);
     const user = await getOrCreateAdminUser(
       decoded.uid,
-      decoded.email || 'guru@cbt.sch.id',
+      decoded.email || 'sahidin30@gmail.com',
       decoded.name
     );
+    await broadcastFirestoreSync(`Login Guru terverifikasi (${user.email})`);
     res.json({ user });
   } catch (error: any) {
     console.error('Auth sync error:', error);
     res.status(401).json({ error: 'Gagal memverifikasi token Google Sign-In.' });
+  }
+});
+
+// GET /api/firebase/status - Inspect real-time Firebase Firestore status
+app.get('/api/firebase/status', async (_req, res) => {
+  try {
+    const data = await getDashboardData();
+    const status = await getFirestoreSyncStatus(data);
+    res.json(status);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal memuat status Firebase.' });
+  }
+});
+
+// POST /api/firebase/sync - Trigger explicit full synchronization to Firebase Firestore
+app.post('/api/firebase/sync', async (req, res) => {
+  try {
+    const reason = req.body?.reason || 'Sinkronisasi manual oleh Guru dari Dashboard';
+    const data = await getDashboardData();
+    const syncOutcome = await syncCbtStateToFirestore(data, String(reason));
+    res.json({
+      ...syncOutcome,
+      data,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal melakukan sinkronisasi Firebase.' });
   }
 });
 
@@ -104,6 +147,9 @@ app.post('/api/exams', async (req, res) => {
       String(target_tingkat || 'SEMUA'),
       String(target_kelas || 'SEMUA')
     );
+    await broadcastFirestoreSync(
+      `Paket ujian baru dibuat: ${created.judul_ujian} (Tingkat ${created.target_tingkat})`
+    );
     res.json({ exam: created });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal membuat ujian.' });
@@ -125,6 +171,7 @@ app.put('/api/exams/:id', async (req, res) => {
       String(target_tingkat || 'SEMUA'),
       String(target_kelas || 'SEMUA')
     );
+    await broadcastFirestoreSync(`Distribusi ujian diperbarui: ${updated.judul_ujian}`);
     res.json({ exam: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal memperbarui ujian.' });
@@ -136,6 +183,8 @@ app.delete('/api/exams/:id', async (req, res) => {
   try {
     const examId = Number(req.params.id);
     await deleteExamRecord(examId);
+    await removeDeletedDocFromFirestore('exams', examId);
+    await broadcastFirestoreSync(`Paket ujian #${examId} dihapus`);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menghapus ujian.' });
@@ -162,6 +211,7 @@ app.post('/api/questions/manual', async (req, res) => {
       normalizedKeys,
       Number(bobot) || (tipe_soal === 'Kompleks' ? 3 : 2)
     );
+    await broadcastFirestoreSync(`Butir soal baru ditambahkan ke ujian #${examId}`);
     res.json({ question: created });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menambahkan soal.' });
@@ -171,7 +221,10 @@ app.post('/api/questions/manual', async (req, res) => {
 // DELETE /api/questions/:id - Delete a question
 app.delete('/api/questions/:id', async (req, res) => {
   try {
-    await deleteQuestionRecord(Number(req.params.id));
+    const qId = Number(req.params.id);
+    await deleteQuestionRecord(qId);
+    await removeDeletedDocFromFirestore('questions', qId);
+    await broadcastFirestoreSync(`Butir soal #${qId} dihapus`);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menghapus soal.' });
@@ -199,6 +252,9 @@ app.post('/api/questions/upload-csv', async (req, res) => {
       parsed.rows,
       Boolean(replaceExisting)
     );
+    await broadcastFirestoreSync(
+      `Upload massal ${inserted.length} soal CSV ke paket ujian #${examId}`
+    );
 
     res.json({
       insertedCount: inserted.length,
@@ -224,6 +280,9 @@ app.post('/api/students', async (req, res) => {
         : generateExamToken();
 
     const student = await addStudentRecord(String(nama), String(kelas), token);
+    await broadcastFirestoreSync(
+      `Siswa baru ditambahkan: ${student.nama} (${student.kelas}) — Token ${student.token_ujian}`
+    );
     res.json({ student });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menambahkan siswa.' });
@@ -249,6 +308,9 @@ app.post('/api/students/upload-csv', async (req, res) => {
       parsed.rows,
       Boolean(replaceExisting)
     );
+    await broadcastFirestoreSync(
+      `Upload massal ${inserted.length} siswa CSV beserta token ujian`
+    );
 
     res.json({
       insertedCount: inserted.length,
@@ -272,6 +334,7 @@ app.put('/api/students/:id', async (req, res) => {
       return res.status(400).json({ error: 'Nama siswa dan kelas wajib diisi.' });
     }
     const updated = await updateStudentRecord(studentId, String(nama), String(kelas));
+    await broadcastFirestoreSync(`Data siswa diperbarui: ${updated.nama} (${updated.kelas})`);
     res.json({ student: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal memperbarui data siswa.' });
@@ -284,6 +347,9 @@ app.post('/api/students/:id/regenerate-token', async (req, res) => {
     const studentId = Number(req.params.id);
     const newToken = generateExamToken();
     const updated = await regenerateStudentTokenRecord(studentId, newToken);
+    await broadcastFirestoreSync(
+      `Token baru dibuat untuk ${updated.nama}: ${updated.token_ujian}`
+    );
     res.json({ student: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal membuat ulang token.' });
@@ -295,6 +361,8 @@ app.delete('/api/students/:id', async (req, res) => {
   try {
     const studentId = Number(req.params.id);
     await deleteStudentRecord(studentId);
+    await removeDeletedDocFromFirestore('students', studentId);
+    await broadcastFirestoreSync(`Data siswa #${studentId} dihapus`);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menghapus siswa.' });
@@ -316,9 +384,25 @@ app.post('/api/exam/login', async (req, res) => {
     if ('error' in session) {
       return res.status(400).json({ error: session.error });
     }
+    await broadcastFirestoreSync(
+      `Siswa mulai ujian: ${session.student.nama} (${session.student.kelas}) — ${session.exam.judul_ujian}`
+    );
     res.json(session);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal masuk ke sesi ujian.' });
+  }
+});
+
+// POST /api/exam/heartbeat - Real-time anti-cheat & live progress broadcast via Firebase
+app.post('/api/exam/heartbeat', async (req, res) => {
+  try {
+    const { nama, kelas, pelanggaranTab = 0, answeredCount = 0 } = req.body;
+    await broadcastFirestoreSync(
+      `Peringatan Anti-Cheat: ${nama || 'Siswa'} (${kelas || '-'}) pindah tab (${pelanggaranTab}x) · Terjawab ${answeredCount} soal`
+    );
+    res.json({ synced: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal sinkronisasi heartbeat.' });
   }
 });
 
@@ -334,6 +418,9 @@ app.post('/api/exam/submit', async (req, res) => {
       Number(examId),
       jawabanSiswa,
       Number(pelanggaranTab) || 0
+    );
+    await broadcastFirestoreSync(
+      `Siswa mengumpulkan ujian (Skor: ${outcome.scoreSummary.normalizedScore}/100)`
     );
     res.json(outcome);
   } catch (error: any) {
@@ -510,6 +597,10 @@ Berikan evaluasi kognitif mendalam (LOTS vs HOTS) dalam Bahasa Indonesia sesuai 
       await saveAiAnalysisToResult(Number(resultId), aiAnalysis);
     }
 
+    await broadcastFirestoreSync(
+      `Evaluasi AI selesai untuk ${nama_siswa} (${aiAnalysis.skor_akhir}/100)`
+    );
+
     res.json(aiAnalysis);
   } catch (error: any) {
     console.error('Error in POST /api/analyze:', error);
@@ -536,6 +627,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`CBT AI Server running on http://localhost:${PORT}`);
+    broadcastFirestoreSync('Server CBT aktif dan terhubung ke Firebase Firestore');
   });
 }
 
