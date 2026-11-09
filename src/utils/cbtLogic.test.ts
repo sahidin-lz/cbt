@@ -69,6 +69,39 @@ test('parseQuestionsCsv parses semicolon-separated Excel template and HTML .xls 
   assert.deepEqual(parsedXls.rows[1].kunci_jawaban, ['B', 'D', 'E']);
 });
 
+test('parseQuestionsCsv handles multiline quoted wacana, flexible headers, unquoted commas in semicolon CSV, and headerless rows', () => {
+  // 1. Multiline quoted wacana + missing trailing bobot column
+  const multilineCsv = `id_soal;jenis_soal;wacana;teks_soal;opsi_a;opsi_b;opsi_c;opsi_d;opsi_e;kunci_jawaban
+SOAL-10;PG;"Paragraf pertama wacana sosiologi, terdiri dari beberapa kalimat.
+Paragraf kedua dengan baris baru di dalam tanda kutip Excel.";"Apa kesimpulan utama dari wacana di atas?";Opsi Satu;Opsi Dua;Opsi Tiga;Opsi Empat;Opsi Lima;C`;
+  const parsedMultiline = parseQuestionsCsv(multilineCsv);
+  assert.equal(parsedMultiline.errors.length, 0);
+  assert.equal(parsedMultiline.rows.length, 1);
+  assert.equal(parsedMultiline.rows[0].id_soal, 'SOAL-10');
+  assert.deepEqual(parsedMultiline.rows[0].kunci_jawaban, ['C']);
+  assert.equal(parsedMultiline.rows[0].bobot, 2);
+
+  // 2. Simplified headers (no, soal, a, b, c, d, e, kunci) with comma delimiter
+  const simplifiedCsv = `no,soal,a,b,c,d,e,kunci
+1,"Siapakah tokoh sosiologi yang memperkenalkan konsep fakta sosial?",Max Weber,Emile Durkheim,Karl Marx,Auguste Comte,Herbert Spencer,Jawaban: B
+2,"Pilih faktor pendorong interaksi sosial!",Imitasi,Sugesti,Isolasi,Simpati, Konflik,"A,B,D"`;
+  const parsedSimple = parseQuestionsCsv(simplifiedCsv);
+  assert.equal(parsedSimple.errors.length, 0);
+  assert.equal(parsedSimple.rows.length, 2);
+  assert.equal(parsedSimple.rows[0].jenis_soal, 'PG');
+  assert.deepEqual(parsedSimple.rows[0].kunci_jawaban, ['B']);
+  assert.equal(parsedSimple.rows[1].jenis_soal, 'Kompleks');
+  assert.deepEqual(parsedSimple.rows[1].kunci_jawaban, ['A', 'B', 'D']);
+  assert.equal(parsedSimple.rows[1].bobot, 3);
+
+  // 3. Headerless 7-column semicolon CSV where Indonesian sentence has many commas
+  const headerlessCsv = `Dalam masyarakat modern, interaksi antara individu, kelompok, lembaga, dan budaya berlangsung dinamis. Manakah syarat interaksi sosial?;Asimilasi, akulturasi, dan difusi;Kontak sosial dan komunikasi;Imitasi, sugesti, dan simpati;Akomodasi dan kooperasi;Kompetisi dan kontravensi;B`;
+  const parsedHeaderless = parseQuestionsCsv(headerlessCsv);
+  assert.equal(parsedHeaderless.errors.length, 0);
+  assert.equal(parsedHeaderless.rows.length, 1);
+  assert.deepEqual(parsedHeaderless.rows[0].kunci_jawaban, ['B']);
+});
+
 test('extractTingkatFromKelas and isExamMatchedForStudentClass handle 3 grade levels (X/10, XI/11, XII/12)', () => {
   assert.equal(extractTingkatFromKelas('X MIPA 1'), '10');
   assert.equal(extractTingkatFromKelas('10-B'), '10');

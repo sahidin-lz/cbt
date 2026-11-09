@@ -34,6 +34,7 @@ import {
   buildExcelHtmlTable,
   generateStudentTemplateExcel,
   generateQuestionTemplateExcel,
+  parseQuestionsCsv,
 } from '../utils/cbtLogic';
 import {
   auth,
@@ -191,6 +192,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [csvText, setCsvText] = useState('');
   const [replaceExistingQuestions, setReplaceExistingQuestions] =
     useState(false);
+  const [quickExamTitle, setQuickExamTitle] = useState('Ujian CBT Sosiologi');
+  const [quickExamTingkat, setQuickExamTingkat] = useState<string>('SEMUA');
   const [uploadStatus, setUploadStatus] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -415,31 +418,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleStudentCsvFileChange = (
-    e: React.ChangeEvent<HTMLInputElement>
+  const executeStudentCsvUpload = async (
+    rawCsvContent: string,
+    sourceLabel?: string
   ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result;
-      if (typeof content === 'string') {
-        setStudentCsvText(content);
-        setStudentFeedback({
-          type: 'success',
-          message: `File "${file.name}" berhasil dimuat. Klik "Proses Upload Massal Siswa" untuk men-generate token seluruh siswa.`,
-        });
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleUploadStudentCsvSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!studentCsvText.trim()) {
+    if (!rawCsvContent.trim()) {
       setStudentFeedback({
         type: 'error',
-        message: 'Silakan pilih file Excel/CSV siswa atau tempelkan daftar Nama & Kelas.',
+        message:
+          'Silakan pilih file Excel/CSV siswa atau tempelkan daftar Nama & Kelas.',
       });
       return;
     }
@@ -448,13 +435,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setStudentFeedback(null);
     try {
       const outcome = await uploadStudentsCsvCbt(
-        studentCsvText,
+        rawCsvContent,
         replaceExistingStudents,
         students
       );
       setStudentFeedback({
         type: 'success',
-        message: `Berhasil mengimpor ${outcome.insertedCount} siswa beserta Token Ujian unik 6 karakter ke database.`,
+        message: `${
+          sourceLabel ? `File "${sourceLabel}" diproses: ` : ''
+        }Berhasil mengimpor ${
+          outcome.insertedCount
+        } siswa beserta Token Ujian unik 6 karakter ke database.`,
       });
       setStudentCsvText('');
       await onRefreshData();
@@ -466,6 +457,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } finally {
       setIsUploadingStudentsCsv(false);
     }
+  };
+
+  const handleStudentCsvFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fileName = file.name;
+    e.target.value = '';
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setStudentCsvText(content);
+        await executeStudentCsvUpload(content, fileName);
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
+
+  const handleUploadStudentCsvSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await executeStudentCsvUpload(studentCsvText);
   };
 
   const handleDownloadSampleStudentCsv = () => {
@@ -575,16 +589,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const ensureActiveExamForQuestions = async (): Promise<ExamItem> => {
+    if (currentExam) return currentExam;
+    const createdExam = await saveExamCbt({
+      judul_ujian: quickExamTitle.trim() || 'Ujian CBT Sosiologi',
+      durasi_menit: 60,
+      target_tingkat: quickExamTingkat || 'SEMUA',
+      target_kelas: 'SEMUA',
+    });
+    setSelectedExamId(createdExam.id);
+    return createdExam;
+  };
+
   const handleAddManualQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentExam) {
-      setUploadStatus({
-        type: 'error',
-        message:
-          'Buat Paket Ujian terlebih dahulu pada tab Manajemen Ujian sebelum menambah soal.',
-      });
-      return;
-    }
     if (!manualTeksSoal.trim() || !manualOpsiA.trim() || !manualOpsiB.trim()) {
       setUploadStatus({
         type: 'error',
@@ -596,8 +614,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSavingQuestion(true);
     setUploadStatus(null);
     try {
+      const targetExam = await ensureActiveExamForQuestions();
       await addManualQuestionCbt({
-        examId: currentExam.id,
+        examId: targetExam.id,
         tipe_soal: manualTipe,
         wacana: manualWacana,
         teks_soal: manualTeksSoal,
@@ -613,7 +632,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
       setUploadStatus({
         type: 'success',
-        message: `Butir soal baru berhasil ditambahkan ke ujian "${currentExam.judul_ujian}".`,
+        message: `Butir soal baru berhasil ditambahkan ke ujian "${targetExam.judul_ujian}".`,
       });
       setManualWacana('');
       setManualTeksSoal('');
@@ -639,47 +658,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await onRefreshData();
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result;
-      if (typeof content === 'string') {
-        setCsvText(content);
-        setUploadStatus({
-          type: 'success',
-          message: `File "${file.name}" siap diunggah ke paket ujian "${currentExam?.judul_ujian || ''}".`,
-        });
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleUploadCsvSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentExam) {
+  const executeQuestionsCsvUpload = async (
+    rawCsvContent: string,
+    sourceFileName?: string
+  ) => {
+    if (!rawCsvContent.trim()) {
       setUploadStatus({
         type: 'error',
-        message: 'Silakan buat Paket Ujian terlebih dahulu di tab Manajemen Ujian.',
+        message:
+          'Pilih file CSV/Excel soal atau tempelkan daftar soal terlebih dahulu.',
       });
       return;
     }
+
     setIsUploadingCsv(true);
     setUploadStatus(null);
 
     try {
+      const targetExam = await ensureActiveExamForQuestions();
       const outcome = await uploadQuestionsCsvCbt(
-        currentExam.id,
-        csvText,
+        targetExam.id,
+        rawCsvContent,
         replaceExistingQuestions,
         questions
       );
       setUploadStatus({
         type: 'success',
-        message: `Berhasil mengimpor ${outcome.insertedCount} butir soal ke ujian "${currentExam.judul_ujian}" (${formatDistribusiLabel(
-          currentExam.target_tingkat,
-          currentExam.target_kelas
+        message: `${
+          sourceFileName ? `File "${sourceFileName}" langsung diupload: ` : ''
+        }Berhasil mengimpor ${outcome.insertedCount} butir soal ke ujian "${
+          targetExam.judul_ujian
+        }" (${formatDistribusiLabel(
+          targetExam.target_tingkat,
+          targetExam.target_kelas
         )}).`,
       });
       setCsvText('');
@@ -692,6 +703,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } finally {
       setIsUploadingCsv(false);
     }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fileName = file.name;
+    // Reset input value so selecting the same file again still triggers onChange
+    e.target.value = '';
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setCsvText(content);
+        await executeQuestionsCsvUpload(content, fileName);
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
+
+  const handleUploadCsvSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await executeQuestionsCsvUpload(csvText);
   };
 
   const handleDownloadSampleCsv = () => {
@@ -2001,9 +2034,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 Pilih Paket Ujian & Target Tingkatan Kelas
               </label>
               {exams.length === 0 ? (
-                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                  Belum ada Paket Ujian. Silakan buat Paket Ujian per Tingkatan
-                  pada tab <strong>Distribusi Ujian</strong> terlebih dahulu.
+                <div className="p-3.5 rounded-lg bg-blue-50/70 border border-blue-200 space-y-2.5">
+                  <div className="text-xs font-semibold text-blue-900">
+                    Paket Ujian Otomatis (Langsung Buat & Upload Soal)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label
+                        htmlFor="quick-exam-title"
+                        className="block text-[11px] font-medium text-slate-700 mb-1"
+                      >
+                        Nama Paket Ujian
+                      </label>
+                      <input
+                        id="quick-exam-title"
+                        type="text"
+                        value={quickExamTitle}
+                        onChange={(e) => setQuickExamTitle(e.target.value)}
+                        placeholder="Ujian CBT Sosiologi"
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="quick-exam-tingkat"
+                        className="block text-[11px] font-medium text-slate-700 mb-1"
+                      >
+                        Target Tingkatan
+                      </label>
+                      <select
+                        id="quick-exam-tingkat"
+                        value={quickExamTingkat}
+                        onChange={(e) => setQuickExamTingkat(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      >
+                        <option value="SEMUA">Semua Kelas (X, XI, XII)</option>
+                        <option value="10">Tingkat 1 — Kelas X</option>
+                        <option value="11">Tingkat 2 — Kelas XI</option>
+                        <option value="12">Tingkat 3 — Kelas XII</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <select
@@ -2212,7 +2283,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <button
                   type="submit"
-                  disabled={isSavingQuestion || !currentExam}
+                  disabled={isSavingQuestion}
                   className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
@@ -2251,7 +2322,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <div className="text-[11px] font-mono text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200 space-y-1">
                   <div className="font-sans font-semibold text-slate-800">
-                    11 Kolom Terpisah (Kolom A s/d K):
+                    Format Fleksibel (Otomatis Deteksi `;`, `,`, atau Tab):
                   </div>
                   <div>
                     id_soal ; jenis_soal ; wacana ; teks_soal ; opsi_a ; opsi_b
@@ -2259,38 +2330,81 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                <div>
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
                   <label
                     htmlFor="csv-file-upload"
-                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    className="block text-xs font-semibold text-slate-800"
                   >
-                    Pilih File .XLS / .CSV Soal dari Komputer
+                    Pilih File .CSV / .XLS Soal (Langsung Upload Otomatis Saat Dipilih)
                   </label>
                   <input
                     id="csv-file-upload"
                     type="file"
-                    accept=".csv,.xls,text/csv,application/vnd.ms-excel"
+                    accept=".csv,.xls,.txt,text/csv,text/plain,application/vnd.ms-excel"
                     onChange={handleFileChange}
-                    className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+                    className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
                   />
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="csv-raw-textarea"
-                    className="block text-xs font-semibold text-slate-700 mb-1.5"
-                  >
-                    Konten Tabel / CSV Soal
-                  </label>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <label
+                      htmlFor="csv-raw-textarea"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Atau Tempelkan / Edit Konten CSV Soal
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCsvText(SAMPLE_CSV_TEMPLATE);
+                        setUploadStatus(null);
+                      }}
+                      className="text-[11px] font-semibold text-blue-700 hover:text-blue-800 underline cursor-pointer"
+                    >
+                      Isi Contoh Soal CSV
+                    </button>
+                  </div>
                   <textarea
                     id="csv-raw-textarea"
                     rows={5}
                     value={csvText}
                     onChange={(e) => setCsvText(e.target.value)}
-                    placeholder="Tempelkan isi tabel Excel/CSV atau unggah file di atas..."
+                    placeholder="Tempelkan isi tabel Excel/CSV atau pilih file di atas untuk langsung mengupload..."
                     className="w-full p-3 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
+
+                {csvText.trim().length > 0 && (() => {
+                  const livePreview = parseQuestionsCsv(csvText);
+                  return (
+                    <div
+                      className={`p-3 rounded-lg border text-xs space-y-1.5 ${
+                        livePreview.rows.length > 0
+                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                          : 'bg-amber-50 border-amber-200 text-amber-900'
+                      }`}
+                    >
+                      <div className="font-bold">
+                        {livePreview.rows.length > 0
+                          ? `Terdeteksi ${livePreview.rows.length} butir soal siap diupload`
+                          : 'Format CSV belum terbaca sebagai butir soal'}
+                      </div>
+                      {livePreview.rows.slice(0, 3).map((r, i) => (
+                        <div key={i} className="text-[11px] truncate">
+                          #{i + 1} [{r.jenis_soal} · Kunci:{' '}
+                          {r.kunci_jawaban.join(',')} · {r.bobot} Poin]{' '}
+                          {r.teks_soal}
+                        </div>
+                      ))}
+                      {livePreview.errors.length > 0 && (
+                        <div className="text-[11px] text-red-700 font-medium">
+                          Catatan: {livePreview.errors[0]}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
                   <input
@@ -2308,12 +2422,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <button
                   type="submit"
-                  disabled={isUploadingCsv || !currentExam}
+                  disabled={isUploadingCsv}
                   className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Upload className="w-4 h-4" />
                   {isUploadingCsv
-                    ? 'Memproses File Soal...'
+                    ? 'Memproses & Mengupload Soal...'
                     : 'Proses & Upload Soal ke Paket Ujian'}
                 </button>
               </form>

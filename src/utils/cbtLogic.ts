@@ -112,19 +112,23 @@ export function normalizeAnswerKeys(
   keys: string[] | string | undefined | null
 ): string[] {
   if (!keys) return [];
-  const rawList = Array.isArray(keys)
-    ? keys
-    : String(keys)
-        .split(/[,;|/+\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+  const rawString = Array.isArray(keys) ? keys.join(',') : String(keys);
+  // Strip common Indonesian/English label prefixes so words like "Jawaban" or "Pilihan" don't contribute A/B/E letters
+  const cleanedPrefix = rawString
+    .replace(/\b(kunci|jawaban|pilihan|opsi|option|answer|key|benar| dan | atau )\b/gi, ' ')
+    .trim();
+
+  const rawList = cleanedPrefix
+    .split(/[,;|/+\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   const validSet = new Set<string>();
   for (const item of rawList) {
     const clean = item.toUpperCase().replace(/[^A-E]/g, '');
     if (clean.length === 1 && ['A', 'B', 'C', 'D', 'E'].includes(clean)) {
       validSet.add(clean);
-    } else if (clean.length > 1) {
+    } else if (clean.length > 1 && /^[A-E]+$/i.test(item.replace(/[^a-zA-Z]/g, ''))) {
       for (const ch of clean.split('')) {
         if (['A', 'B', 'C', 'D', 'E'].includes(ch)) {
           validSet.add(ch);
@@ -133,6 +137,35 @@ export function normalizeAnswerKeys(
     }
   }
   return Array.from(validSet).sort();
+}
+
+/**
+ * Resolves answer keys from a CSV cell, supporting letter keys ("B", "B,D,E", "Jawaban: C")
+ * as well as full option text matching if the teacher pasted the answer text instead of A-E.
+ */
+export function resolveQuestionAnswerKeys(
+  rawKunci: string,
+  opsi: { A: string; B: string; C: string; D: string; E: string }
+): string[] {
+  const trimmed = (rawKunci || '').trim();
+  if (!trimmed) return [];
+
+  // First check if the raw value directly matches one of the option texts
+  const lowerTrimmed = trimmed.toLowerCase();
+  for (const letter of ['A', 'B', 'C', 'D', 'E'] as const) {
+    const optText = (opsi[letter] || '').trim().toLowerCase();
+    if (optText.length > 1 && optText === lowerTrimmed) {
+      return [letter];
+    }
+  }
+
+  // Also check if leading letter pattern like "A. Teks..." or "B) Teks..."
+  const leadingMatch = trimmed.match(/^([A-Ea-e])\s*[.)\]:-]\s+.+$/);
+  if (leadingMatch) {
+    return [leadingMatch[1].toUpperCase()];
+  }
+
+  return normalizeAnswerKeys(trimmed);
 }
 
 /**
@@ -267,10 +300,57 @@ export function detectCsvDelimiter(line: string): ',' | ';' | '\t' {
   if (countTab > 0 && countTab >= countSemi && countTab >= countComma) {
     return '\t';
   }
-  if (countSemi > 0 && countSemi >= countComma) {
+  // If there are multiple semicolons (e.g. >= 4 in a question row), prefer ';' even if unquoted prose has commas
+  if (countSemi > 0 && (countSemi >= countComma || countSemi >= 4)) {
     return ';';
   }
   return ',';
+}
+
+/**
+ * Splits raw CSV text into row records while respecting double-quoted multiline cells.
+ * Internal newlines inside quoted fields are converted to spaces so each record is a single clean line.
+ */
+export function splitCsvRecords(rawText: string): string[] {
+  const records: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < rawText.length; i++) {
+    const ch = rawText[i];
+    if (ch === '"') {
+      current += ch;
+      if (inQuotes && rawText[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && rawText[i + 1] === '\n') {
+        i++;
+      }
+      const trimmed = current.trim();
+      if (trimmed.length > 0) {
+        records.push(trimmed);
+      }
+      current = '';
+    } else if ((ch === '\n' || ch === '\r') && inQuotes) {
+      if (ch === '\r' && rawText[i + 1] === '\n') {
+        i++;
+      }
+      current += ' ';
+    } else {
+      current += ch;
+    }
+  }
+
+  const finalTrimmed = current.trim();
+  if (finalTrimmed.length > 0) {
+    records.push(finalTrimmed);
+  }
+
+  return records;
 }
 
 /**
@@ -306,13 +386,16 @@ export function splitCsvLine(
 }
 
 /**
- * Converts HTML <table> (.xls) or raw text into clean lines, removing BOM and 'sep=' directives
+ * Converts HTML <table> (.xls) or raw CSV/TSV text into clean lines, removing BOM and 'sep=' directives
  */
 export function normalizeSpreadsheetLines(rawInput: string): {
   lines: string[];
   delimiter: ',' | ';' | '\t';
 } {
-  const cleanText = (rawInput || '').replace(/^\uFEFF/, '').trim();
+  const cleanText = (rawInput || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\u0000/g, '')
+    .trim();
 
   // Support importing HTML-based .xls files directly if the teacher re-uploads the downloaded .xls
   if (/<table[\s>]/i.test(cleanText) && /<tr[\s>]/i.test(cleanText)) {
@@ -329,6 +412,7 @@ export function normalizeSpreadsheetLines(rawInput: string): {
           .replace(/&lt;/gi, '<')
           .replace(/&gt;/gi, '>')
           .replace(/&quot;/gi, '"')
+          .replace(/\r?\n/g, ' ')
           .trim()
       );
       if (cells.some(Boolean)) {
@@ -339,15 +423,12 @@ export function normalizeSpreadsheetLines(rawInput: string): {
   }
 
   let forcedDelimiter: ',' | ';' | '\t' | undefined;
-  const rawLines = cleanText
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+  const rawRecords = splitCsvRecords(cleanText);
 
   const filteredLines: string[] = [];
-  for (const line of rawLines) {
-    if (/^sep\s*=\s*(.|\\t)$/i.test(line)) {
-      const m = line.match(/^sep\s*=\s*(.|\\t)$/i);
+  for (const line of rawRecords) {
+    if (/^["']?sep\s*=\s*(.|\\t)["']?[;,\t]*$/i.test(line)) {
+      const m = line.match(/^["']?sep\s*=\s*(.|\\t)["']?/i);
       if (m) {
         if (m[1] === ';') forcedDelimiter = ';';
         else if (m[1] === ',') forcedDelimiter = ',';
@@ -389,18 +470,17 @@ export function parseStudentsCsv(csvText: string): {
     c.toLowerCase().replace(/^["']|["']$/g, '').trim()
   );
 
-  const hasHeader =
-    firstCells.some((c) =>
-      [
-        'nama',
-        'nama_siswa',
-        'nama lengkap',
-        'nama siswa',
-        'kelas',
-        'kelas / rombel',
-        'rombel',
-      ].includes(c)
-    );
+  const hasHeader = firstCells.some((c) =>
+    [
+      'nama',
+      'nama_siswa',
+      'nama lengkap',
+      'nama siswa',
+      'kelas',
+      'kelas / rombel',
+      'rombel',
+    ].includes(c)
+  );
 
   let namaIdx = 0;
   let kelasIdx = 1;
@@ -425,14 +505,17 @@ export function parseStudentsCsv(csvText: string): {
   const errors: string[] = [];
 
   for (let i = startRow; i < lines.length; i++) {
-    const lineDelim = detectCsvDelimiter(lines[i]) || delimiter;
-    const cells = splitCsvLine(lines[i], lineDelim).map((c) =>
-      c.replace(/^["']|["']$/g, '').trim()
-    );
-    const nama = cells[namaIdx] || '';
-    const kelas = cells[kelasIdx] || '';
+    let cells = splitCsvLine(lines[i], delimiter);
+    if (cells.length <= 1) {
+      cells = splitCsvLine(lines[i], detectCsvDelimiter(lines[i]));
+    }
+    const cleanCells = cells.map((c) => c.replace(/^["']|["']$/g, '').trim());
+    if (cleanCells.every((c) => !c)) continue;
+
+    const nama = cleanCells[namaIdx] || '';
+    const kelas = cleanCells[kelasIdx] || '';
     const rawToken =
-      tokenIdx >= 0 ? (cells[tokenIdx] || '').toUpperCase().trim() : '';
+      tokenIdx >= 0 ? (cleanCells[tokenIdx] || '').toUpperCase().trim() : '';
 
     if (!nama || !kelas) {
       errors.push(
@@ -456,82 +539,260 @@ export function parseStudentsCsv(csvText: string): {
   return { rows, errors };
 }
 
+const QUESTION_HEADER_ALIASES: Record<string, string[]> = {
+  id_soal: [
+    'id_soal',
+    'id',
+    'no',
+    'nomor',
+    'no_soal',
+    'nomor_soal',
+    'kode',
+    'kode_soal',
+  ],
+  jenis_soal: [
+    'jenis_soal',
+    'tipe_soal',
+    'jenis',
+    'tipe',
+    'kategori',
+    'bentuk_soal',
+    'model_soal',
+  ],
+  wacana: [
+    'wacana',
+    'stimulus',
+    'bacaan',
+    'teks_bacaan',
+    'pengantar',
+    'cerita',
+    'narasi',
+    'kasus',
+    'deskripsi',
+  ],
+  teks_soal: [
+    'teks_soal',
+    'soal',
+    'pertanyaan',
+    'butir_soal',
+    'pokok_soal',
+    'kalimat_soal',
+    'question',
+    'text',
+    'stem',
+  ],
+  opsi_a: ['opsi_a', 'pilihan_a', 'option_a', 'jawaban_a', 'jawab_a', 'a'],
+  opsi_b: ['opsi_b', 'pilihan_b', 'option_b', 'jawaban_b', 'jawab_b', 'b'],
+  opsi_c: ['opsi_c', 'pilihan_c', 'option_c', 'jawaban_c', 'jawab_c', 'c'],
+  opsi_d: ['opsi_d', 'pilihan_d', 'option_d', 'jawaban_d', 'jawab_d', 'd'],
+  opsi_e: ['opsi_e', 'pilihan_e', 'option_e', 'jawaban_e', 'jawab_e', 'e'],
+  kunci_jawaban: [
+    'kunci_jawaban',
+    'kunci',
+    'jawaban',
+    'jawaban_benar',
+    'kunci_jawab',
+    'answer',
+    'key',
+    'correct_answer',
+  ],
+  bobot: [
+    'bobot',
+    'poin',
+    'skor',
+    'nilai',
+    'bobot_nilai',
+    'bobot_soal',
+    'weight',
+    'score',
+    'point',
+    'points',
+  ],
+};
+
+function normalizeHeaderToken(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/^["']|["']$/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
 /**
- * Parses Question Bank CSV / Excel content with 11 required columns:
- * id_soal, jenis_soal, wacana, teks_soal, opsi_a, opsi_b, opsi_c, opsi_d, opsi_e, kunci_jawaban, bobot
+ * Parses Question Bank CSV / Excel content.
+ * Supports:
+ * - Standard 11-column template (id_soal, jenis_soal, wacana, teks_soal, opsi_a..opsi_e, kunci_jawaban, bobot)
+ * - Flexible header names (e.g., no, soal, a, b, c, d, e, kunci, skor)
+ * - Multiline quoted wacana/questions
+ * - Headerless CSV rows (positional mapping for 6 to 11+ columns)
+ * - Optional trailing columns (bobot, opsi_e, wacana, jenis_soal, id_soal)
  */
 export function parseQuestionsCsv(csvText: string): {
   rows: CsvQuestionRow[];
   errors: string[];
 } {
-  const { lines, delimiter } = normalizeSpreadsheetLines(csvText);
+  const { lines, delimiter: initialDelimiter } =
+    normalizeSpreadsheetLines(csvText);
 
-  if (lines.length < 2) {
+  if (lines.length === 0) {
     return {
       rows: [],
       errors: ['File CSV/Excel kosong atau tidak memiliki baris data soal.'],
     };
   }
 
-  const requiredHeaders = [
-    'id_soal',
-    'jenis_soal',
-    'wacana',
-    'teks_soal',
-    'opsi_a',
-    'opsi_b',
-    'opsi_c',
-    'opsi_d',
-    'opsi_e',
-    'kunci_jawaban',
-    'bobot',
-  ];
+  // Scan the first up to 10 lines to find a header row (in case there are title rows above the table)
+  let headerRowIdx = -1;
+  let activeDelimiter = initialDelimiter;
+  const colIndex: Record<string, number> = {};
 
-  const headerCells = splitCsvLine(lines[0], delimiter).map((h) =>
-    h
-      .toLowerCase()
-      .replace(/^["']|["']$/g, '')
-      .trim()
-      .replace(/\s+/g, '_')
-  );
+  for (let scanIdx = 0; scanIdx < Math.min(lines.length, 10); scanIdx++) {
+    const candidateDelim = detectCsvDelimiter(lines[scanIdx]) || initialDelimiter;
+    const candidateCells = splitCsvLine(lines[scanIdx], candidateDelim).map(
+      normalizeHeaderToken
+    );
 
-  const missingHeaders = requiredHeaders.filter(
-    (req) => !headerCells.includes(req)
-  );
-  if (missingHeaders.length > 0) {
-    return {
-      rows: [],
-      errors: [
-        `Header tabel soal tidak sesuai template. Kolom yang belum ada: ${missingHeaders.join(
-          ', '
-        )}`,
-      ],
-    };
+    const matchedCols: Record<string, number> = {};
+    candidateCells.forEach((cellToken, idx) => {
+      if (!cellToken) return;
+      for (const [canonical, aliases] of Object.entries(
+        QUESTION_HEADER_ALIASES
+      )) {
+        if (
+          matchedCols[canonical] === undefined &&
+          aliases.includes(cellToken)
+        ) {
+          matchedCols[canonical] = idx;
+        }
+      }
+    });
+
+    // If it matches teks_soal (or opsi_a + opsi_b) and at least 3 known columns, treat as header row
+    const matchCount = Object.keys(matchedCols).length;
+    if (
+      matchCount >= 3 &&
+      (matchedCols.teks_soal !== undefined ||
+        (matchedCols.opsi_a !== undefined && matchedCols.opsi_b !== undefined))
+    ) {
+      headerRowIdx = scanIdx;
+      activeDelimiter = candidateDelim;
+      Object.assign(colIndex, matchedCols);
+      break;
+    }
   }
 
-  const colIndex: Record<string, number> = {};
-  headerCells.forEach((h, idx) => {
-    colIndex[h] = idx;
-  });
+  let startRow = 0;
+
+  if (headerRowIdx >= 0) {
+    startRow = headerRowIdx + 1;
+    // If header had opsi_a..d and kunci_jawaban but used an unrecognized header name for teks_soal, infer teks_soal
+    if (colIndex.teks_soal === undefined && colIndex.opsi_a !== undefined && colIndex.opsi_a > 0) {
+      colIndex.teks_soal = colIndex.opsi_a - 1;
+    }
+  } else {
+    // Check if row 0 looks like a malformed header row (contains words like "soal" or "opsi" without valid options/keys)
+    const firstTokens = splitCsvLine(lines[0], activeDelimiter).map(
+      normalizeHeaderToken
+    );
+    if (
+      lines.length === 1 &&
+      firstTokens.some((t) =>
+        ['id_soal', 'teks_soal', 'pertanyaan', 'kunci_jawaban'].includes(t)
+      )
+    ) {
+      return {
+        rows: [],
+        errors: ['File CSV/Excel hanya berisi baris judul kolom tanpa data soal.'],
+      };
+    }
+
+    // Positional mapping for headerless CSVs based on column count
+    const sampleCells = splitCsvLine(lines[0], activeDelimiter);
+    const colCount = sampleCells.length;
+    if (colCount >= 10) {
+      colIndex.id_soal = 0;
+      colIndex.jenis_soal = 1;
+      colIndex.wacana = 2;
+      colIndex.teks_soal = 3;
+      colIndex.opsi_a = 4;
+      colIndex.opsi_b = 5;
+      colIndex.opsi_c = 6;
+      colIndex.opsi_d = 7;
+      colIndex.opsi_e = 8;
+      colIndex.kunci_jawaban = 9;
+      colIndex.bobot = 10;
+    } else if (colCount === 9) {
+      colIndex.id_soal = 0;
+      colIndex.wacana = 1;
+      colIndex.teks_soal = 2;
+      colIndex.opsi_a = 3;
+      colIndex.opsi_b = 4;
+      colIndex.opsi_c = 5;
+      colIndex.opsi_d = 6;
+      colIndex.opsi_e = 7;
+      colIndex.kunci_jawaban = 8;
+    } else if (colCount === 8) {
+      colIndex.id_soal = 0;
+      colIndex.teks_soal = 1;
+      colIndex.opsi_a = 2;
+      colIndex.opsi_b = 3;
+      colIndex.opsi_c = 4;
+      colIndex.opsi_d = 5;
+      colIndex.opsi_e = 6;
+      colIndex.kunci_jawaban = 7;
+    } else if (colCount === 7) {
+      colIndex.teks_soal = 0;
+      colIndex.opsi_a = 1;
+      colIndex.opsi_b = 2;
+      colIndex.opsi_c = 3;
+      colIndex.opsi_d = 4;
+      colIndex.opsi_e = 5;
+      colIndex.kunci_jawaban = 6;
+    } else if (colCount === 6) {
+      colIndex.teks_soal = 0;
+      colIndex.opsi_a = 1;
+      colIndex.opsi_b = 2;
+      colIndex.opsi_c = 3;
+      colIndex.opsi_d = 4;
+      colIndex.kunci_jawaban = 5;
+    } else {
+      return {
+        rows: [],
+        errors: [
+          'Format kolom CSV soal tidak dikenali. Pastikan minimal terdapat kolom: teks_soal, opsi_a, opsi_b, opsi_c, opsi_d, dan kunci_jawaban.',
+        ],
+      };
+    }
+  }
 
   const rows: CsvQuestionRow[] = [];
   const errors: string[] = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const lineDelim = detectCsvDelimiter(lines[i]) || delimiter;
-    const cells = splitCsvLine(lines[i], lineDelim);
-    if (cells.length < requiredHeaders.length) {
-      errors.push(`Baris ${i + 1}: Jumlah kolom kurang dari 11 kolom.`);
-      continue;
+  for (let i = startRow; i < lines.length; i++) {
+    let cells = splitCsvLine(lines[i], activeDelimiter);
+    if (cells.length <= 2) {
+      const altDelim = detectCsvDelimiter(lines[i]);
+      if (altDelim !== activeDelimiter) {
+        const altCells = splitCsvLine(lines[i], altDelim);
+        if (altCells.length > cells.length) {
+          cells = altCells;
+        }
+      }
     }
 
-    const getVal = (col: string) =>
-      (cells[colIndex[col]] ?? '').replace(/^["']|["']$/g, '').trim();
+    const cleanCells = cells.map((c) => c.replace(/^["']|["']$/g, '').trim());
+    // Skip completely empty rows
+    if (cleanCells.every((c) => !c)) continue;
 
-    const id_soal = getVal('id_soal') || `SOAL-${i}`;
-    const rawJenis = getVal('jenis_soal').toUpperCase();
-    const jenis_soal: 'PG' | 'Kompleks' =
-      rawJenis.includes('KOMPLEKS') || rawJenis === 'PGK' ? 'Kompleks' : 'PG';
+    const getVal = (col: string): string => {
+      const idx = colIndex[col];
+      if (idx === undefined || idx < 0 || idx >= cleanCells.length) return '';
+      return cleanCells[idx] || '';
+    };
+
+    const seqNum = rows.length + 1;
+    const id_soal =
+      getVal('id_soal') || `SOAL-${String(seqNum).padStart(2, '0')}`;
     const wacana = getVal('wacana');
     const teks_soal = getVal('teks_soal');
     const opsi_a = getVal('opsi_a');
@@ -539,7 +800,38 @@ export function parseQuestionsCsv(csvText: string): {
     const opsi_c = getVal('opsi_c');
     const opsi_d = getVal('opsi_d');
     const opsi_e = getVal('opsi_e');
-    const kunci_jawaban = normalizeAnswerKeys(getVal('kunci_jawaban'));
+
+    if (!teks_soal) {
+      errors.push(`Baris ${i + 1} (${id_soal}): Teks pertanyaan soal kosong.`);
+      continue;
+    }
+
+    const kunci_jawaban = resolveQuestionAnswerKeys(getVal('kunci_jawaban'), {
+      A: opsi_a,
+      B: opsi_b,
+      C: opsi_c,
+      D: opsi_d,
+      E: opsi_e,
+    });
+
+    if (kunci_jawaban.length === 0) {
+      errors.push(
+        `Baris ${i + 1} (${id_soal}): Kunci jawaban tidak valid ("${getVal(
+          'kunci_jawaban'
+        )}"). Gunakan huruf A-E (misal "B" atau "B,D,E").`
+      );
+      continue;
+    }
+
+    const rawJenis = getVal('jenis_soal').toUpperCase();
+    const jenis_soal: 'PG' | 'Kompleks' =
+      rawJenis.includes('KOMPLEKS') ||
+      rawJenis === 'PGK' ||
+      rawJenis.includes('MULTI') ||
+      kunci_jawaban.length > 1
+        ? 'Kompleks'
+        : 'PG';
+
     const rawBobot = parseInt(getVal('bobot'), 10);
     const bobot =
       !isNaN(rawBobot) && rawBobot > 0
@@ -547,18 +839,6 @@ export function parseQuestionsCsv(csvText: string): {
         : jenis_soal === 'Kompleks'
           ? 3
           : 2;
-
-    if (!teks_soal) {
-      errors.push(`Baris ${i + 1} (${id_soal}): Teks soal wajib diisi.`);
-      continue;
-    }
-
-    if (kunci_jawaban.length === 0) {
-      errors.push(
-        `Baris ${i + 1} (${id_soal}): Kunci jawaban tidak valid (gunakan huruf A-E, misal "C" untuk PG Biasa atau "B,D,E" untuk PG Kompleks).`
-      );
-      continue;
-    }
 
     rows.push({
       id_soal,
@@ -573,6 +853,10 @@ export function parseQuestionsCsv(csvText: string): {
       kunci_jawaban,
       bobot,
     });
+  }
+
+  if (rows.length === 0 && errors.length === 0) {
+    errors.push('Tidak ditemukan baris soal yang valid di dalam file CSV/Excel.');
   }
 
   return { rows, errors };
