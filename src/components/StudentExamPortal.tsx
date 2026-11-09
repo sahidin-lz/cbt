@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Clock,
   AlertTriangle,
@@ -10,14 +10,20 @@ import {
   BookOpen,
   Award,
   RotateCcw,
+  Lock,
+  Maximize2,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, AnalisisAI } from '../types/cbt';
 import {
   loginStudentExamCbt,
   submitStudentExamCbt,
   generateAiAnalysisCbt,
+  updateStudentStatusCbt,
+  subscribeToSingleStudentStatus,
   safeApiJson,
 } from '../lib/cbtFirestoreService';
+
+const MAX_TAB_VIOLATIONS = 3;
 
 interface StudentExamPortalProps {
   exams: ExamItem[];
@@ -42,10 +48,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [remainingSeconds, setRemainingSeconds] = useState<number>(3600);
 
-  // Anti-cheat tab switch detection
+  // Strict Anti-Cheat & Security Lockdown State
   const [tabViolations, setTabViolations] = useState(0);
   const [showCheatBanner, setShowCheatBanner] = useState(false);
+  const [showCheatLockModal, setShowCheatLockModal] = useState(false);
+  const [isStudentBlocked, setIsStudentBlocked] = useState(false);
+  const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [lastViolationTime, setLastViolationTime] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const lastViolationTimestampRef = useRef<number>(0);
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -65,6 +76,24 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setSelectedExamId(String(exams[0].id));
     }
   }, [exams, selectedExamId]);
+
+  const requestExamFullscreen = useCallback(async () => {
+    try {
+      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {
+      // Ignore if browser blocks automatic fullscreen
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
 
   const handleStartExam = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +123,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setCurrentIndex(0);
       setAnswers({});
       setTabViolations(0);
+      setShowCheatBanner(false);
+      setShowCheatLockModal(false);
+      setIsStudentBlocked(session.student.status_ujian === 'Diblokir');
+      setSecurityNotice(null);
       setSubmittedSummary(null);
+      requestExamFullscreen();
       onExamCompleted();
     } catch (err: any) {
       setLoginError(err.message || 'Gagal memulai sesi ujian.');
@@ -103,54 +137,159 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     }
   };
 
-  const triggerViolation = useCallback(() => {
+  // Real-time subscription to Teacher's Status Management (Blokir / Buka Kunci / Reset)
+  useEffect(() => {
     if (!activeStudent || submittedSummary) return;
-    setTabViolations((prev) => {
-      const nextCount = prev + 1;
-      const answeredNow = Object.keys(answers).filter(
-        (k) => answers[k] && answers[k].length > 0
-      ).length;
-      safeApiJson('/api/exam/heartbeat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nama: activeStudent.nama,
-          kelas: activeStudent.kelas,
-          pelanggaranTab: nextCount,
-          answeredCount: answeredNow,
-        }),
-      });
-      return nextCount;
-    });
-    setShowCheatBanner(true);
-    setLastViolationTime(new Date().toLocaleTimeString('id-ID'));
-  }, [activeStudent, submittedSummary, answers]);
 
-  // Basic Anti-Cheat: Detect window blur and visibilitychange
+    const unsubscribe = subscribeToSingleStudentStatus(
+      activeStudent.id,
+      (newStatus) => {
+        setActiveStudent((prev) =>
+          prev ? { ...prev, status_ujian: newStatus } : null
+        );
+        if (newStatus === 'Diblokir') {
+          setIsStudentBlocked(true);
+          setShowCheatLockModal(true);
+        } else if (newStatus === 'Sedang Ujian') {
+          setIsStudentBlocked((wasBlocked) => {
+            if (wasBlocked) {
+              setTabViolations(0);
+              setShowCheatLockModal(false);
+              setShowCheatBanner(false);
+              setSecurityNotice(
+                'Kunci ujian telah dibuka oleh Guru Pengawas. Silakan lanjutkan ujian dengan tertib.'
+              );
+            }
+            return false;
+          });
+        } else if (newStatus === 'Belum Mulai') {
+          // Teacher reset this student's session
+          setActiveStudent(null);
+          setSubmittedSummary(null);
+        }
+      }
+    );
+
+    return () => unsubscribe();
+  }, [activeStudent?.id, submittedSummary]);
+
+  const triggerViolation = useCallback(
+    (reason = 'Terdeteksi berpindah tab atau keluar dari jendela ujian') => {
+      if (!activeStudent || submittedSummary || isStudentBlocked) return;
+
+      // Debounce rapid blur+visibilitychange events within 800ms
+      const now = Date.now();
+      if (now - lastViolationTimestampRef.current < 800) return;
+      lastViolationTimestampRef.current = now;
+
+      setTabViolations((prev) => {
+        const nextCount = prev + 1;
+        const answeredNow = Object.keys(answers).filter(
+          (k) => answers[k] && answers[k].length > 0
+        ).length;
+        safeApiJson('/api/exam/heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nama: activeStudent.nama,
+            kelas: activeStudent.kelas,
+            pelanggaranTab: nextCount,
+            answeredCount: answeredNow,
+          }),
+        });
+
+        if (nextCount >= MAX_TAB_VIOLATIONS) {
+          setIsStudentBlocked(true);
+          updateStudentStatusCbt(activeStudent, 'Diblokir').then(() => {
+            onExamCompleted();
+          });
+        }
+
+        return nextCount;
+      });
+      setShowCheatBanner(true);
+      setShowCheatLockModal(true);
+      setSecurityNotice(reason);
+      setLastViolationTime(new Date().toLocaleTimeString('id-ID'));
+    },
+    [activeStudent, submittedSummary, isStudentBlocked, answers, onExamCompleted]
+  );
+
+  // Strict Anti-Cheat: Detect window blur, visibilitychange, right-click, copy/paste, and shortcuts
   useEffect(() => {
     if (!activeStudent || submittedSummary) return;
 
     const handleBlur = () => {
-      triggerViolation();
+      triggerViolation('Terdeteksi keluar dari fokus jendela ujian (Alt+Tab / Pindah Aplikasi)');
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        triggerViolation();
+        triggerViolation('Terdeteksi berpindah tab browser atau meminimalkan layar ujian');
       }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      setSecurityNotice('Klik kanan dinonaktifkan selama ujian berlangsung.');
+    };
+
+    const handleClipboard = (e: ClipboardEvent) => {
+      e.preventDefault();
+      setSecurityNotice('Fitur Salin / Tempel (Copy-Paste) dikunci selama ujian.');
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toUpperCase();
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      const blockedCombo =
+        e.key === 'F12' ||
+        e.key === 'PrintScreen' ||
+        (isCtrlOrCmd &&
+          e.shiftKey &&
+          ['I', 'J', 'C', 'K'].includes(key)) ||
+        (isCtrlOrCmd &&
+          ['U', 'P', 'S', 'C', 'V', 'X', 'T', 'N', 'W'].includes(key)) ||
+        (e.altKey && key === 'TAB');
+
+      if (blockedCombo) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSecurityNotice(
+          `Pintasan keyboard (${e.ctrlKey ? 'Ctrl+' : ''}${e.key}) diblokir oleh sistem keamanan ujian.`
+        );
+      }
+    };
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
     };
 
     window.addEventListener('blur', handleBlur);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('copy', handleClipboard);
+    document.addEventListener('cut', handleClipboard);
+    document.addEventListener('paste', handleClipboard);
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('copy', handleClipboard);
+      document.removeEventListener('cut', handleClipboard);
+      document.removeEventListener('paste', handleClipboard);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [activeStudent, submittedSummary, triggerViolation]);
 
   const handleSubmitExam = useCallback(async () => {
-    if (!activeStudent || !activeExam || isSubmitting) return;
+    if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked) return;
     setIsSubmitting(true);
     setConfirmSubmitModal(false);
 
@@ -162,6 +301,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         jawabanSiswa: answers,
         pelanggaranTab: tabViolations,
       });
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
       setSubmittedSummary({
         resultId: outcome.resultId,
         skor: outcome.skor,
@@ -180,6 +322,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     answers,
     tabViolations,
     isSubmitting,
+    isStudentBlocked,
     examQuestions,
     onExamCompleted,
   ]);
@@ -484,7 +627,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   ).length;
 
   return (
-    <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 space-y-4">
+    <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 space-y-4 select-none">
       {/* Top Exam Status Bar */}
       <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -493,6 +636,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             <span>Kelas {activeStudent.kelas}</span> · Token{' '}
             <span className="font-mono font-semibold text-blue-700">
               {activeStudent.token_ujian}
+            </span>{' '}
+            · Status:{' '}
+            <span
+              className={`font-semibold ${
+                isStudentBlocked ? 'text-red-700' : 'text-emerald-700'
+              }`}
+            >
+              {isStudentBlocked ? 'Diblokir' : activeStudent.status_ujian}
             </span>
           </div>
           <h1 className="text-lg font-bold text-slate-900 mt-0.5">
@@ -500,17 +651,34 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           </h1>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
+        <div className="flex flex-wrap items-center gap-3">
+          {!isFullscreen && (
+            <button
+              type="button"
+              onClick={requestExamFullscreen}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors cursor-pointer"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+              Mode Layar Penuh
+            </button>
+          )}
+
+          <div
+            className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
+              tabViolations > 0
+                ? 'bg-amber-50 border-amber-300 text-amber-900'
+                : 'bg-slate-50 border-slate-200 text-slate-600'
+            }`}
+          >
             <ShieldAlert
               className={`w-4 h-4 ${
                 tabViolations > 0 ? 'text-amber-600' : 'text-slate-400'
               }`}
             />
             <span>
-              Peringatan Tab:{' '}
+              Anti-Cheat Tab:{' '}
               <strong className="font-mono tabular-nums text-slate-900">
-                {tabViolations}
+                {tabViolations} / {MAX_TAB_VIOLATIONS}
               </strong>
             </span>
           </div>
@@ -528,8 +696,30 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         </div>
       </div>
 
+      {/* Security Notice Banner (Right-click, Copy-Paste, Keyboard Shortcut Blocked) */}
+      {securityNotice && (
+        <div
+          role="status"
+          className="bg-slate-900 text-white rounded-xl px-4 py-3 flex items-center justify-between gap-3 text-xs"
+        >
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Proteksi Keamanan Ujian Aktif:</strong> {securityNotice}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSecurityNotice(null)}
+            className="px-2.5 py-1 text-[11px] font-semibold bg-white/15 hover:bg-white/25 rounded cursor-pointer shrink-0"
+          >
+            Tutup
+          </button>
+        </div>
+      )}
+
       {/* Anti-Cheat Alert Banner when student switches tab / blurs window */}
-      {showCheatBanner && (
+      {showCheatBanner && !isStudentBlocked && (
         <div
           role="alert"
           className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -544,9 +734,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 Sistem mendeteksi Anda berpindah tab atau keluar dari jendela ujian
                 pada pukul{' '}
                 <span className="font-mono font-semibold">{lastViolationTime}</span>.
-                Total pelanggaran tercatat:{' '}
-                <strong className="font-mono">{tabViolations} kali</strong> dan
-                dilaporkan ke Dashboard Guru.
+                Pelanggaran tercatat:{' '}
+                <strong className="font-mono">
+                  {tabViolations} dari {MAX_TAB_VIOLATIONS} batas maksimal
+                </strong>{' '}
+                (Jika mencapai {MAX_TAB_VIOLATIONS}x, ujian otomatis diblokir).
               </p>
             </div>
           </div>
@@ -555,7 +747,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             onClick={() => setShowCheatBanner(false)}
             className="px-3 py-1.5 text-xs font-semibold text-amber-900 bg-amber-200/70 hover:bg-amber-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Saya Mengerti & Lanjutkan
+            Saya Mengerti
           </button>
         </div>
       )}
@@ -618,6 +810,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                       name={`question-${currentQuestion.id}`}
                       value={optKey}
                       checked={isSelected}
+                      disabled={isStudentBlocked}
                       onChange={() =>
                         handleSelectOption(
                           currentQuestion.id,
@@ -642,7 +835,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               <button
                 type="button"
                 onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
-                disabled={currentIndex === 0}
+                disabled={currentIndex === 0 || isStudentBlocked}
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -652,12 +845,13 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               {currentIndex < examQuestions.length - 1 ? (
                 <button
                   type="button"
+                  disabled={isStudentBlocked}
                   onClick={() =>
                     setCurrentIndex((prev) =>
                       Math.min(examQuestions.length - 1, prev + 1)
                     )
                   }
-                  className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   Soal Selanjutnya
                   <ChevronRight className="w-4 h-4" />
@@ -665,8 +859,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               ) : (
                 <button
                   type="button"
+                  disabled={isStudentBlocked}
                   onClick={() => setConfirmSubmitModal(true)}
-                  className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Send className="w-4 h-4" />
                   Selesaikan & Kumpulkan Ujian
@@ -699,6 +894,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   <button
                     key={q.id}
                     type="button"
+                    disabled={isStudentBlocked}
                     onClick={() => setCurrentIndex(idx)}
                     aria-label={`Pilih Soal Nomor ${idx + 1}`}
                     className={`h-11 rounded-lg font-mono tabular-nums text-xs font-bold border transition-colors flex flex-col items-center justify-center cursor-pointer ${
@@ -737,8 +933,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
             <button
               type="button"
+              disabled={isStudentBlocked}
               onClick={() => setConfirmSubmitModal(true)}
-              className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
               <CheckCircle2 className="w-4 h-4" />
               Kumpulkan Jawaban Sekarang
@@ -747,8 +944,110 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         </div>
       ) : null}
 
+      {/* Full-Screen Anti-Cheat Lock / Auto-Block Overlay Modal */}
+      {(showCheatLockModal || isStudentBlocked) && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white border border-slate-200 rounded-xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-xl">
+            <div className="flex items-start gap-3.5">
+              <div
+                className={`p-3 rounded-xl shrink-0 ${
+                  isStudentBlocked
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-amber-100 text-amber-700'
+                }`}
+              >
+                <Lock className="w-6 h-6" />
+              </div>
+              <div>
+                <div
+                  className={`text-xs font-bold uppercase tracking-wider ${
+                    isStudentBlocked ? 'text-red-700' : 'text-amber-700'
+                  }`}
+                >
+                  {isStudentBlocked
+                    ? 'Sesi Ujian Diblokir · Pelanggaran Keamanan CBT'
+                    : 'Layar Ujian Dikunci Sementara · Anti-Cheat Aktif'}
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 mt-1">
+                  {isStudentBlocked
+                    ? 'Akses Ujian Anda Telah Dikunci'
+                    : 'Terdeteksi Keluar dari Jendela Ujian'}
+                </h3>
+              </div>
+            </div>
+
+            {isStudentBlocked ? (
+              <div className="space-y-3 text-sm text-slate-700 leading-relaxed">
+                <p>
+                  Peserta <strong>{activeStudent.nama}</strong> ({activeStudent.kelas}
+                  ), sesi ujian Anda telah diubah menjadi{' '}
+                  <strong className="text-red-700">Diblokir</strong> karena
+                  mencapai batas maksimal pindah tab/keluar aplikasi (
+                  <strong className="font-mono">
+                    {tabViolations}/{MAX_TAB_VIOLATIONS} kali
+                  </strong>
+                  ) atau dikunci langsung oleh Pengawas.
+                </p>
+                <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 space-y-1">
+                  <div className="font-bold">Cara Membuka Kunci Ujian:</div>
+                  <p>
+                    Silakan lapor kepada <strong>Guru / Pengawas Ujian</strong>.
+                    Pengawas dapat membuka kunci Anda secara langsung melalui menu{' '}
+                    <strong>Dashboard Guru → Database Siswa → Buka Kunci</strong>.
+                    Layar ini akan terbuka otomatis begitu status Anda diaktifkan
+                    kembali.
+                  </p>
+                </div>
+                <div className="pt-2 flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveStudent(null);
+                      setIsStudentBlocked(false);
+                      setShowCheatLockModal(false);
+                    }}
+                    className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    Keluar ke Halaman Login
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4 text-sm text-slate-700 leading-relaxed">
+                <p>
+                  Sistem keamanan CBT mendeteksi Anda berpindah tab browser,
+                  membuka aplikasi lain, atau keluar dari fokus layar ujian pada
+                  pukul <strong className="font-mono">{lastViolationTime}</strong>.
+                </p>
+                <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
+                  Peringatan Ke-<strong>{tabViolations}</strong> dari maksimal{' '}
+                  <strong>{MAX_TAB_VIOLATIONS}</strong> kali. Apabila Anda
+                  berpindah tab hingga {MAX_TAB_VIOLATIONS} kali, sesi ujian akan{' '}
+                  <strong>Diblokir Otomatis</strong> dan hanya dapat dibuka oleh
+                  Guru Pengawas.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCheatLockModal(false);
+                    requestExamFullscreen();
+                  }}
+                  className="w-full py-3 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
+                >
+                  Kembali Fokus ke Ruang Ujian Sekarang
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Confirmation Dialog before Final Submit */}
-      {confirmSubmitModal && (
+      {confirmSubmitModal && !isStudentBlocked && (
         <div
           role="dialog"
           aria-modal="true"
@@ -788,3 +1087,4 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     </div>
   );
 };
+

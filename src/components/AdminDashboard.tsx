@@ -11,6 +11,9 @@ import {
   CheckCircle2,
   AlertCircle,
   Lock,
+  Unlock,
+  RotateCcw,
+  Ban,
   LogIn,
   ClipboardList,
   Edit3,
@@ -28,6 +31,9 @@ import {
   SAMPLE_CSV_TEMPLATE,
   SAMPLE_STUDENT_CSV_TEMPLATE,
   extractTingkatFromKelas,
+  buildExcelHtmlTable,
+  generateStudentTemplateExcel,
+  generateQuestionTemplateExcel,
 } from '../utils/cbtLogic';
 import {
   auth,
@@ -42,6 +48,8 @@ import {
   saveStudentCbt,
   uploadStudentsCsvCbt,
   regenerateStudentTokenCbt,
+  updateStudentStatusCbt,
+  bulkUpdateStudentStatusCbt,
   deleteStudentCbt,
   addManualQuestionCbt,
   uploadQuestionsCsvCbt,
@@ -58,6 +66,22 @@ interface AdminDashboardProps {
   syncPulse?: CbtSyncPulseData | null;
   isSyncingFirebase?: boolean;
   onManualFirebaseSync?: () => Promise<void>;
+}
+
+function triggerBrowserDownload(
+  content: string,
+  filename: string,
+  mimeType: string
+) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -85,9 +109,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // 4 Core Teacher Dashboard Modules:
   // 1. 'ujian' (Manajemen Ujian & Distribusi 3 Tingkatan Kelas)
-  // 2. 'siswa' (Database Siswa: Input Manual & Upload Massal CSV + Filter 3 Tingkatan)
-  // 3. 'soal'  (Bank Soal & Upload CSV per Paket Ujian/Tingkat)
-  // 4. 'laporan' (Hasil Ujian & Evaluasi AI)
+  // 2. 'siswa' (Database Siswa: Input Manual & Upload Massal CSV + Filter 3 Tingkatan + Manajemen Status)
+  // 3. 'soal'  (Bank Soal & Upload CSV/Excel per Paket Ujian/Tingkat)
+  // 4. 'laporan' (Hasil Ujian & Evaluasi AI + Export Excel)
   const [activeTab, setActiveTab] = useState<
     'ujian' | 'siswa' | 'soal' | 'laporan'
   >('ujian');
@@ -120,7 +144,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isSavingExam, setIsSavingExam] = useState(false);
   const [examFeedback, setExamFeedback] = useState<string | null>(null);
 
-  // --- Module 2: Database Siswa (Manual & Bulk CSV Upload) ---
+  // --- Module 2: Database Siswa (Manual & Bulk CSV/Excel Upload + Status Management) ---
   const [studentInputMode, setStudentInputMode] = useState<'manual' | 'csv'>(
     'manual'
   );
@@ -136,17 +160,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [replaceExistingStudents, setReplaceExistingStudents] = useState(false);
   const [isUploadingStudentsCsv, setIsUploadingStudentsCsv] = useState(false);
 
-  // Student Filters (3 Tingkatan + Specific Class)
+  // Student Filters (3 Tingkatan + Specific Class + Exam Status)
   const [filterStudentTingkat, setFilterStudentTingkat] =
     useState<string>('SEMUA');
   const [filterKelas, setFilterKelas] = useState<string>('SEMUA');
+  const [filterStudentStatus, setFilterStudentStatus] =
+    useState<string>('SEMUA');
   const [isSavingStudent, setIsSavingStudent] = useState(false);
   const [studentFeedback, setStudentFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
 
-  // --- Module 3: Manajemen Soal (Manual & CSV) ---
+  // --- Module 3: Manajemen Soal (Manual & CSV/Excel) ---
   const [questionInputMode, setQuestionInputMode] = useState<'manual' | 'csv'>(
     'manual'
   );
@@ -218,7 +244,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const matchTingkat =
       filterStudentTingkat === 'SEMUA' || sTingkat === filterStudentTingkat;
     const matchKelas = filterKelas === 'SEMUA' || s.kelas === filterKelas;
-    return matchTingkat && matchKelas;
+    const matchStatus =
+      filterStudentStatus === 'SEMUA' || s.status_ujian === filterStudentStatus;
+    return matchTingkat && matchKelas && matchStatus;
   });
 
   // Count students per grade level (Tingkat 10, 11, 12)
@@ -230,6 +258,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   ).length;
   const countTingkat12 = students.filter(
     (s) => extractTingkatFromKelas(s.kelas) === '12'
+  ).length;
+
+  // Count students per Exam Status
+  const countStatusBelumMulai = students.filter(
+    (s) => s.status_ujian === 'Belum Mulai'
+  ).length;
+  const countStatusSedangUjian = students.filter(
+    (s) => s.status_ujian === 'Sedang Ujian'
+  ).length;
+  const countStatusSelesai = students.filter(
+    (s) => s.status_ujian === 'Selesai'
+  ).length;
+  const countStatusDiblokir = students.filter(
+    (s) => s.status_ujian === 'Diblokir'
   ).length;
 
   // --- Teacher Login Handlers ---
@@ -333,7 +375,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await onRefreshData();
   };
 
-  // --- Student Database CRUD & Bulk Upload Handlers ---
+  // --- Student Database CRUD, Status Management & Excel/CSV Handlers ---
   const handleSaveStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!studentNameInput.trim() || !studentClassInput.trim()) return;
@@ -397,7 +439,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!studentCsvText.trim()) {
       setStudentFeedback({
         type: 'error',
-        message: 'Silakan pilih file CSV siswa atau tempelkan daftar Nama & Kelas.',
+        message: 'Silakan pilih file Excel/CSV siswa atau tempelkan daftar Nama & Kelas.',
       });
       return;
     }
@@ -419,7 +461,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch (err: any) {
       setStudentFeedback({
         type: 'error',
-        message: err.message || 'Gagal mengimpor CSV siswa.',
+        message: err.message || 'Gagal mengimpor file siswa.',
       });
     } finally {
       setIsUploadingStudentsCsv(false);
@@ -427,17 +469,75 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDownloadSampleStudentCsv = () => {
-    const blob = new Blob([SAMPLE_STUDENT_CSV_TEMPLATE], {
-      type: 'text/csv;charset=utf-8;',
+    triggerBrowserDownload(
+      SAMPLE_STUDENT_CSV_TEMPLATE,
+      'Template_Siswa_Kolom_Terpisah.csv',
+      'text/csv;charset=utf-8;'
+    );
+  };
+
+  const handleDownloadStudentTemplateExcel = () => {
+    triggerBrowserDownload(
+      generateStudentTemplateExcel(),
+      'Template_Siswa_3_Tingkatan.xls',
+      'application/vnd.ms-excel;charset=utf-8;'
+    );
+  };
+
+  const handleExportStudentsExcel = () => {
+    const targetList = filteredStudents.length > 0 ? filteredStudents : students;
+    const rows = targetList.map((st, idx) => {
+      const tkt = extractTingkatFromKelas(st.kelas);
+      return [
+        idx + 1,
+        st.nama,
+        st.kelas,
+        tkt === 'LAINNYA' ? 'Umum' : `Tingkat ${tkt}`,
+        st.token_ujian,
+        st.status_ujian,
+      ];
     });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', 'template_siswa_3_tingkatan.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const html = buildExcelHtmlTable(
+      'Database Siswa CBT',
+      [
+        'No',
+        'nama_siswa',
+        'kelas',
+        'Tingkatan Kelas',
+        'Token Ujian (6 Karakter)',
+        'Status Ujian',
+      ],
+      rows
+    );
+    triggerBrowserDownload(
+      html,
+      'Database_Siswa_dan_Token_CBT.xls',
+      'application/vnd.ms-excel;charset=utf-8;'
+    );
+  };
+
+  const handleUpdateStudentStatus = async (
+    student: StudentItem,
+    nextStatus: string
+  ) => {
+    setStudentFeedback(null);
+    await updateStudentStatusCbt(student, nextStatus);
+    setStudentFeedback({
+      type: 'success',
+      message: `Status ujian siswa "${student.nama}" (${student.kelas}) berhasil diubah menjadi "${nextStatus}".`,
+    });
+    await onRefreshData();
+  };
+
+  const handleBulkUpdateStudentStatus = async (nextStatus: string) => {
+    if (filteredStudents.length === 0) return;
+    setStudentFeedback(null);
+    await bulkUpdateStudentStatusCbt(filteredStudents, nextStatus);
+    setStudentFeedback({
+      type: 'success',
+      message: `Status ${filteredStudents.length} siswa pada filter aktif berhasil diatur menjadi "${nextStatus}".`,
+    });
+    await onRefreshData();
   };
 
   const handleRegenerateToken = async (studentId: number, nama: string) => {
@@ -447,7 +547,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const updated = await regenerateStudentTokenCbt(target);
     setStudentFeedback({
       type: 'success',
-      message: `Token baru untuk ${nama}: ${updated.token_ujian}`,
+      message: `Token baru untuk ${nama}: ${updated.token_ujian} (Status di-reset ke Belum Mulai)`,
     });
     await onRefreshData();
   };
@@ -462,7 +562,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await onRefreshData();
   };
 
-  // --- Question Management Handlers ---
+  // --- Question Management & Excel/CSV Export Handlers ---
   const handleToggleManualKunci = (letter: string) => {
     if (manualTipe === 'PG') {
       setManualKunci([letter]);
@@ -587,7 +687,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch (err: any) {
       setUploadStatus({
         type: 'error',
-        message: err.message || 'Gagal mengunggah file CSV.',
+        message: err.message || 'Gagal mengunggah file soal.',
       });
     } finally {
       setIsUploadingCsv(false);
@@ -595,17 +695,126 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDownloadSampleCsv = () => {
-    const blob = new Blob([SAMPLE_CSV_TEMPLATE], {
-      type: 'text/csv;charset=utf-8;',
+    triggerBrowserDownload(
+      SAMPLE_CSV_TEMPLATE,
+      'Template_Soal_CBT_Kolom_Terpisah.csv',
+      'text/csv;charset=utf-8;'
+    );
+  };
+
+  const handleDownloadQuestionTemplateExcel = () => {
+    triggerBrowserDownload(
+      generateQuestionTemplateExcel(),
+      'Template_Soal_CBT_11_Kolom.xls',
+      'application/vnd.ms-excel;charset=utf-8;'
+    );
+  };
+
+  const handleExportQuestionsExcel = () => {
+    const targetQuestions =
+      currentExamQuestions.length > 0 ? currentExamQuestions : questions;
+    const rows = targetQuestions.map((q, idx) => {
+      const isKompleks =
+        q.tipe_soal === 'Kompleks' || q.kunci_jawaban.length > 1;
+      const logikaPenilaian = isKompleks
+        ? 'PG Kompleks: Benar Semua = 3 Poin, Benar Sebagian = 1-2 Poin, Salah = 0 Poin'
+        : 'PG Biasa: Benar = 2 Poin, Salah = 0 Poin';
+      return [
+        q.data_opsi?.id_soal_csv || `SOAL-${String(idx + 1).padStart(2, '0')}`,
+        isKompleks ? 'Kompleks' : 'PG',
+        q.data_opsi?.wacana || '',
+        q.teks_soal,
+        q.data_opsi?.opsi?.A || '',
+        q.data_opsi?.opsi?.B || '',
+        q.data_opsi?.opsi?.C || '',
+        q.data_opsi?.opsi?.D || '',
+        q.data_opsi?.opsi?.E || '',
+        q.kunci_jawaban.join(','),
+        q.bobot || (isKompleks ? 3 : 2),
+        logikaPenilaian,
+      ];
     });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', 'template_soal_cbt.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const html = buildExcelHtmlTable(
+      'Bank Soal CBT',
+      [
+        'id_soal',
+        'jenis_soal',
+        'wacana',
+        'teks_soal',
+        'opsi_a',
+        'opsi_b',
+        'opsi_c',
+        'opsi_d',
+        'opsi_e',
+        'kunci_jawaban',
+        'bobot',
+        'keterangan_logika_skor',
+      ],
+      rows
+    );
+    const examSlug = (currentExam?.judul_ujian || 'Semua_Paket')
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .slice(0, 30);
+    triggerBrowserDownload(
+      html,
+      `Bank_Soal_${examSlug}.xls`,
+      'application/vnd.ms-excel;charset=utf-8;'
+    );
+  };
+
+  const handleExportResultsExcel = () => {
+    const rows = results.map((resItem, idx) => {
+      const st = students.find((s) => s.id === resItem.student_id);
+      const ex = exams.find((e) => e.id === resItem.exam_id);
+      const tkt = st ? extractTingkatFromKelas(st.kelas) : 'LAINNYA';
+      const ai = resItem.analisis_ai;
+      return [
+        idx + 1,
+        st?.nama || `Siswa #${resItem.student_id}`,
+        st?.kelas || '-',
+        tkt === 'LAINNYA' ? '-' : `Tingkat ${tkt}`,
+        st?.token_ujian || '-',
+        ex?.judul_ujian || `Ujian #${resItem.exam_id}`,
+        resItem.skor_angka,
+        ai?.kategori_nilai ||
+          (resItem.skor_angka >= 85
+            ? 'Sangat Baik (A)'
+            : resItem.skor_angka >= 70
+              ? 'Baik (B)'
+              : resItem.skor_angka >= 55
+                ? 'Cukup (C)'
+                : 'Perlu Bimbingan (D)'),
+        `${resItem.pelanggaran_tab || 0}x Pindah Tab`,
+        ai?.evaluasi_hots || 'Belum Dianalisis AI',
+        ai?.analisis_kompetensi?.kekuatan?.join(' | ') || '-',
+        ai?.analisis_kompetensi?.kelemahan?.join(' | ') || '-',
+        ai?.rekomendasi_belajar?.join(' | ') || '-',
+      ];
+    });
+    const html = buildExcelHtmlTable(
+      'Hasil Ujian & Evaluasi AI',
+      [
+        'No',
+        'Nama Siswa',
+        'Kelas',
+        'Tingkatan',
+        'Token Ujian',
+        'Paket Ujian',
+        'Skor Akhir (0-100)',
+        'Kategori Nilai',
+        'Log Anti-Cheat',
+        'Evaluasi Kognitif HOTS',
+        'Kekuatan Kompetensi',
+        'Kelemahan Kognitif',
+        '3 Rekomendasi Belajar',
+      ],
+      rows
+    );
+    triggerBrowserDownload(
+      html,
+      'Laporan_Nilai_dan_Evaluasi_AI_CBT.xls',
+      'application/vnd.ms-excel;charset=utf-8;'
+    );
   };
 
   // --- AI Evaluation Handler ---
@@ -1181,430 +1390,608 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 2: DATABASE SISWA (INPUT MANUAL & UPLOAD MASSAL SISWA CSV)         */}
+      {/* TAB 2: DATABASE SISWA & MANAJEMEN STATUS UJIAN                         */}
       {/* ===================================================================== */}
       {activeTab === 'siswa' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Panel Kiri: Switcher Tambah 1 Siswa vs Upload Massal Siswa CSV */}
-          <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setStudentInputMode('manual')}
-                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                  studentInputMode === 'manual'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Input Siswa Satuan
-              </button>
-              <button
-                type="button"
-                onClick={() => setStudentInputMode('csv')}
-                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
-                  studentInputMode === 'csv'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Upload Massal Siswa (CSV)
-              </button>
+        <div className="space-y-6">
+          {/* Baris Ringkasan & Manajemen Status Ujian Siswa */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Manajemen Status Ujian Siswa & Export Excel Terpisah per Kolom
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Pantau dan kelola status peserta ujian secara real-time: buka
+                  kunci siswa yang terblokir Anti-Cheat, reset status siswa yang
+                  sudah selesai agar bisa login ulang, atau unduh daftar Nama,
+                  Kelas & Token dalam kolom Excel terpisah.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleExportStudentsExcel}
+                  disabled={students.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Data Siswa & Token (.xls Rapi)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBulkUpdateStudentStatus('Belum Mulai')}
+                  disabled={filteredStudents.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset Semua Status ke &ldquo;Belum Mulai&rdquo;
+                </button>
+              </div>
             </div>
 
-            {studentInputMode === 'manual' ? (
-              <form onSubmit={handleSaveStudent} className="space-y-4">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900">
-                    {editingStudentId
-                      ? 'Edit Data Siswa'
-                      : 'Tambah Siswa ke Database'}
-                  </h2>
-                  <p className="text-xs text-slate-600 mt-0.5">
-                    Pilih tingkatan kelas (X, XI, atau XII) dan masukkan nama
-                    siswa.
-                  </p>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="add-student-name"
-                    className="block text-xs font-semibold text-slate-700 mb-1"
+            {/* Filter & Indikator 4 Status Ujian Siswa */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-2 border-t border-slate-100">
+              {(
+                [
+                  ['SEMUA', 'Semua Status', students.length, 'text-slate-900'],
+                  [
+                    'Belum Mulai',
+                    'Belum Mulai',
+                    countStatusBelumMulai,
+                    'text-slate-700',
+                  ],
+                  [
+                    'Sedang Ujian',
+                    'Sedang Ujian',
+                    countStatusSedangUjian,
+                    'text-amber-700',
+                  ],
+                  ['Selesai', 'Selesai Ujian', countStatusSelesai, 'text-emerald-700'],
+                  [
+                    'Diblokir',
+                    'Diblokir (Anti-Cheat)',
+                    countStatusDiblokir,
+                    'text-red-700',
+                  ],
+                ] as const
+              ).map(([statusKey, label, countVal, textColor]) => {
+                const isSelected = filterStudentStatus === statusKey;
+                return (
+                  <button
+                    key={statusKey}
+                    type="button"
+                    onClick={() => setFilterStudentStatus(statusKey)}
+                    className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-50/70 border-blue-600 ring-1 ring-blue-600'
+                        : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100'
+                    }`}
                   >
-                    Nama Lengkap Siswa
-                  </label>
-                  <input
-                    id="add-student-name"
-                    type="text"
-                    value={studentNameInput}
-                    onChange={(e) => setStudentNameInput(e.target.value)}
-                    placeholder="Masukkan Nama Siswa"
-                    className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
-                  />
-                </div>
+                    <div className="text-[11px] font-medium text-slate-500">
+                      {label}
+                    </div>
+                    <div
+                      className={`text-lg font-bold font-mono tabular-nums mt-0.5 ${textColor}`}
+                    >
+                      {countVal}{' '}
+                      <span className="text-xs font-normal text-slate-500">
+                        siswa
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-                <div>
-                  <span className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Pilih Tingkatan Kelas Cepat
-                  </span>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(
-                      [
-                        ['X', 'Tingkat 1 (X)', 'X MIPA 1'],
-                        ['XI', 'Tingkat 2 (XI)', 'XI MIPA 1'],
-                        ['XII', 'Tingkat 3 (XII)', 'XII MIPA 1'],
-                      ] as const
-                    ).map(([prefix, label, sampleKelas]) => (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Panel Kiri: Switcher Tambah 1 Siswa vs Upload Massal Siswa Excel/CSV */}
+            <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setStudentInputMode('manual')}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                    studentInputMode === 'manual'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Input Siswa Satuan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStudentInputMode('csv')}
+                  className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                    studentInputMode === 'csv'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Upload Massal Siswa (Excel / CSV)
+                </button>
+              </div>
+
+              {studentInputMode === 'manual' ? (
+                <form
+                  key="student-form-manual"
+                  onSubmit={handleSaveStudent}
+                  className="space-y-4"
+                >
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">
+                      {editingStudentId
+                        ? 'Edit Data Siswa'
+                        : 'Tambah Siswa ke Database'}
+                    </h2>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Pilih tingkatan kelas (X, XI, atau XII) dan masukkan nama
+                      siswa.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="add-student-name"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
+                    >
+                      Nama Lengkap Siswa
+                    </label>
+                    <input
+                      id="add-student-name"
+                      type="text"
+                      value={studentNameInput}
+                      onChange={(e) => setStudentNameInput(e.target.value)}
+                      placeholder="Masukkan Nama Siswa"
+                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Pilih Tingkatan Kelas Cepat
+                    </span>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          ['X', 'Tingkat 1 (X)', 'X MIPA 1'],
+                          ['XI', 'Tingkat 2 (XI)', 'XI MIPA 1'],
+                          ['XII', 'Tingkat 3 (XII)', 'XII MIPA 1'],
+                        ] as const
+                      ).map(([prefix, label, sampleKelas]) => (
+                        <button
+                          key={prefix}
+                          type="button"
+                          onClick={() => {
+                            setStudentTingkatPreset(prefix);
+                            if (
+                              !studentClassInput
+                                .toUpperCase()
+                                .startsWith(prefix + ' ')
+                            ) {
+                              setStudentClassInput(sampleKelas);
+                            }
+                          }}
+                          className={`py-1.5 px-2 text-xs font-semibold rounded-md border transition-colors cursor-pointer ${
+                            studentTingkatPreset === prefix
+                              ? 'bg-blue-50 text-blue-700 border-blue-600'
+                              : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="add-student-class"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
+                    >
+                      Nama Kelas / Rombel
+                    </label>
+                    <input
+                      id="add-student-class"
+                      type="text"
+                      value={studentClassInput}
+                      onChange={(e) => setStudentClassInput(e.target.value)}
+                      placeholder="Contoh: X MIPA 1, XI IPS 2, XII MIPA 1"
+                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={isSavingStudent}
+                      className="flex-1 py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      {isSavingStudent
+                        ? 'Menyimpan...'
+                        : editingStudentId
+                          ? 'Simpan Perubahan Siswa'
+                          : 'Simpan Siswa & Generate Token'}
+                    </button>
+                    {editingStudentId && (
                       <button
-                        key={prefix}
                         type="button"
                         onClick={() => {
-                          setStudentTingkatPreset(prefix);
-                          if (
-                            !studentClassInput
-                              .toUpperCase()
-                              .startsWith(prefix + ' ')
-                          ) {
-                            setStudentClassInput(sampleKelas);
-                          }
+                          setEditingStudentId(null);
+                          setStudentNameInput('');
                         }}
-                        className={`py-1.5 px-2 text-xs font-semibold rounded-md border transition-colors cursor-pointer ${
-                          studentTingkatPreset === prefix
-                            ? 'bg-blue-50 text-blue-700 border-blue-600'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        className="px-3 py-2.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                    )}
+                  </div>
+                </form>
+              ) : (
+                <form
+                  key="student-form-csv"
+                  onSubmit={handleUploadStudentCsvSubmit}
+                  className="space-y-4"
+                >
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">
+                      Upload Massal Siswa (Excel / CSV)
+                    </h2>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      Unduh template Excel rapi di bawah (Kolom A: Nama Siswa,
+                      Kolom B: Kelas terpisah otomatis saat dibuka di Microsoft
+                      Excel).
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleDownloadStudentTemplateExcel}
+                      className="py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Template Excel (.xls)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadSampleStudentCsv}
+                      className="py-2 px-3 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Template CSV (Kolom Terpisah)
+                    </button>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
+                    <div className="font-semibold text-slate-800">
+                      Struktur 2 Kolom Terpisah (Nama Siswa & Kelas):
+                    </div>
+                    <code className="block font-mono text-[11px] text-blue-700">
+                      Kolom A: nama_siswa &nbsp;|&nbsp; Kolom B: kelas
+                    </code>
+                    <p className="text-[11px] text-slate-500">
+                      Mendukung pemisah titik koma (<code className="font-mono">;</code>),
+                      koma (<code className="font-mono">,</code>), atau salin-tempel
+                      langsung 2 kolom dari tabel Microsoft Excel.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="student-csv-file"
+                      className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    >
+                      Pilih File .XLS / .CSV Daftar Siswa
+                    </label>
+                    <input
+                      id="student-csv-file"
+                      type="file"
+                      accept=".csv,.xls,text/csv,application/vnd.ms-excel"
+                      onChange={handleStudentCsvFileChange}
+                      className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="student-csv-textarea"
+                      className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    >
+                      Atau Tempelkan Daftar Siswa dari Excel (Nama ; Kelas)
+                    </label>
+                    <textarea
+                      id="student-csv-textarea"
+                      rows={5}
+                      value={studentCsvText}
+                      onChange={(e) => setStudentCsvText(e.target.value)}
+                      placeholder={`nama_siswa;kelas\nAditya Pratama;X MIPA 1\nBagas Setiawan;XI MIPA 1\nReza Rahadian;XII MIPA 1`}
+                      className="w-full p-3 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={replaceExistingStudents}
+                      onChange={(e) =>
+                        setReplaceExistingStudents(e.target.checked)
+                      }
+                      className="rounded border-slate-300 text-blue-600"
+                    />
+                    <span>
+                      Kosongkan data siswa lama sebelum mengimpor daftar baru ini
+                    </span>
+                  </label>
+
+                  <button
+                    type="submit"
+                    disabled={isUploadingStudentsCsv}
+                    className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Upload className="w-4 h-4" />
+                    {isUploadingStudentsCsv
+                      ? 'Mengimpor & Membuat Token...'
+                      : 'Proses Upload Massal Siswa'}
+                  </button>
+                </form>
+              )}
+
+              {studentFeedback && (
+                <div
+                  className={`p-3 rounded-lg text-xs font-medium flex items-start gap-2 ${
+                    studentFeedback.type === 'success'
+                      ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                      : 'bg-red-50 border border-red-200 text-red-700'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{studentFeedback.message}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Tabel Database Siswa (Dengan Filter 3 Tingkatan, Kelas & Manajemen Status) */}
+            <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    Database Siswa ({filteredStudents.length} Peserta)
+                  </h2>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Filter 3 Tingkatan */}
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                    {(
+                      [
+                        ['SEMUA', 'Semua'],
+                        ['10', 'Kelas X'],
+                        ['11', 'Kelas XI'],
+                        ['12', 'Kelas XII'],
+                      ] as const
+                    ).map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => {
+                          setFilterStudentTingkat(val);
+                          setFilterKelas('SEMUA');
+                        }}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                          filterStudentTingkat === val
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
                         {label}
                       </button>
                     ))}
                   </div>
-                </div>
 
-                <div>
-                  <label
-                    htmlFor="add-student-class"
-                    className="block text-xs font-semibold text-slate-700 mb-1"
-                  >
-                    Nama Kelas / Rombel
-                  </label>
-                  <input
-                    id="add-student-class"
-                    type="text"
-                    value={studentClassInput}
-                    onChange={(e) => setStudentClassInput(e.target.value)}
-                    placeholder="Contoh: X MIPA 1, XI IPS 2, XII MIPA 1"
-                    className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="submit"
-                    disabled={isSavingStudent}
-                    className="flex-1 py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    {isSavingStudent
-                      ? 'Menyimpan...'
-                      : editingStudentId
-                        ? 'Simpan Perubahan Siswa'
-                        : 'Simpan Siswa & Generate Token'}
-                  </button>
-                  {editingStudentId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingStudentId(null);
-                        setStudentNameInput('');
-                      }}
-                      className="px-3 py-2.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  {uniqueClasses.length > 0 && (
+                    <select
+                      aria-label="Filter Rombel Siswa"
+                      value={filterKelas}
+                      onChange={(e) => setFilterKelas(e.target.value)}
+                      className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                     >
-                      Batal
-                    </button>
+                      <option value="SEMUA">Semua Rombel</option>
+                      {uniqueClasses.map((kls) => (
+                        <option key={kls} value={kls}>
+                          {kls}
+                        </option>
+                      ))}
+                    </select>
                   )}
                 </div>
-              </form>
-            ) : (
-              <form
-                onSubmit={handleUploadStudentCsvSubmit}
-                className="space-y-4"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900">
-                      Upload Massal Siswa (CSV)
-                    </h2>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      Impor ratusan siswa dari 3 tingkatan kelas sekaligus.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleDownloadSampleStudentCsv}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800 cursor-pointer shrink-0"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Unduh Template CSV
-                  </button>
-                </div>
+              </div>
 
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
-                  <div className="font-semibold text-slate-800">
-                    Format Kolom CSV Siswa:
-                  </div>
-                  <code className="block font-mono text-[11px] text-blue-700">
-                    nama_siswa,kelas
-                  </code>
-                  <p className="text-[11px] text-slate-500">
-                    Contoh baris: <code className="font-mono">Aditya Pratama,X MIPA 1</code> atau{' '}
-                    <code className="font-mono">Bagas Setiawan,XI MIPA 1</code>. Token
-                    6 karakter akan di-generate otomatis untuk setiap siswa.
+              {filteredStudents.length === 0 ? (
+                <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
+                  <p className="text-sm font-semibold text-slate-700">
+                    Belum Ada Data Siswa pada Filter Ini
+                  </p>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    Gunakan fitur <strong>Input Siswa Satuan</strong> atau{' '}
+                    <strong>Upload Massal Siswa (Excel / CSV)</strong> di panel
+                    kiri untuk mengisi daftar siswa Kelas X, XI, dan XII.
                   </p>
                 </div>
+              ) : (
+                <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                        <th className="py-3 px-3.5">Nama Siswa</th>
+                        <th className="py-3 px-3.5">Kelas · Tingkat</th>
+                        <th className="py-3 px-3.5">Token</th>
+                        <th className="py-3 px-3.5">Manajemen Status Ujian</th>
+                        <th className="py-3 px-3.5 text-right">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 text-sm">
+                      {filteredStudents.map((st) => {
+                        const tkt = extractTingkatFromKelas(st.kelas);
+                        const isBlocked = st.status_ujian === 'Diblokir';
+                        const isOngoing = st.status_ujian === 'Sedang Ujian';
+                        const isFinished = st.status_ujian === 'Selesai';
 
-                <div>
-                  <label
-                    htmlFor="student-csv-file"
-                    className="block text-xs font-semibold text-slate-700 mb-1.5"
-                  >
-                    Pilih File .CSV Daftar Siswa
-                  </label>
-                  <input
-                    id="student-csv-file"
-                    type="file"
-                    accept=".csv,text/csv"
-                    onChange={handleStudentCsvFileChange}
-                    className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="student-csv-textarea"
-                    className="block text-xs font-semibold text-slate-700 mb-1.5"
-                  >
-                    Atau Tempelkan Daftar Siswa (Nama, Kelas)
-                  </label>
-                  <textarea
-                    id="student-csv-textarea"
-                    rows={6}
-                    value={studentCsvText}
-                    onChange={(e) => setStudentCsvText(e.target.value)}
-                    placeholder={`nama_siswa,kelas\nAditya Pratama,X MIPA 1\nBagas Setiawan,XI MIPA 1\nReza Rahadian,XII MIPA 1`}
-                    className="w-full p-3 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
-                  />
-                </div>
-
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={replaceExistingStudents}
-                    onChange={(e) =>
-                      setReplaceExistingStudents(e.target.checked)
-                    }
-                    className="rounded border-slate-300 text-blue-600"
-                  />
-                  <span>
-                    Kosongkan data siswa lama sebelum mengimpor daftar baru ini
-                  </span>
-                </label>
-
-                <button
-                  type="submit"
-                  disabled={isUploadingStudentsCsv}
-                  className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Upload className="w-4 h-4" />
-                  {isUploadingStudentsCsv
-                    ? 'Mengimpor & Membuat Token...'
-                    : 'Proses Upload Massal Siswa'}
-                </button>
-              </form>
-            )}
-
-            {studentFeedback && (
-              <div
-                className={`p-3 rounded-lg text-xs font-medium flex items-start gap-2 ${
-                  studentFeedback.type === 'success'
-                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-                    : 'bg-red-50 border border-red-200 text-red-700'
-                }`}
-              >
-                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{studentFeedback.message}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Tabel Database Siswa (Dengan Filter 3 Tingkatan & Kelas) */}
-          <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
-              <div>
-                <h2 className="text-base font-bold text-slate-900">
-                  Database Siswa ({filteredStudents.length} Peserta)
-                </h2>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {/* Filter 3 Tingkatan */}
-                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
-                  {(
-                    [
-                      ['SEMUA', 'Semua'],
-                      ['10', 'Kelas X'],
-                      ['11', 'Kelas XI'],
-                      ['12', 'Kelas XII'],
-                    ] as const
-                  ).map(([val, label]) => (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => {
-                        setFilterStudentTingkat(val);
-                        setFilterKelas('SEMUA');
-                      }}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                        filterStudentTingkat === val
-                          ? 'bg-white text-slate-900 shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                {uniqueClasses.length > 0 && (
-                  <select
-                    aria-label="Filter Rombel Siswa"
-                    value={filterKelas}
-                    onChange={(e) => setFilterKelas(e.target.value)}
-                    className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                  >
-                    <option value="SEMUA">Semua Rombel</option>
-                    {uniqueClasses.map((kls) => (
-                      <option key={kls} value={kls}>
-                        {kls}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            </div>
-
-            {filteredStudents.length === 0 ? (
-              <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
-                <p className="text-sm font-semibold text-slate-700">
-                  Belum Ada Data Siswa pada Filter Ini
-                </p>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Gunakan fitur <strong>Input Siswa Satuan</strong> atau{' '}
-                  <strong>Upload Massal Siswa (CSV)</strong> di panel kiri untuk
-                  mengisi daftar siswa Kelas X, XI, dan XII.
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                      <th className="py-3 px-4">Nama Siswa</th>
-                      <th className="py-3 px-4">Kelas · Tingkat</th>
-                      <th className="py-3 px-4">Token Ujian</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4 text-right">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 text-sm">
-                    {filteredStudents.map((st) => {
-                      const tkt = extractTingkatFromKelas(st.kelas);
-                      return (
-                        <tr key={st.id} className="hover:bg-slate-50/80">
-                          <td className="py-3 px-4 font-semibold text-slate-900">
-                            {st.nama}
-                          </td>
-                          <td className="py-3 px-4 text-xs text-slate-700">
-                            <span className="font-semibold text-slate-900">
-                              {st.kelas}
-                            </span>
-                            {tkt !== 'LAINNYA' && (
-                              <span className="text-slate-500">
-                                {' '}
-                                · Tingkat {tkt}
+                        return (
+                          <tr key={st.id} className="hover:bg-slate-50/80">
+                            <td className="py-3 px-3.5 font-semibold text-slate-900">
+                              {st.nama}
+                            </td>
+                            <td className="py-3 px-3.5 text-xs text-slate-700">
+                              <span className="font-semibold text-slate-900">
+                                {st.kelas}
                               </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4">
-                            <code className="font-mono font-bold text-sm text-blue-700">
-                              {st.token_ujian}
-                            </code>
-                          </td>
-                          <td className="py-3 px-4 text-xs">
-                            <span
-                              className={`font-medium ${
-                                st.status_ujian === 'Selesai'
-                                  ? 'text-emerald-700'
-                                  : st.status_ujian === 'Sedang Ujian'
-                                    ? 'text-amber-700'
-                                    : 'text-slate-500'
-                              }`}
-                            >
-                              {st.status_ujian}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            <div className="inline-flex items-center justify-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleRegenerateToken(st.id, st.nama)
-                                }
-                                className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                              >
-                                Token Baru
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setStudentInputMode('manual');
-                                  setEditingStudentId(st.id);
-                                  setStudentNameInput(st.nama);
-                                  setStudentClassInput(st.kelas);
-                                }}
-                                aria-label={`Edit siswa ${st.nama}`}
-                                className="p-1.5 text-slate-500 hover:text-slate-900 rounded-md cursor-pointer"
-                              >
-                                <Edit3 className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleDeleteStudent(st.id, st.nama)
-                                }
-                                aria-label={`Hapus siswa ${st.nama}`}
-                                className="p-1.5 text-slate-400 hover:text-red-600 rounded-md cursor-pointer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                              {tkt !== 'LAINNYA' && (
+                                <span className="text-slate-500">
+                                  {' '}
+                                  · Tingkat {tkt}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3.5">
+                              <code className="font-mono font-bold text-sm text-blue-700">
+                                {st.token_ujian}
+                              </code>
+                            </td>
+                            <td className="py-3 px-3.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <select
+                                  aria-label={`Ubah status ujian ${st.nama}`}
+                                  value={st.status_ujian}
+                                  onChange={(e) =>
+                                    handleUpdateStudentStatus(
+                                      st,
+                                      e.target.value
+                                    )
+                                  }
+                                  className={`px-2.5 py-1 text-xs font-semibold rounded-md border cursor-pointer ${
+                                    isBlocked
+                                      ? 'bg-red-50 text-red-700 border-red-300'
+                                      : isOngoing
+                                        ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                        : isFinished
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                          : 'bg-slate-50 text-slate-700 border-slate-300'
+                                  }`}
+                                >
+                                  <option value="Belum Mulai">
+                                    Belum Mulai
+                                  </option>
+                                  <option value="Sedang Ujian">
+                                    Sedang Ujian
+                                  </option>
+                                  <option value="Selesai">Selesai</option>
+                                  <option value="Diblokir">Diblokir</option>
+                                </select>
+
+                                {isBlocked && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateStudentStatus(
+                                        st,
+                                        'Sedang Ujian'
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded cursor-pointer"
+                                  >
+                                    <Unlock className="w-3 h-3" />
+                                    Buka Kunci
+                                  </button>
+                                )}
+
+                                {isOngoing && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateStudentStatus(st, 'Diblokir')
+                                    }
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded cursor-pointer"
+                                  >
+                                    <Ban className="w-3 h-3" />
+                                    Blokir
+                                  </button>
+                                )}
+
+                                {(isFinished || isOngoing) && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateStudentStatus(
+                                        st,
+                                        'Belum Mulai'
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    Reset
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3.5 text-right">
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleRegenerateToken(st.id, st.nama)
+                                  }
+                                  className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  Token Baru
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setStudentInputMode('manual');
+                                    setEditingStudentId(st.id);
+                                    setStudentNameInput(st.nama);
+                                    setStudentClassInput(st.kelas);
+                                  }}
+                                  aria-label={`Edit siswa ${st.nama}`}
+                                  className="p-1.5 text-slate-500 hover:text-slate-900 rounded-md cursor-pointer"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDeleteStudent(st.id, st.nama)
+                                  }
+                                  aria-label={`Hapus siswa ${st.nama}`}
+                                  className="p-1.5 text-slate-400 hover:text-red-600 rounded-md cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 3: BANK SOAL (TAMBAH SOAL MANUAL & UPLOAD SOAL MASSAL CSV)         */}
+      {/* TAB 3: BANK SOAL (TAMBAH SOAL MANUAL & UPLOAD SOAL MASSAL EXCEL/CSV)   */}
       {/* ===================================================================== */}
       {activeTab === 'soal' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left 5 Cols: Input Soal Manual atau Upload CSV */}
+          {/* Left 5 Cols: Input Soal Manual atau Upload Excel/CSV */}
           <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
             <div>
               <label
@@ -1638,7 +2025,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* Switcher: Tambah Manual vs Upload CSV */}
+            {/* Switcher: Tambah Manual vs Upload Excel/CSV */}
             <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
               <button
                 type="button"
@@ -1660,12 +2047,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Upload Massal CSV
+                Upload Massal Excel / CSV
               </button>
             </div>
 
+            {/* Info Card Logika Penilaian CBT */}
+            <div className="p-3 rounded-lg bg-blue-50/70 border border-blue-200 text-xs text-slate-700 space-y-1">
+              <div className="font-bold text-blue-900">
+                Logika Penilaian Soal CBT (Otomatis & Konsisten):
+              </div>
+              <ul className="list-disc list-inside space-y-0.5 text-[11px]">
+                <li>
+                  <strong>PG Biasa (1 Jawaban Benar):</strong> Benar ={' '}
+                  <strong>2 Poin</strong>, Salah = 0 Poin.
+                </li>
+                <li>
+                  <strong>PG Kompleks (&gt;1 Jawaban Benar):</strong> Benar Semua
+                  = <strong>3 Poin</strong>, Benar Sebagian ={' '}
+                  <strong>1–2 Poin</strong>, Salah = 0 Poin.
+                </li>
+              </ul>
+            </div>
+
             {questionInputMode === 'manual' ? (
-              <form onSubmit={handleAddManualQuestion} className="space-y-3.5">
+              <form
+                key="question-form-manual"
+                onSubmit={handleAddManualQuestion}
+                className="space-y-3.5"
+              >
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label
@@ -1811,37 +2220,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               </form>
             ) : (
-              <form onSubmit={handleUploadCsvSubmit} className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-700">
-                    Format Header CSV Soal (11 Kolom)
+              <form
+                key="question-form-csv"
+                onSubmit={handleUploadCsvSubmit}
+                className="space-y-4"
+              >
+                <div className="space-y-2">
+                  <span className="block text-xs font-semibold text-slate-700">
+                    Unduh Template Soal (11 Kolom Terpisah Rapi di Excel)
                   </span>
-                  <button
-                    type="button"
-                    onClick={handleDownloadSampleCsv}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800 cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Unduh Contoh CSV Soal
-                  </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleDownloadQuestionTemplateExcel}
+                      className="py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Template Soal (.xls)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadSampleCsv}
+                      className="py-2 px-3 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Template CSV (Kolom Terpisah)
+                    </button>
+                  </div>
                 </div>
 
-                <p className="text-[11px] font-mono text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200">
-                  id_soal, jenis_soal, wacana, teks_soal, opsi_a, opsi_b,
-                  opsi_c, opsi_d, opsi_e, kunci_jawaban, bobot
-                </p>
+                <div className="text-[11px] font-mono text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200 space-y-1">
+                  <div className="font-sans font-semibold text-slate-800">
+                    11 Kolom Terpisah (Kolom A s/d K):
+                  </div>
+                  <div>
+                    id_soal ; jenis_soal ; wacana ; teks_soal ; opsi_a ; opsi_b
+                    ; opsi_c ; opsi_d ; opsi_e ; kunci_jawaban ; bobot
+                  </div>
+                </div>
 
                 <div>
                   <label
                     htmlFor="csv-file-upload"
                     className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    Pilih File .CSV Soal dari Komputer
+                    Pilih File .XLS / .CSV Soal dari Komputer
                   </label>
                   <input
                     id="csv-file-upload"
                     type="file"
-                    accept=".csv,text/csv"
+                    accept=".csv,.xls,text/csv,application/vnd.ms-excel"
                     onChange={handleFileChange}
                     className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
                   />
@@ -1852,14 +2280,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     htmlFor="csv-raw-textarea"
                     className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    Konten CSV Soal
+                    Konten Tabel / CSV Soal
                   </label>
                   <textarea
                     id="csv-raw-textarea"
-                    rows={6}
+                    rows={5}
                     value={csvText}
                     onChange={(e) => setCsvText(e.target.value)}
-                    placeholder="Tempelkan isi CSV atau unggah file CSV di atas..."
+                    placeholder="Tempelkan isi tabel Excel/CSV atau unggah file di atas..."
                     className="w-full p-3 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
@@ -1874,7 +2302,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="rounded border-slate-300 text-blue-600"
                   />
                   <span>
-                    Hapus soal lama pada paket ujian ini sebelum impor CSV
+                    Hapus soal lama pada paket ujian ini sebelum impor
                   </span>
                 </label>
 
@@ -1885,8 +2313,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <Upload className="w-4 h-4" />
                   {isUploadingCsv
-                    ? 'Memproses CSV...'
-                    : 'Proses & Upload Soal CSV'}
+                    ? 'Memproses File Soal...'
+                    : 'Proses & Upload Soal ke Paket Ujian'}
                 </button>
               </form>
             )}
@@ -1924,6 +2352,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </p>
                 )}
               </div>
+
+              <button
+                type="button"
+                onClick={handleExportQuestionsExcel}
+                disabled={questions.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export Bank Soal (.xls Rapi)
+              </button>
             </div>
 
             {currentExamQuestions.length === 0 ? (
@@ -1933,7 +2371,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
                   Tambahkan soal secara manual atau gunakan fitur Upload Massal
-                  CSV di panel sebelah kiri.
+                  Excel/CSV di panel sebelah kiri.
                 </p>
               </div>
             ) : (
@@ -1947,8 +2385,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span className="font-mono font-bold text-slate-900">
                         #{idx + 1} ·{' '}
                         {q.tipe_soal === 'Kompleks'
-                          ? 'Pilihan Ganda Kompleks'
-                          : 'Pilihan Ganda Biasa'}
+                          ? 'Pilihan Ganda Kompleks (Benar Semua 3 Poin, Sebagian 1-2 Poin)'
+                          : 'Pilihan Ganda Biasa (Benar 2 Poin)'}
                       </span>
                       <div className="flex items-center gap-3">
                         <span className="font-mono">
@@ -2009,17 +2447,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <p className="text-xs text-slate-600 mt-0.5">
                 Setiap siswa yang menyelesaikan ujian akan muncul di tabel ini.
                 Klik <strong>Generate AI Analysis</strong> untuk menganalisis
-                kekuatan/kelemahan LOTS vs HOTS.
+                kekuatan/kelemahan LOTS vs HOTS, atau unduh laporan Excel rapi.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onRefreshData}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Muat Ulang Data
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleExportResultsExcel}
+                disabled={results.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download Laporan Nilai & AI (.xls)
+              </button>
+              <button
+                type="button"
+                onClick={onRefreshData}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Muat Ulang Data
+              </button>
+            </div>
           </div>
 
           {aiErrorBanner && (

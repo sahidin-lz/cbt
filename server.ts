@@ -13,6 +13,8 @@ import {
   createStudentsFromCsv,
   updateStudentRecord,
   regenerateStudentTokenRecord,
+  updateStudentStatusRecord,
+  bulkUpdateStudentStatusRecord,
   deleteStudentRecord,
   createNewExamRecord,
   updateExamRecord,
@@ -353,6 +355,52 @@ app.post('/api/students/:id/regenerate-token', async (req, res) => {
     res.json({ student: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal membuat ulang token.' });
+  }
+});
+
+// PATCH /api/students/:id/status - Manage student exam status (Belum Mulai, Sedang Ujian, Selesai, Diblokir)
+app.patch('/api/students/:id/status', async (req, res) => {
+  try {
+    const studentId = Number(req.params.id);
+    const { status_ujian } = req.body;
+    const validStatuses = ['Belum Mulai', 'Sedang Ujian', 'Selesai', 'Diblokir'];
+    if (!status_ujian || !validStatuses.includes(String(status_ujian))) {
+      return res.status(400).json({ error: 'Status ujian tidak valid.' });
+    }
+    const updated = await updateStudentStatusRecord(studentId, String(status_ujian));
+    await broadcastFirestoreSync(
+      `Status siswa ${updated.nama} diubah menjadi: ${updated.status_ujian}`
+    );
+    res.json({ student: updated });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal mengubah status siswa.' });
+  }
+});
+
+// POST /api/students/bulk-status - Bulk update student exam statuses
+app.post('/api/students/bulk-status', async (req, res) => {
+  try {
+    const { studentIds, status_ujian } = req.body;
+    const validStatuses = ['Belum Mulai', 'Sedang Ujian', 'Selesai', 'Diblokir'];
+    if (
+      !Array.isArray(studentIds) ||
+      !status_ujian ||
+      !validStatuses.includes(String(status_ujian))
+    ) {
+      return res.status(400).json({ error: 'Parameter daftar siswa atau status tidak valid.' });
+    }
+    const updatedList = await bulkUpdateStudentStatusRecord(
+      studentIds.map(Number),
+      String(status_ujian)
+    );
+    await broadcastFirestoreSync(
+      `Status ${updatedList.length} siswa diatur massal menjadi: ${status_ujian}`
+    );
+    res.json({ students: updatedList });
+  } catch (error: any) {
+    res.status(500).json({
+      error: error.message || 'Gagal mengubah status siswa secara massal.',
+    });
   }
 });
 

@@ -644,6 +644,100 @@ export async function regenerateStudentTokenCbt(
   return updated;
 }
 
+export async function updateStudentStatusCbt(
+  student: StudentItem,
+  status_ujian: string
+): Promise<StudentItem> {
+  const apiRes = await safeApiJson<{ student?: StudentItem }>(
+    `/api/students/${student.id}/status`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status_ujian }),
+    }
+  );
+
+  const updated: StudentItem =
+    apiRes.ok && apiRes.data?.student
+      ? apiRes.data.student
+      : {
+          ...student,
+          status_ujian,
+        };
+
+  if (db) {
+    await setDoc(doc(db, 'students', String(updated.id)), {
+      id: Number(updated.id),
+      nama: updated.nama.slice(0, 150),
+      kelas: updated.kelas.slice(0, 64),
+      token_ujian: updated.token_ujian.slice(0, 6),
+      status_ujian: updated.status_ujian.slice(0, 32),
+      authorUid: 'sahidin30@gmail.com',
+      updatedAt: new Date().toISOString(),
+    });
+    await updateFirestorePulse(
+      `Status siswa ${updated.nama} diubah menjadi: ${updated.status_ujian}`
+    );
+  }
+
+  return updated;
+}
+
+export async function bulkUpdateStudentStatusCbt(
+  targetStudents: StudentItem[],
+  status_ujian: string
+): Promise<void> {
+  if (targetStudents.length === 0) return;
+
+  await safeApiJson('/api/students/bulk-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      studentIds: targetStudents.map((s) => s.id),
+      status_ujian,
+    }),
+  });
+
+  if (db) {
+    const nowIso = new Date().toISOString();
+    const batch = writeBatch(db);
+    for (const st of targetStudents) {
+      batch.set(doc(db, 'students', String(st.id)), {
+        id: Number(st.id),
+        nama: st.nama.slice(0, 150),
+        kelas: st.kelas.slice(0, 64),
+        token_ujian: st.token_ujian.slice(0, 6),
+        status_ujian: status_ujian.slice(0, 32),
+        authorUid: 'sahidin30@gmail.com',
+        updatedAt: nowIso,
+      });
+    }
+    await batch.commit();
+    await updateFirestorePulse(
+      `Status ${targetStudents.length} siswa diatur massal menjadi: ${status_ujian}`
+    );
+  }
+}
+
+export function subscribeToSingleStudentStatus(
+  studentId: number,
+  onStatusChange: (status: string) => void
+): Unsubscribe {
+  if (!db) return () => {};
+  return onSnapshot(
+    doc(db, 'students', String(studentId)),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        if (data?.status_ujian) {
+          onStatusChange(String(data.status_ujian));
+        }
+      }
+    },
+    () => {}
+  );
+}
+
 export async function deleteStudentCbt(
   studentId: number,
   nama: string
@@ -862,6 +956,18 @@ export async function loginStudentExamCbt(
   if (!matchedStudent) {
     throw new Error(
       'Token Ujian tidak ditemukan di database siswa. Hubungi Guru/Pengawas Anda.'
+    );
+  }
+
+  if (matchedStudent.status_ujian === 'Diblokir') {
+    throw new Error(
+      'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.'
+    );
+  }
+
+  if (matchedStudent.status_ujian === 'Selesai') {
+    throw new Error(
+      'Anda telah menyelesaikan ujian dengan Token ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai.'
     );
   }
 

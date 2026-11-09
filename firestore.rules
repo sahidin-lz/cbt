@@ -39,7 +39,7 @@ service cloud.firestore {
         data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 64 &&
         data.token_ujian is string && data.token_ujian.size() == 6 && data.token_ujian.matches('^[A-Z0-9]{6}$') &&
         data.status_ujian is string && data.status_ujian.size() >= 1 && data.status_ujian.size() <= 32 &&
-        (data.status_ujian == 'Belum Mulai' || data.status_ujian == 'Sedang Ujian' || data.status_ujian == 'Selesai') &&
+        (data.status_ujian == 'Belum Mulai' || data.status_ujian == 'Sedang Ujian' || data.status_ujian == 'Selesai' || data.status_ujian == 'Diblokir') &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 

@@ -8,7 +8,7 @@ import {
   AnalisisAI,
   QuestionDataOpsi,
 } from './schema.ts';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, inArray } from 'drizzle-orm';
 import {
   parseQuestionsCsv,
   parseStudentsCsv,
@@ -221,6 +221,42 @@ export async function regenerateStudentTokenRecord(studentId: number, newToken: 
   }
 }
 
+export async function updateStudentStatusRecord(
+  studentId: number,
+  status_ujian: string
+) {
+  try {
+    const [updated] = await db
+      .update(students)
+      .set({ status_ujian })
+      .where(eq(students.id, studentId))
+      .returning();
+    return updated;
+  } catch (error) {
+    console.error('Database query failed in updateStudentStatusRecord:', error);
+    throw new Error('Gagal memperbarui status ujian siswa.', { cause: error });
+  }
+}
+
+export async function bulkUpdateStudentStatusRecord(
+  studentIds: number[],
+  status_ujian: string
+) {
+  try {
+    if (studentIds.length === 0) return [];
+    return await db
+      .update(students)
+      .set({ status_ujian })
+      .where(inArray(students.id, studentIds))
+      .returning();
+  } catch (error) {
+    console.error('Database query failed in bulkUpdateStudentStatusRecord:', error);
+    throw new Error('Gagal memperbarui status ujian siswa secara massal.', {
+      cause: error,
+    });
+  }
+}
+
 export async function deleteStudentRecord(studentId: number) {
   try {
     await db.delete(students).where(eq(students.id, studentId));
@@ -309,6 +345,20 @@ export async function verifyStudentTokenForExam(
     const cleanNama = namaInput.trim();
     if (!cleanNama) {
       return { error: 'Nama Siswa wajib diisi.' };
+    }
+
+    if (student.status_ujian === 'Diblokir') {
+      return {
+        error:
+          'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.',
+      };
+    }
+
+    if (student.status_ujian === 'Selesai') {
+      return {
+        error:
+          'Anda telah menyelesaikan ujian dengan Token ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai.',
+      };
     }
 
     const allExams = await db.select().from(exams).orderBy(desc(exams.id));

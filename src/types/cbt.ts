@@ -1,9 +1,15 @@
+export type StudentExamStatus =
+  | 'Belum Mulai'
+  | 'Sedang Ujian'
+  | 'Selesai'
+  | 'Diblokir';
+
 export interface StudentItem {
   id: number;
   nama: string;
   kelas: string;
   token_ujian: string;
-  status_ujian: 'Belum Mulai' | 'Sedang Ujian' | 'Selesai' | string;
+  status_ujian: StudentExamStatus | string;
   created_at?: string;
 }
 

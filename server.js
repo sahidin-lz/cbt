@@ -123,7 +123,7 @@ var pool = createPool();
 var db = drizzle(pool, { schema: schema_exports });
 
 // src/db/cbtRepository.ts
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray } from "drizzle-orm";
 
 // src/utils/cbtLogic.ts
 function generateExamToken(seed) {
@@ -163,7 +163,7 @@ function isExamMatchedForStudentClass(exam, studentKelas) {
 }
 function normalizeAnswerKeys(keys) {
   if (!keys) return [];
-  const rawList = Array.isArray(keys) ? keys : String(keys).split(/[,;|/\s]+/).map((s) => s.trim()).filter(Boolean);
+  const rawList = Array.isArray(keys) ? keys : String(keys).split(/[,;|/+\s]+/).map((s) => s.trim()).filter(Boolean);
   const validSet = /* @__PURE__ */ new Set();
   for (const item of rawList) {
     const clean = item.toUpperCase().replace(/[^A-E]/g, "");
@@ -259,7 +259,35 @@ function calculateExamScore(questionsList, studentAnswers) {
     breakdown
   };
 }
-function splitCsvLine(line) {
+function detectCsvDelimiter(line) {
+  let inQuotes = false;
+  let countComma = 0;
+  let countSemi = 0;
+  let countTab = 0;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (!inQuotes) {
+      if (ch === ";") countSemi++;
+      else if (ch === "	") countTab++;
+      else if (ch === ",") countComma++;
+    }
+  }
+  if (countTab > 0 && countTab >= countSemi && countTab >= countComma) {
+    return "	";
+  }
+  if (countSemi > 0 && countSemi >= countComma) {
+    return ";";
+  }
+  return ",";
+}
+function splitCsvLine(line, forcedDelimiter) {
+  const delimiter = forcedDelimiter || detectCsvDelimiter(line);
   const result = [];
   let current = "";
   let inQuotes = false;
@@ -272,7 +300,7 @@ function splitCsvLine(line) {
       } else {
         inQuotes = !inQuotes;
       }
-    } else if ((ch === "," || ch === ";") && !inQuotes) {
+    } else if (ch === delimiter && !inQuotes) {
       result.push(current.trim());
       current = "";
     } else {
@@ -282,18 +310,64 @@ function splitCsvLine(line) {
   result.push(current.trim());
   return result;
 }
+function normalizeSpreadsheetLines(rawInput) {
+  const cleanText = (rawInput || "").replace(/^\uFEFF/, "").trim();
+  if (/<table[\s>]/i.test(cleanText) && /<tr[\s>]/i.test(cleanText)) {
+    const trMatches = cleanText.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+    const extractedLines = [];
+    for (const tr of trMatches) {
+      const cellMatches = tr.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) || [];
+      if (cellMatches.length === 0) continue;
+      const cells = cellMatches.map(
+        (cell) => cell.replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').trim()
+      );
+      if (cells.some(Boolean)) {
+        extractedLines.push(cells.join("	"));
+      }
+    }
+    return { lines: extractedLines, delimiter: "	" };
+  }
+  let forcedDelimiter;
+  const rawLines = cleanText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const filteredLines = [];
+  for (const line of rawLines) {
+    if (/^sep\s*=\s*(.|\\t)$/i.test(line)) {
+      const m = line.match(/^sep\s*=\s*(.|\\t)$/i);
+      if (m) {
+        if (m[1] === ";") forcedDelimiter = ";";
+        else if (m[1] === ",") forcedDelimiter = ",";
+        else if (m[1] === "	" || m[1] === "\\t") forcedDelimiter = "	";
+      }
+      continue;
+    }
+    if (line.startsWith("#")) continue;
+    filteredLines.push(line);
+  }
+  const detected = forcedDelimiter || (filteredLines.length > 0 ? detectCsvDelimiter(filteredLines[0]) : ";");
+  return { lines: filteredLines, delimiter: detected };
+}
 function parseStudentsCsv(csvText) {
-  const lines = csvText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const { lines, delimiter } = normalizeSpreadsheetLines(csvText);
   if (lines.length === 0) {
     return {
       rows: [],
-      errors: ["File CSV atau daftar siswa kosong."]
+      errors: ["File CSV/Excel atau daftar siswa kosong."]
     };
   }
-  const firstCells = splitCsvLine(lines[0]).map(
+  const firstCells = splitCsvLine(lines[0], delimiter).map(
     (c) => c.toLowerCase().replace(/^["']|["']$/g, "").trim()
   );
-  const hasHeader = firstCells.includes("nama") || firstCells.includes("nama_siswa") || firstCells.includes("nama lengkap") || firstCells.includes("kelas");
+  const hasHeader = firstCells.some(
+    (c) => [
+      "nama",
+      "nama_siswa",
+      "nama lengkap",
+      "nama siswa",
+      "kelas",
+      "kelas / rombel",
+      "rombel"
+    ].includes(c)
+  );
   let namaIdx = 0;
   let kelasIdx = 1;
   let tokenIdx = -1;
@@ -302,10 +376,10 @@ function parseStudentsCsv(csvText) {
       (c) => ["nama", "nama_siswa", "nama lengkap", "nama siswa"].includes(c)
     );
     kelasIdx = firstCells.findIndex(
-      (c) => ["kelas", "rombel", "tingkat_kelas"].includes(c)
+      (c) => ["kelas", "kelas / rombel", "rombel", "tingkat_kelas"].includes(c)
     );
     tokenIdx = firstCells.findIndex(
-      (c) => ["token", "token_ujian"].includes(c)
+      (c) => ["token", "token_ujian", "token ujian (6 karakter)"].includes(c)
     );
     if (namaIdx === -1) namaIdx = 0;
     if (kelasIdx === -1) kelasIdx = 1;
@@ -314,12 +388,13 @@ function parseStudentsCsv(csvText) {
   const rows = [];
   const errors = [];
   for (let i = startRow; i < lines.length; i++) {
-    const cells = splitCsvLine(lines[i]).map(
+    const lineDelim = detectCsvDelimiter(lines[i]) || delimiter;
+    const cells = splitCsvLine(lines[i], lineDelim).map(
       (c) => c.replace(/^["']|["']$/g, "").trim()
     );
     const nama = cells[namaIdx] || "";
     const kelas = cells[kelasIdx] || "";
-    const rawToken = tokenIdx >= 0 ? (cells[tokenIdx] || "").toUpperCase() : "";
+    const rawToken = tokenIdx >= 0 ? (cells[tokenIdx] || "").toUpperCase().trim() : "";
     if (!nama || !kelas) {
       errors.push(
         `Baris ${i + 1}: Kolom Nama Siswa dan Kelas wajib terisi.`
@@ -334,16 +409,16 @@ function parseStudentsCsv(csvText) {
     });
   }
   if (rows.length === 0 && errors.length === 0) {
-    errors.push("Tidak ada baris data siswa yang valid ditemukan di dalam CSV.");
+    errors.push("Tidak ada baris data siswa yang valid ditemukan.");
   }
   return { rows, errors };
 }
 function parseQuestionsCsv(csvText) {
-  const lines = csvText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const { lines, delimiter } = normalizeSpreadsheetLines(csvText);
   if (lines.length < 2) {
     return {
       rows: [],
-      errors: ["File CSV kosong atau tidak memiliki baris data soal."]
+      errors: ["File CSV/Excel kosong atau tidak memiliki baris data soal."]
     };
   }
   const requiredHeaders = [
@@ -359,8 +434,8 @@ function parseQuestionsCsv(csvText) {
     "kunci_jawaban",
     "bobot"
   ];
-  const headerCells = splitCsvLine(lines[0]).map(
-    (h) => h.toLowerCase().replace(/^["']|["']$/g, "").trim()
+  const headerCells = splitCsvLine(lines[0], delimiter).map(
+    (h) => h.toLowerCase().replace(/^["']|["']$/g, "").trim().replace(/\s+/g, "_")
   );
   const missingHeaders = requiredHeaders.filter(
     (req) => !headerCells.includes(req)
@@ -369,7 +444,9 @@ function parseQuestionsCsv(csvText) {
     return {
       rows: [],
       errors: [
-        `Header CSV tidak sesuai template. Kolom yang hilang: ${missingHeaders.join(", ")}`
+        `Header tabel soal tidak sesuai template. Kolom yang belum ada: ${missingHeaders.join(
+          ", "
+        )}`
       ]
     };
   }
@@ -380,13 +457,14 @@ function parseQuestionsCsv(csvText) {
   const rows = [];
   const errors = [];
   for (let i = 1; i < lines.length; i++) {
-    const cells = splitCsvLine(lines[i]);
+    const lineDelim = detectCsvDelimiter(lines[i]) || delimiter;
+    const cells = splitCsvLine(lines[i], lineDelim);
     if (cells.length < requiredHeaders.length) {
       errors.push(`Baris ${i + 1}: Jumlah kolom kurang dari 11 kolom.`);
       continue;
     }
     const getVal = (col) => (cells[colIndex[col]] ?? "").replace(/^["']|["']$/g, "").trim();
-    const id_soal = getVal("id_soal") || `Q-${i}`;
+    const id_soal = getVal("id_soal") || `SOAL-${i}`;
     const rawJenis = getVal("jenis_soal").toUpperCase();
     const jenis_soal = rawJenis.includes("KOMPLEKS") || rawJenis === "PGK" ? "Kompleks" : "PG";
     const wacana = getVal("wacana");
@@ -405,7 +483,7 @@ function parseQuestionsCsv(csvText) {
     }
     if (kunci_jawaban.length === 0) {
       errors.push(
-        `Baris ${i + 1} (${id_soal}): Kunci jawaban tidak valid (gunakan A-E, misal "A" atau "A,C").`
+        `Baris ${i + 1} (${id_soal}): Kunci jawaban tidak valid (gunakan huruf A-E, misal "C" untuk PG Biasa atau "B,D,E" untuk PG Kompleks).`
       );
       continue;
     }
@@ -580,6 +658,26 @@ async function regenerateStudentTokenRecord(studentId, newToken) {
     throw new Error("Gagal memperbarui token ujian siswa.", { cause: error });
   }
 }
+async function updateStudentStatusRecord(studentId, status_ujian) {
+  try {
+    const [updated] = await db.update(students).set({ status_ujian }).where(eq(students.id, studentId)).returning();
+    return updated;
+  } catch (error) {
+    console.error("Database query failed in updateStudentStatusRecord:", error);
+    throw new Error("Gagal memperbarui status ujian siswa.", { cause: error });
+  }
+}
+async function bulkUpdateStudentStatusRecord(studentIds, status_ujian) {
+  try {
+    if (studentIds.length === 0) return [];
+    return await db.update(students).set({ status_ujian }).where(inArray(students.id, studentIds)).returning();
+  } catch (error) {
+    console.error("Database query failed in bulkUpdateStudentStatusRecord:", error);
+    throw new Error("Gagal memperbarui status ujian siswa secara massal.", {
+      cause: error
+    });
+  }
+}
 async function deleteStudentRecord(studentId) {
   try {
     await db.delete(students).where(eq(students.id, studentId));
@@ -637,6 +735,16 @@ async function verifyStudentTokenForExam(namaInput, tokenInput, examIdInput) {
     const cleanNama = namaInput.trim();
     if (!cleanNama) {
       return { error: "Nama Siswa wajib diisi." };
+    }
+    if (student.status_ujian === "Diblokir") {
+      return {
+        error: "Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda."
+      };
+    }
+    if (student.status_ujian === "Selesai") {
+      return {
+        error: "Anda telah menyelesaikan ujian dengan Token ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai."
+      };
     }
     const allExams = await db.select().from(exams).orderBy(desc(exams.id));
     if (allExams.length === 0) {
@@ -1153,6 +1261,44 @@ app.post("/api/students/:id/regenerate-token", async (req, res) => {
     res.json({ student: updated });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal membuat ulang token." });
+  }
+});
+app.patch("/api/students/:id/status", async (req, res) => {
+  try {
+    const studentId = Number(req.params.id);
+    const { status_ujian } = req.body;
+    const validStatuses = ["Belum Mulai", "Sedang Ujian", "Selesai", "Diblokir"];
+    if (!status_ujian || !validStatuses.includes(String(status_ujian))) {
+      return res.status(400).json({ error: "Status ujian tidak valid." });
+    }
+    const updated = await updateStudentStatusRecord(studentId, String(status_ujian));
+    await broadcastFirestoreSync(
+      `Status siswa ${updated.nama} diubah menjadi: ${updated.status_ujian}`
+    );
+    res.json({ student: updated });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal mengubah status siswa." });
+  }
+});
+app.post("/api/students/bulk-status", async (req, res) => {
+  try {
+    const { studentIds, status_ujian } = req.body;
+    const validStatuses = ["Belum Mulai", "Sedang Ujian", "Selesai", "Diblokir"];
+    if (!Array.isArray(studentIds) || !status_ujian || !validStatuses.includes(String(status_ujian))) {
+      return res.status(400).json({ error: "Parameter daftar siswa atau status tidak valid." });
+    }
+    const updatedList = await bulkUpdateStudentStatusRecord(
+      studentIds.map(Number),
+      String(status_ujian)
+    );
+    await broadcastFirestoreSync(
+      `Status ${updatedList.length} siswa diatur massal menjadi: ${status_ujian}`
+    );
+    res.json({ students: updatedList });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message || "Gagal mengubah status siswa secara massal."
+    });
   }
 });
 app.delete("/api/students/:id", async (req, res) => {

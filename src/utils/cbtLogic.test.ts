@@ -8,6 +8,8 @@ import {
   isExamMatchedForStudentClass,
   generateExamToken,
   normalizeAnswerKeys,
+  generateStudentTemplateExcel,
+  generateQuestionTemplateExcel,
   SAMPLE_CSV_TEMPLATE,
   SAMPLE_STUDENT_CSV_TEMPLATE,
 } from './cbtLogic.ts';
@@ -48,13 +50,23 @@ test('calculateExamScore awards 2 points for PG Biasa, 3 for Kompleks full, 1-2 
   assert.equal(summary.kategoriNilai, 'Baik (B)');
 });
 
-test('parseQuestionsCsv parses sample template with 11 columns including wacana and complex keys', () => {
+test('parseQuestionsCsv parses semicolon-separated Excel template and HTML .xls table with 11 columns', () => {
   const parsed = parseQuestionsCsv(SAMPLE_CSV_TEMPLATE);
   assert.equal(parsed.errors.length, 0);
   assert.equal(parsed.rows.length, 3);
   assert.equal(parsed.rows[0].id_soal, 'SOAL-01');
+  assert.equal(parsed.rows[0].jenis_soal, 'PG');
+  assert.deepEqual(parsed.rows[0].kunci_jawaban, ['B']);
   assert.equal(parsed.rows[1].jenis_soal, 'Kompleks');
   assert.deepEqual(parsed.rows[1].kunci_jawaban, ['B', 'D', 'E']);
+  assert.equal(parsed.rows[1].bobot, 3);
+
+  // Also test parsing directly from the generated Excel (.xls) template
+  const xlsContent = generateQuestionTemplateExcel();
+  const parsedXls = parseQuestionsCsv(xlsContent);
+  assert.equal(parsedXls.errors.length, 0);
+  assert.equal(parsedXls.rows.length, 3);
+  assert.deepEqual(parsedXls.rows[1].kunci_jawaban, ['B', 'D', 'E']);
 });
 
 test('extractTingkatFromKelas and isExamMatchedForStudentClass handle 3 grade levels (X/10, XI/11, XII/12)', () => {
@@ -65,19 +77,17 @@ test('extractTingkatFromKelas and isExamMatchedForStudentClass handle 3 grade le
   assert.equal(extractTingkatFromKelas('XII MIPA 1'), '12');
   assert.equal(extractTingkatFromKelas('12 TKJ'), '12');
 
-  // Exam for Tingkat 10 only
   const examKelas10 = { target_tingkat: '10', target_kelas: 'SEMUA' };
   assert.equal(isExamMatchedForStudentClass(examKelas10, 'X MIPA 1'), true);
   assert.equal(isExamMatchedForStudentClass(examKelas10, 'XI MIPA 1'), false);
   assert.equal(isExamMatchedForStudentClass(examKelas10, 'XII MIPA 1'), false);
 
-  // Exam for specific class XI IPS 2
   const examSpecific = { target_tingkat: '11', target_kelas: 'XI IPS 2' };
   assert.equal(isExamMatchedForStudentClass(examSpecific, 'XI IPS 2'), true);
   assert.equal(isExamMatchedForStudentClass(examSpecific, 'XI MIPA 1'), false);
 });
 
-test('parseStudentsCsv parses bulk student CSV across 3 grade levels', () => {
+test('parseStudentsCsv parses semicolon-separated CSV, comma-separated CSV, and Excel .xls across 3 grade levels', () => {
   const parsed = parseStudentsCsv(SAMPLE_STUDENT_CSV_TEMPLATE);
   assert.equal(parsed.errors.length, 0);
   assert.equal(parsed.rows.length, 6);
@@ -85,4 +95,9 @@ test('parseStudentsCsv parses bulk student CSV across 3 grade levels', () => {
   assert.equal(parsed.rows[0].tingkat, '10');
   assert.equal(parsed.rows[2].tingkat, '11');
   assert.equal(parsed.rows[4].tingkat, '12');
+
+  const parsedXls = parseStudentsCsv(generateStudentTemplateExcel());
+  assert.equal(parsedXls.errors.length, 0);
+  assert.equal(parsedXls.rows.length, 6);
+  assert.equal(parsedXls.rows[1].nama, 'Siti Nurhaliza');
 });

@@ -71,7 +71,7 @@
         "status_ujian": {
           "type": "string",
           "description": "Current exam status of the student.",
-          "enum": ["Belum Mulai", "Sedang Ujian", "Selesai"],
+          "enum": ["Belum Mulai", "Sedang Ujian", "Selesai", "Diblokir"],
           "maxLength": 32
         },
         "updatedAt": {
