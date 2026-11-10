@@ -22,8 +22,25 @@ import {
 type PortalView = 'student' | 'teacher';
 
 export default function App() {
-  // Default to Student Login Portal; Teacher Login is cleanly separated
-  const [portalView, setPortalView] = useState<PortalView>('student');
+  // Persist portalView across browser reloads so teacher/student stay on their last page
+  const [portalView, setPortalView] = useState<PortalView>(() => {
+    try {
+      const activeStudentSession = localStorage.getItem('cbt_active_student_session');
+      if (activeStudentSession) {
+        return 'student';
+      }
+      const saved = localStorage.getItem('cbt_active_portal');
+      if (saved === 'teacher' || saved === 'student') return saved;
+      if (localStorage.getItem('cbt_teacher_auth') === 'true') return 'teacher';
+    } catch {}
+    return 'student';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('cbt_active_portal', portalView);
+    } catch {}
+  }, [portalView]);
   const [isStudentInExam, setIsStudentInExam] = useState(false);
   const [exams, setExams] = useState<ExamItem[]>([]);
   const [questions, setQuestions] = useState<QuestionItem[]>([]);

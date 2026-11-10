@@ -77,6 +77,7 @@ import {
 } from '../utils/cbtFileParsers';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 import { ClassPerformanceLotsHotsChart } from './ClassPerformanceLotsHotsChart';
+import { ExamManagementTab } from './ExamManagementTab';
 
 interface AdminDashboardProps {
   exams: ExamItem[];
@@ -115,8 +116,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   isSyncingFirebase = false,
   onManualFirebaseSync,
 }) => {
-  // Separate Teacher Authentication State
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // Separate Teacher Authentication State (Persisted across browser reloads)
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('cbt_teacher_auth') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [teacherUsername, setTeacherUsername] = useState('');
   const [teacherPassword, setTeacherPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -128,14 +135,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     email: 'sahidin30@gmail.com',
   });
 
-  // 4 Core Teacher Dashboard Modules:
-  // 1. 'ujian' (Manajemen Ujian & Distribusi 3 Tingkatan Kelas)
-  // 2. 'siswa' (Database Siswa: Input Manual & Upload Massal CSV + Filter 3 Tingkatan + Manajemen Status)
-  // 3. 'soal'  (Bank Soal & Upload CSV/Excel per Paket Ujian/Tingkat)
-  // 4. 'laporan' (Hasil Ujian & Evaluasi AI + Export Excel)
+  // Core Teacher Dashboard Modules (Persisted on reload)
   const [activeTab, setActiveTab] = useState<
-    'ujian' | 'siswa' | 'soal' | 'laporan'
-  >('ujian');
+    'ujian' | 'manajemen' | 'siswa' | 'soal' | 'laporan'
+  >(() => {
+    try {
+      const saved = localStorage.getItem('cbt_teacher_active_tab');
+      if (
+        saved &&
+        ['ujian', 'manajemen', 'siswa', 'soal', 'laporan'].includes(saved)
+      ) {
+        return saved as any;
+      }
+    } catch {}
+    return 'ujian';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('cbt_teacher_active_tab', activeTab);
+    } catch {}
+  }, [activeTab]);
 
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
   const [isBankSoalDetailOpen, setIsBankSoalDetailOpen] = useState(false);
@@ -398,6 +418,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         email: 'sahidin30@gmail.com',
       });
       setIsAuthenticated(true);
+      try {
+        localStorage.setItem('cbt_teacher_auth', 'true');
+        localStorage.setItem('cbt_active_portal', 'teacher');
+      } catch {}
       setTeacherPassword('');
     } else {
       setAuthError('Email atau PIN Guru tidak sesuai.');
@@ -427,6 +451,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         email: cred.user.email || 'sahidin30@gmail.com',
       });
       setIsAuthenticated(true);
+      try {
+        localStorage.setItem('cbt_teacher_auth', 'true');
+        localStorage.setItem('cbt_active_portal', 'teacher');
+      } catch {}
     } catch {
       setAuthError(
         'Login Google dibatalkan. Silakan masuk menggunakan Email & PIN Guru di atas.'
@@ -1680,6 +1708,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 type="button"
                 role="tab"
+                aria-selected={activeTab === 'manajemen'}
+                onClick={() => setActiveTab('manajemen')}
+                className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeTab === 'manajemen'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5 text-blue-600" />
+                <span>Manajemen Ujian</span>
+                {students.some((s) => s.status_ujian === 'Sedang Ujian') && (
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={activeTab === 'siswa'}
                 onClick={() => setActiveTab('siswa')}
                 className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
@@ -1744,7 +1792,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button
               type="button"
-              onClick={() => setIsAuthenticated(false)}
+              onClick={() => {
+                setIsAuthenticated(false);
+                try {
+                  localStorage.removeItem('cbt_teacher_auth');
+                  localStorage.removeItem('cbt_teacher_active_tab');
+                } catch {}
+              }}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 hover:text-slate-900 bg-white border border-slate-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -2107,6 +2161,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             }}
           />
         </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* TAB BARU: MANAJEMEN UJIAN & ANALISIS BUTIR SOAL KELAS                 */}
+      {/* ===================================================================== */}
+      {activeTab === 'manajemen' && (
+        <ExamManagementTab
+          exams={exams}
+          questions={questions}
+          students={students}
+          results={results}
+          onRefreshData={onRefreshData}
+          onUpdateStudentStatus={handleUpdateStudentStatus}
+        />
       )}
 
       {/* ===================================================================== */}

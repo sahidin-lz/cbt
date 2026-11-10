@@ -253,6 +253,38 @@ function getLocalReceiptsForStudent(studentId: number): LocalExamReceipt[] {
   }
 }
 
+const ACTIVE_STUDENT_SESSION_KEY = 'cbt_active_student_session';
+
+export interface ActiveStudentSessionData {
+  student: StudentItem;
+  exam: ExamItem;
+  questions: QuestionItem[];
+}
+
+function saveActiveStudentSession(session: ActiveStudentSessionData) {
+  try {
+    localStorage.setItem(ACTIVE_STUDENT_SESSION_KEY, JSON.stringify(session));
+  } catch (e) {
+    console.error('Failed to save active student session', e);
+  }
+}
+
+function getActiveStudentSession(): ActiveStudentSessionData | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_STUDENT_SESSION_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearActiveStudentSession() {
+  try {
+    localStorage.removeItem(ACTIVE_STUDENT_SESSION_KEY);
+  } catch {}
+}
+
 interface StudentExamPortalProps {
   exams: ExamItem[];
   questions?: QuestionItem[];
@@ -305,19 +337,50 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
   }, [exams, selectedKelas]);
 
+  // Attempt to restore active session on mount (so if student reloads, they stay in the exam without logging in again!)
+  const initialSession = useMemo(() => {
+    return getActiveStudentSession();
+  }, []);
+
+  const initialProgress = useMemo(() => {
+    if (!initialSession?.student?.token_ujian) return null;
+    return getLocalProgress(initialSession.student.token_ujian, initialSession.exam?.id);
+  }, [initialSession]);
+
   // Active Exam Session State
-  const [activeStudent, setActiveStudent] = useState<StudentItem | null>(null);
-  const [activeExam, setActiveExam] = useState<ExamItem | null>(null);
-  const [examQuestions, setExamQuestions] = useState<QuestionItem[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, string[]>>({});
-  const [remainingSeconds, setRemainingSeconds] = useState<number>(3600);
+  const [activeStudent, setActiveStudent] = useState<StudentItem | null>(() => {
+    return initialSession?.student || null;
+  });
+  const [activeExam, setActiveExam] = useState<ExamItem | null>(() => {
+    return initialSession?.exam || null;
+  });
+  const [examQuestions, setExamQuestions] = useState<QuestionItem[]>(() => {
+    return initialSession?.questions || [];
+  });
+  const [currentIndex, setCurrentIndex] = useState<number>(() => {
+    return initialProgress?.currentIndex || 0;
+  });
+  const [answers, setAnswers] = useState<Record<string, string[]>>(() => {
+    return initialProgress?.answers || {};
+  });
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(() => {
+    if (initialProgress?.remainingSeconds && initialProgress.remainingSeconds > 0) {
+      return initialProgress.remainingSeconds;
+    }
+    return (initialSession?.exam?.durasi_menit || 60) * 60;
+  });
 
   // Strict Anti-Cheat & Security Lockdown State
-  const [tabViolations, setTabViolations] = useState(0);
+  const [tabViolations, setTabViolations] = useState<number>(() => {
+    return initialProgress?.tabViolations || 0;
+  });
   const [showCheatBanner, setShowCheatBanner] = useState(false);
-  const [showCheatLockModal, setShowCheatLockModal] = useState(false);
-  const [isStudentBlocked, setIsStudentBlocked] = useState(false);
+  const [showCheatLockModal, setShowCheatLockModal] = useState<boolean>(() => {
+    return initialSession?.student?.status_ujian === 'Diblokir';
+  });
+  const [isStudentBlocked, setIsStudentBlocked] = useState<boolean>(() => {
+    return initialSession?.student?.status_ujian === 'Diblokir';
+  });
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [lastViolationTime, setLastViolationTime] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -338,8 +401,28 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   // Student Portal Navigation & Progress Management State
   const [studentPortalTab, setStudentPortalTab] = useState<'login' | 'history'>('login');
-  const [activityLogs, setActivityLogs] = useState<StudentActivityLog[]>([]);
-  const [resumeNotice, setResumeNotice] = useState<string | null>(null);
+  const [activityLogs, setActivityLogs] = useState<StudentActivityLog[]>(() => {
+    if (initialProgress?.logs && initialProgress.logs.length > 0) {
+      return [
+        ...initialProgress.logs,
+        {
+          timestamp: new Date().toLocaleTimeString('id-ID'),
+          action: 'resume',
+          detail: 'Sesi ujian berhasil dipulihkan otomatis setelah browser di-reload. Siswa langsung melanjutkan pengerjaan.',
+        },
+      ];
+    }
+    return [];
+  });
+  const [resumeNotice, setResumeNotice] = useState<string | null>(() => {
+    if (initialSession) {
+      const ansCount = Object.keys(initialProgress?.answers || {}).length;
+      return ansCount > 0
+        ? `Sesi Ujian & Jawaban Anda Berhasil Dipulihkan! (${ansCount} soal tersimpan otomatis, Anda langsung melanjutkan tanpa mulai dari awal).`
+        : `Sesi Ujian Berhasil Dipulihkan! Silakan lanjutkan pengerjaan soal.`;
+    }
+    return null;
+  });
   const [showActivityLogModal, setShowActivityLogModal] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<StudentExamReceipt | null>(null);
 
@@ -348,6 +431,41 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     const isRunning = Boolean(activeStudent && !submittedSummary);
     onExamStateChange?.(isRunning);
   }, [activeStudent, submittedSummary, onExamStateChange]);
+
+  // Real-time synchronization & autosave to ensure reload/logout never loses data
+  useEffect(() => {
+    if (!activeStudent || !activeExam || submittedSummary) return;
+
+    saveLocalProgress(activeStudent.token_ujian, {
+      studentId: activeStudent.id,
+      nama: activeStudent.nama,
+      kelas: activeStudent.kelas,
+      token_ujian: activeStudent.token_ujian,
+      examId: activeExam.id,
+      answers,
+      currentIndex,
+      remainingSeconds,
+      tabViolations,
+      logs: activityLogs,
+      lastSavedAt: new Date().toISOString(),
+    });
+
+    saveActiveStudentSession({
+      student: activeStudent,
+      exam: activeExam,
+      questions: examQuestions,
+    });
+  }, [
+    activeStudent,
+    activeExam,
+    examQuestions,
+    answers,
+    currentIndex,
+    remainingSeconds,
+    tabViolations,
+    activityLogs,
+    submittedSummary,
+  ]);
 
   useEffect(() => {
     if (matchedExamsForSelectedClass.length > 0) {
@@ -453,6 +571,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setActiveExam(session.exam);
       setExamQuestions(session.questions || []);
 
+      saveActiveStudentSession({
+        student: session.student,
+        exam: session.exam,
+        questions: session.questions || [],
+      });
+
       if (savedProgress && Object.keys(savedProgress.answers || {}).length > 0) {
         // RESUME EXISTING PROGRESS (Siswa tinggal melanjutkan!)
         setAnswers(savedProgress.answers);
@@ -514,9 +638,19 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     const unsubscribe = subscribeToSingleStudentStatus(
       activeStudent.id,
       (newStatus) => {
-        setActiveStudent((prev) =>
-          prev ? { ...prev, status_ujian: newStatus } : null
-        );
+        setActiveStudent((prev) => {
+          if (!prev) return null;
+          const updated = { ...prev, status_ujian: newStatus };
+          if (activeExam) {
+            saveActiveStudentSession({
+              student: updated,
+              exam: activeExam,
+              questions: examQuestions,
+            });
+          }
+          return updated;
+        });
+
         if (newStatus === 'Diblokir') {
           setIsStudentBlocked(true);
           setShowCheatLockModal(true);
@@ -542,6 +676,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         } else if (newStatus === 'Belum Mulai') {
           // Teacher reset this student's session
           clearLocalProgress(activeStudent.token_ujian);
+          clearActiveStudentSession();
           setActiveStudent(null);
           setSubmittedSummary(null);
         }
@@ -549,7 +684,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
 
     return () => unsubscribe();
-  }, [activeStudent?.id, activeStudent?.token_ujian, submittedSummary]);
+  }, [activeStudent?.id, activeStudent?.token_ujian, activeExam, examQuestions, submittedSummary]);
 
   const triggerViolation = useCallback(
     (reason = 'Terdeteksi berpindah tab browser atau keluar dari jendela ujian') => {
@@ -598,6 +733,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setIsStudentBlocked(true);
       setShowCheatLockModal(true);
 
+      if (activeExam) {
+        saveActiveStudentSession({
+          student: { ...activeStudent, status_ujian: 'Diblokir' },
+          exam: activeExam,
+          questions: examQuestions,
+        });
+      }
+
       // Persist blocked status to server / Firebase
       updateStudentStatusCbt(activeStudent, 'Diblokir').then(() => {
         onExamCompleted();
@@ -622,6 +765,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     [
       activeStudent,
       activeExam,
+      examQuestions,
       answers,
       currentIndex,
       remainingSeconds,
@@ -633,7 +777,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     ]
   );
 
-  // Strict Anti-Cheat: Detect window blur, visibilitychange, right-click, copy/paste, and shortcuts
+  // Strict Anti-Cheat: Detect window blur, visibilitychange, fullscreen change, right-click, selection, drag, copy/paste, and shortcuts
   useEffect(() => {
     if (!activeStudent || submittedSummary) return;
 
@@ -647,6 +791,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       }
     };
 
+    const handleFullscreenChange = () => {
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      if (!isFs && !isStudentBlocked) {
+        triggerViolation('Terdeteksi keluar dari mode layar penuh (Fullscreen) ujian');
+      }
+    };
+
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       setSecurityNotice('Klik kanan dinonaktifkan selama ujian berlangsung.');
@@ -655,6 +807,16 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     const handleClipboard = (e: ClipboardEvent) => {
       e.preventDefault();
       setSecurityNotice('Fitur Salin / Tempel (Copy-Paste) dikunci selama ujian.');
+    };
+
+    const handleSelectStart = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      e.preventDefault();
+    };
+
+    const handleDragStart = (e: DragEvent) => {
+      e.preventDefault();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -668,26 +830,52 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           e.shiftKey &&
           ['I', 'J', 'C', 'K'].includes(key)) ||
         (isCtrlOrCmd &&
-          ['U', 'P', 'S', 'C', 'V', 'X', 'T', 'N', 'W'].includes(key)) ||
+          ['U', 'P', 'S', 'C', 'V', 'X', 'T', 'N', 'W', 'A'].includes(key)) ||
         (e.altKey && key === 'TAB');
 
       if (blockedCombo) {
         e.preventDefault();
         e.stopPropagation();
         setSecurityNotice(
-          `Pintasan keyboard (${e.ctrlKey ? 'Ctrl+' : ''}${e.key}) diblokir oleh sistem keamanan ujian.`
+          `Pintasan keyboard (${e.ctrlKey ? 'Ctrl+' : ''}${e.key}) diblokir demi keamanan integritas ujian.`
         );
       }
     };
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Synchronously flush all answers to localStorage before any refresh/tab close
+      if (activeStudent && activeExam) {
+        try {
+          saveLocalProgress(activeStudent.token_ujian, {
+            studentId: activeStudent.id,
+            nama: activeStudent.nama,
+            kelas: activeStudent.kelas,
+            token_ujian: activeStudent.token_ujian,
+            examId: activeExam.id,
+            answers,
+            currentIndex,
+            remainingSeconds,
+            tabViolations,
+            logs: activityLogs,
+            lastSavedAt: new Date().toISOString(),
+          });
+          saveActiveStudentSession({
+            student: activeStudent,
+            exam: activeExam,
+            questions: examQuestions,
+          });
+        } catch {}
+      }
       e.preventDefault();
       e.returnValue = '';
     };
 
     window.addEventListener('blur', handleBlur);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('selectstart', handleSelectStart);
+    document.addEventListener('dragstart', handleDragStart);
     document.addEventListener('copy', handleClipboard);
     document.addEventListener('cut', handleClipboard);
     document.addEventListener('paste', handleClipboard);
@@ -697,14 +885,17 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return () => {
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('selectstart', handleSelectStart);
+      document.removeEventListener('dragstart', handleDragStart);
       document.removeEventListener('copy', handleClipboard);
       document.removeEventListener('cut', handleClipboard);
       document.removeEventListener('paste', handleClipboard);
       window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [activeStudent, submittedSummary, triggerViolation]);
+  }, [activeStudent, activeExam, examQuestions, answers, currentIndex, remainingSeconds, tabViolations, activityLogs, isStudentBlocked, submittedSummary, triggerViolation]);
 
   const handleSubmitExam = useCallback(async () => {
     if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked) return;
@@ -739,6 +930,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
       // Clear in-progress storage upon successful submission
       clearLocalProgress(activeStudent.token_ujian);
+      clearActiveStudentSession();
 
       // Save complete receipt to student's history
       const finalReceipt: LocalExamReceipt = {
@@ -1911,7 +2103,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           {/* Question Stage */}
           <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-200">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-bold font-mono text-blue-700">
                   SOAL NO. {currentIndex + 1} / {examQuestions.length}
                 </span>
@@ -1922,9 +2114,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     : 'Pilihan Ganda Biasa (1 Jawaban Benar · Bobot 2 Poin)'}
                 </span>
               </div>
-              <span className="text-xs font-mono text-slate-500">
-                Kode: {currentQuestion.data_opsi?.id_soal_csv || `Q-${currentQuestion.id}`}
-              </span>
+              <div className="flex items-center gap-2">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Autosave Aktif · Tersimpan Otomatis ✓</span>
+                </div>
+                <span className="text-xs font-mono text-slate-500">
+                  Kode: {currentQuestion.data_opsi?.id_soal_csv || `Q-${currentQuestion.id}`}
+                </span>
+              </div>
             </div>
 
             {currentQuestion.data_opsi?.wacana && (
@@ -2026,15 +2224,21 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           {/* Right Question Navigation Matrix */}
           <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-5">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">
-                Navigasi Nomor Soal
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-slate-900">
+                  Navigasi Nomor Soal
+                </h2>
+                <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  <Check className="w-3 h-3 text-emerald-600 shrink-0" />
+                  <span>Autosave Aktif</span>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
                 Terjawab:{' '}
                 <strong className="font-mono tabular-nums text-slate-800">
                   {answeredCount} / {examQuestions.length}
                 </strong>{' '}
-                butir soal
+                butir soal · Disimpan otomatis
               </p>
             </div>
 
@@ -2180,6 +2384,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
+                      clearActiveStudentSession();
                       setActiveStudent(null);
                       setIsStudentBlocked(false);
                       setShowCheatLockModal(false);
