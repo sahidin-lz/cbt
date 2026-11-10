@@ -65,6 +65,11 @@ import {
   copyQuestionsToExamCbt,
   generateAiAnalysisCbt,
 } from '../lib/cbtFirestoreService';
+import {
+  parseQuestionsFromFile,
+  parseStudentsFromFile,
+} from '../utils/cbtFileParsers';
+import { MathAndTableRenderer } from './MathAndTableRenderer';
 import { ClassPerformanceLotsHotsChart } from './ClassPerformanceLotsHotsChart';
 
 interface AdminDashboardProps {
@@ -599,22 +604,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleStudentCsvFileChange = (
+  const handleStudentCsvFileChange = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const fileName = file.name;
     e.target.value = '';
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const content = event.target?.result;
-      if (typeof content === 'string') {
-        setStudentCsvText(content);
-        await executeStudentCsvUpload(content, fileName);
+    setIsUploadingStudentsCsv(true);
+    setStudentFeedback(null);
+    try {
+      const outcome = await parseStudentsFromFile(file);
+      if (outcome.rows.length === 0) {
+        setStudentFeedback({
+          type: 'error',
+          message:
+            outcome.errors.join(' | ') ||
+            `File "${fileName}" tidak memiliki data siswa yang valid.`,
+        });
+        return;
       }
-    };
-    reader.readAsText(file, 'UTF-8');
+      setStudentCsvText(outcome.csvRepresentation);
+      await executeStudentCsvUpload(
+        outcome.csvRepresentation,
+        `${fileName} (${outcome.formatDetected})`
+      );
+    } catch (err: any) {
+      setStudentFeedback({
+        type: 'error',
+        message: err.message || `Gagal membaca file siswa "${fileName}".`,
+      });
+    } finally {
+      setIsUploadingStudentsCsv(false);
+    }
   };
 
   const handleUploadStudentCsvSubmit = async (e: React.FormEvent) => {
@@ -1044,21 +1066,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const fileName = file.name;
-    // Reset input value so selecting the same file again still triggers onChange
     e.target.value = '';
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const content = event.target?.result;
-      if (typeof content === 'string') {
-        setCsvText(content);
-        await executeQuestionsCsvUpload(content, fileName);
+    setIsUploadingCsv(true);
+    setUploadStatus(null);
+    try {
+      const outcome = await parseQuestionsFromFile(file);
+      if (outcome.rows.length === 0) {
+        setUploadStatus({
+          type: 'error',
+          message:
+            outcome.errors.join(' | ') ||
+            `File "${fileName}" tidak memiliki butir soal yang terbaca. Pastikan terdapat kolom soal dan pilihan jawaban.`,
+        });
+        return;
       }
-    };
-    reader.readAsText(file, 'UTF-8');
+      setCsvText(outcome.csvRepresentation);
+      await executeQuestionsCsvUpload(
+        outcome.csvRepresentation,
+        `${fileName} (${outcome.formatDetected})`
+      );
+    } catch (err: any) {
+      setUploadStatus({
+        type: 'error',
+        message: err.message || `Gagal memproses file soal "${fileName}".`,
+      });
+    } finally {
+      setIsUploadingCsv(false);
+    }
   };
 
   const handleUploadCsvSubmit = async (e: React.FormEvent) => {
@@ -2533,14 +2571,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div>
                     <label
                       htmlFor="student-csv-file"
-                      className="block text-xs font-semibold text-slate-700 mb-1.5"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
                     >
-                      Pilih File .XLS / .CSV Daftar Siswa
+                      Pilih File Daftar Siswa (.xlsx, .xls, .csv, atau .txt)
                     </label>
+                    <p className="text-[11px] text-slate-500 mb-1.5">
+                      Langsung upload otomatis saat file dipilih. Mendukung Excel (.xlsx & .xls), CSV, dan TSV.
+                    </p>
                     <input
                       id="student-csv-file"
                       type="file"
-                      accept=".csv,.xls,text/csv,application/vnd.ms-excel"
+                      accept=".xlsx,.xls,.csv,.txt,text/csv,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                       onChange={handleStudentCsvFileChange}
                       className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
                     />
@@ -3478,12 +3519,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     htmlFor="csv-file-upload"
                     className="block text-xs font-semibold text-slate-800"
                   >
-                    Pilih File .CSV / .XLS Soal (Langsung Upload Otomatis Saat Dipilih)
+                    Pilih File Soal: Excel (.xlsx, .xls), Word (.docx, .doc), CSV, atau TXT
                   </label>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    {'Langsung upload otomatis saat file dipilih! Mendukung tabel Excel/Word, soal bernomor di Word/TXT, tabel stimulus/wacana, serta lambang matematika (LaTeX $...$, $\\sqrt{x}$, $\\frac{a}{b}$, $\\pm$, $\\pi$, dsb).'}
+                  </p>
                   <input
                     id="csv-file-upload"
                     type="file"
-                    accept=".csv,.xls,.txt,text/csv,text/plain,application/vnd.ms-excel"
+                    accept=".xlsx,.xls,.docx,.doc,.csv,.tsv,.txt,text/csv,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
                     onChange={handleFileChange}
                     className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
                   />
@@ -3776,21 +3820,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </div>
                     {q.data_opsi?.wacana && (
-                      <p className="text-xs text-slate-600 italic bg-white p-2.5 rounded border border-slate-200">
-                        Wacana: {q.data_opsi.wacana}
-                      </p>
+                      <div className="text-xs text-slate-600 italic bg-white p-2.5 rounded border border-slate-200">
+                        <div className="font-semibold text-slate-700 not-italic mb-1">
+                          Wacana / Stimulus:
+                        </div>
+                        <MathAndTableRenderer content={q.data_opsi.wacana} />
+                      </div>
                     )}
-                    <p className="text-sm font-semibold text-slate-900">
-                      {q.teks_soal}
-                    </p>
+                    <div className="text-sm font-semibold text-slate-900">
+                      <MathAndTableRenderer content={q.teks_soal} />
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs text-slate-600 pt-1">
                       {(['A', 'B', 'C', 'D', 'E'] as const).map((k) =>
                         q.data_opsi?.opsi?.[k] ? (
                           <div key={k} className="truncate">
-                            <strong className="font-mono text-slate-800">
+                            <strong className="font-mono text-slate-800 mr-1.5">
                               {k}.
                             </strong>{' '}
-                            {q.data_opsi?.opsi?.[k]}
+                            <MathAndTableRenderer content={q.data_opsi?.opsi?.[k] || ''} inline />
                           </div>
                         ) : null
                       )}

@@ -31,6 +31,7 @@ import {
   validateStudentCascadingLogin,
   isExamMatchedForStudentClass,
 } from '../utils/cbtLogic';
+import { MathAndTableRenderer } from './MathAndTableRenderer';
 
 const MAX_TAB_VIOLATIONS = 3;
 
@@ -1081,14 +1082,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   <BookOpen className="w-3.5 h-3.5 text-blue-600" />
                   <span>Wacana / Stimulus Soal</span>
                 </div>
-                <p className="text-sm text-slate-700 leading-relaxed">
-                  {currentQuestion.data_opsi.wacana}
-                </p>
+                <div className="text-sm text-slate-700 leading-relaxed">
+                  <MathAndTableRenderer content={currentQuestion.data_opsi.wacana} />
+                </div>
               </div>
             )}
 
             <div className="text-base sm:text-lg font-semibold text-slate-900 leading-relaxed">
-              {currentQuestion.teks_soal}
+              <MathAndTableRenderer content={currentQuestion.teks_soal} />
             </div>
 
             <div className="space-y-3 pt-1">
@@ -1125,7 +1126,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                       <span className="font-mono font-bold text-slate-900 mr-2">
                         {optKey}.
                       </span>
-                      <span>{optText}</span>
+                      <MathAndTableRenderer content={optText} inline />
                     </div>
                   </label>
                 );

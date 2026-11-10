@@ -302,3 +302,75 @@ test('getStudentLoginClasses, getStudentsForClass, and validateStudentCascadingL
   }
 });
 
+test('parseGridToQuestionRows parses Excel grids with math formulas, tables, and flexible headers', async () => {
+  const { parseGridToQuestionRows, buildQuestionsCsvText } = await import('./cbtFileParsers.ts');
+
+  // 1. Standard 11-column grid from Excel (.xlsx)
+  const excelGrid = [
+    ['Header Atas Ujian Sekolah', '', '', '', '', '', '', '', '', '', ''],
+    ['id_soal', 'jenis_soal', 'wacana', 'teks_soal', 'opsi_a', 'opsi_b', 'opsi_c', 'opsi_d', 'opsi_e', 'kunci_jawaban', 'bobot'],
+    ['M-01', 'PG', 'Diberikan persamaan kuadrat.', 'Tentukan akar dari $x^2 - 5x + 6 = 0$!', '$x = 2$ atau $x = 3$', '$x = -2$ atau $x = -3$', '$x = 1$ atau $x = 6$', '$x = 0$', '$x = 5$', 'A', '2'],
+    ['M-02', 'Kompleks', 'Perhatikan tabel berikut:\n| No | Variabel | Nilai |\n| 1 | A | 10 |', 'Pilih pernyataan yang benar tentang fungsi $f(x) = \\sqrt{x}$!', 'Domain $x \\ge 0$', 'Grafik selalu positif', 'Nilai $f(4) = -2$', 'Nilai $f(9) = 3$', 'Fungsi tidak terdefinisi pada $x < 0$', 'A, B, D, E', '3'],
+  ];
+
+  const parsed = parseGridToQuestionRows(excelGrid);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].id_soal, 'M-01');
+  assert.equal(parsed.rows[0].jenis_soal, 'PG');
+  assert.deepEqual(parsed.rows[0].kunci_jawaban, ['A']);
+  assert.match(parsed.rows[0].teks_soal, /\$x\^2 - 5x \+ 6 = 0\$/);
+
+  assert.equal(parsed.rows[1].jenis_soal, 'Kompleks');
+  assert.deepEqual(parsed.rows[1].kunci_jawaban, ['A', 'B', 'D', 'E']);
+  assert.equal(parsed.rows[1].bobot, 3);
+
+  // Verify that buildQuestionsCsvText output roundtrips back through parseQuestionsCsv
+  const csvOutput = buildQuestionsCsvText(parsed.rows);
+  const roundtrip = parseQuestionsCsv(csvOutput);
+  assert.equal(roundtrip.errors.length, 0);
+  assert.equal(roundtrip.rows.length, 2);
+  assert.deepEqual(roundtrip.rows[0].kunci_jawaban, ['A']);
+  assert.deepEqual(roundtrip.rows[1].kunci_jawaban, ['A', 'B', 'D', 'E']);
+});
+
+test('parseTextDocumentQuestions parses Word/TXT formatted questions with numbers, options, and keys', async () => {
+  const { parseTextDocumentQuestions } = await import('./cbtFileParsers.ts');
+
+  const wordDocText = `
+Wacana: Bacalah teks sosiologi berikut dengan cermat untuk menjawab soal nomor 1 dan 2.
+Masyarakat modern mengalami perubahan sosial yang cepat akibat revolusi industri 4.0.
+
+1. Apa dampak positif dari digitalisasi menurut wacana di atas?
+A. Memperluas akses informasi dan inovasi
+B. Meningkatkan isolasi geografis
+C. Membatasi ruang interaksi
+D. Menghambat produktivitas
+E. Menurunkan literasi
+Kunci: A
+Bobot: 2
+
+2. Manakah faktor pendorong interaksi sosial yang relevan?
+*A. Komunikasi daring
+*B. Kontak sosial virtual
+C. Etnosentrisme ekstrem
+*D. Empati terhadap korban bencana
+E. Diskriminasi sosial
+Kunci: A, B, D
+Bobot: 3
+`;
+
+  const parsed = parseTextDocumentQuestions(wordDocText);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].id_soal, 'SOAL-01');
+  assert.equal(parsed.rows[0].jenis_soal, 'PG');
+  assert.deepEqual(parsed.rows[0].kunci_jawaban, ['A']);
+  assert.match(parsed.rows[0].wacana, /Bacalah teks sosiologi/);
+
+  assert.equal(parsed.rows[1].id_soal, 'SOAL-02');
+  assert.equal(parsed.rows[1].jenis_soal, 'Kompleks');
+  assert.deepEqual(parsed.rows[1].kunci_jawaban, ['A', 'B', 'D']);
+  assert.equal(parsed.rows[1].bobot, 3);
+});
+
