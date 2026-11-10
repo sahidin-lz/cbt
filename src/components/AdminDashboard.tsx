@@ -32,9 +32,11 @@ import {
   SAMPLE_STUDENT_CSV_TEMPLATE,
   extractTingkatFromKelas,
   buildExcelHtmlTable,
+  buildSemicolonCsv,
   generateStudentTemplateExcel,
   generateQuestionTemplateExcel,
   parseQuestionsCsv,
+  computeClassAnalytics,
 } from '../utils/cbtLogic';
 import {
   auth,
@@ -52,11 +54,17 @@ import {
   updateStudentStatusCbt,
   bulkUpdateStudentStatusCbt,
   deleteStudentCbt,
+  renameClassCbt,
+  deleteClassStudentsCbt,
   addManualQuestionCbt,
+  updateManualQuestionCbt,
   uploadQuestionsCsvCbt,
   deleteQuestionCbt,
+  clearExamQuestionsCbt,
+  copyQuestionsToExamCbt,
   generateAiAnalysisCbt,
 } from '../lib/cbtFirestoreService';
+import { ClassPerformanceLotsHotsChart } from './ClassPerformanceLotsHotsChart';
 
 interface AdminDashboardProps {
   exams: ExamItem[];
@@ -187,7 +195,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [manualOpsiE, setManualOpsiE] = useState('');
   const [manualKunci, setManualKunci] = useState<string[]>(['A']);
   const [manualBobot, setManualBobot] = useState('2');
+  const [editingQuestionId, setEditingQuestionId] = useState<number | null>(
+    null
+  );
   const [isSavingQuestion, setIsSavingQuestion] = useState(false);
+
+  // Filter & Copy Question Management state
+  const [filterQuestionType, setFilterQuestionType] = useState<
+    'SEMUA' | 'PG' | 'Kompleks'
+  >('SEMUA');
+  const [searchQuestionQuery, setSearchQuestionQuery] = useState('');
+  const [copyTargetExamId, setCopyTargetExamId] = useState<number | null>(null);
+  const [isCopyingQuestions, setIsCopyingQuestions] = useState(false);
 
   const [csvText, setCsvText] = useState('');
   const [replaceExistingQuestions, setReplaceExistingQuestions] =
@@ -200,10 +219,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   } | null>(null);
   const [isUploadingCsv, setIsUploadingCsv] = useState(false);
 
-  // --- Module 4: Laporan & AI Analysis State ---
+  // --- Class Management (Manajemen Kelas / Rombel) State ---
+  const [customClasses, setCustomClasses] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('eduassess_custom_classes');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [newClassNameInput, setNewClassNameInput] = useState('');
+  const [renamingClassTarget, setRenamingClassTarget] = useState<string | null>(
+    null
+  );
+  const [renameClassValue, setRenameClassValue] = useState('');
+
+  // --- Module 4: Laporan, Analisis Kelas & AI Analysis State ---
+  const [filterResultTingkat, setFilterResultTingkat] =
+    useState<string>('SEMUA');
+  const [filterResultKelas, setFilterResultKelas] = useState<string>('SEMUA');
+  const [filterResultExamId, setFilterResultExamId] =
+    useState<string>('SEMUA');
   const [analyzingResultId, setAnalyzingResultId] = useState<number | null>(
     null
   );
+  const [isAnalyzingBatchClass, setIsAnalyzingBatchClass] = useState(false);
   const [selectedAiModal, setSelectedAiModal] = useState<{
     studentName: string;
     studentClass: string;
@@ -216,6 +256,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const currentExamQuestions = questions.filter(
     (q) => currentExam && q.exam_id === currentExam.id
   );
+  const filteredExamQuestions = currentExamQuestions.filter((q) => {
+    const matchType =
+      filterQuestionType === 'SEMUA' || q.tipe_soal === filterQuestionType;
+    const qText = `${q.teks_soal} ${q.data_opsi?.wacana || ''}`.toLowerCase();
+    const matchSearch =
+      !searchQuestionQuery.trim() ||
+      qText.includes(searchQuestionQuery.trim().toLowerCase());
+    return matchType && matchSearch;
+  });
 
   // Helper to format Target Distribusi badge label
   const formatDistribusiLabel = (tingkat: string, kelas: string) => {
@@ -228,10 +277,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return 'Semua Tingkatan (X, XI, XII)';
   };
 
-  // Unique classes in DB
+  // Unique classes in DB + custom registered classes
   const uniqueClasses = Array.from(
-    new Set(students.map((s) => s.kelas).filter(Boolean))
-  ).sort();
+    new Set([
+      ...students.map((s) => s.kelas.trim()).filter(Boolean),
+      ...customClasses.map((c) => c.trim()).filter(Boolean),
+    ])
+  ).sort((a, b) => {
+    const tA = extractTingkatFromKelas(a);
+    const tB = extractTingkatFromKelas(b);
+    if (tA !== tB) return tA.localeCompare(tB);
+    return a.localeCompare(b);
+  });
+
+  const classAnalyticsData = computeClassAnalytics(
+    students,
+    results,
+    customClasses,
+    questions
+  );
+
+  const filteredResults = results.filter((resItem) => {
+    const st = students.find((s) => s.id === resItem.student_id);
+    const sKelas = st?.kelas || '';
+    const sTingkat = extractTingkatFromKelas(sKelas);
+    const matchTingkat =
+      filterResultTingkat === 'SEMUA' || sTingkat === filterResultTingkat;
+    const matchKelas =
+      filterResultKelas === 'SEMUA' ||
+      sKelas.trim().toLowerCase() === filterResultKelas.trim().toLowerCase();
+    const matchExam =
+      filterResultExamId === 'SEMUA' ||
+      String(resItem.exam_id) === filterResultExamId;
+    return matchTingkat && matchKelas && matchExam;
+  });
 
   const filteredExams =
     filterExamTingkat === 'SEMUA'
@@ -589,6 +668,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // --- Class Management Handlers ---
+  const saveCustomClassesToStorage = (nextList: string[]) => {
+    setCustomClasses(nextList);
+    try {
+      localStorage.setItem(
+        'eduassess_custom_classes',
+        JSON.stringify(nextList)
+      );
+    } catch {
+      // Ignore storage errors
+    }
+  };
+
+  const handleAddNewClass = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = newClassNameInput.trim();
+    if (!clean) return;
+    if (
+      !uniqueClasses.some((c) => c.toLowerCase() === clean.toLowerCase())
+    ) {
+      saveCustomClassesToStorage([...customClasses, clean]);
+    }
+    setStudentClassInput(clean);
+    setNewClassNameInput('');
+    setStudentFeedback({
+      type: 'success',
+      message: `Kelas / Rombel "${clean}" berhasil ditambahkan ke daftar kelas aktif.`,
+    });
+  };
+
+  const handleRenameClassSubmit = async (oldName: string) => {
+    const cleanNew = renameClassValue.trim();
+    if (!cleanNew || cleanNew === oldName) {
+      setRenamingClassTarget(null);
+      return;
+    }
+    const updatedCount = await renameClassCbt(oldName, cleanNew, students);
+    saveCustomClassesToStorage(
+      customClasses.map((c) =>
+        c.toLowerCase() === oldName.toLowerCase() ? cleanNew : c
+      )
+    );
+    setRenamingClassTarget(null);
+    setRenameClassValue('');
+    if (filterKelas === oldName) setFilterKelas(cleanNew);
+    setStudentFeedback({
+      type: 'success',
+      message: `Nama kelas "${oldName}" berhasil diubah menjadi "${cleanNew}" (${updatedCount} siswa diperbarui).`,
+    });
+    await onRefreshData();
+  };
+
+  const handleDeleteClass = async (kelasName: string) => {
+    const deletedCount = await deleteClassStudentsCbt(kelasName, students);
+    saveCustomClassesToStorage(
+      customClasses.filter(
+        (c) => c.toLowerCase() !== kelasName.toLowerCase()
+      )
+    );
+    if (filterKelas === kelasName) setFilterKelas('SEMUA');
+    setStudentFeedback({
+      type: 'success',
+      message: `Kelas "${kelasName}" dihapus (${deletedCount} data siswa di kelas tersebut turut dihapus).`,
+    });
+    await onRefreshData();
+  };
+
+  const handleDownloadClassStudentsExcel = (targetKelasName?: string) => {
+    const list = targetKelasName
+      ? students.filter(
+          (s) => s.kelas.trim().toLowerCase() === targetKelasName.toLowerCase()
+        )
+      : filteredStudents.length > 0
+        ? filteredStudents
+        : students;
+    const rows = list.map((st, idx) => {
+      const tkt = extractTingkatFromKelas(st.kelas);
+      return [
+        idx + 1,
+        st.nama,
+        st.kelas,
+        tkt === 'LAINNYA' ? 'Umum' : `Tingkat ${tkt}`,
+        st.token_ujian,
+        st.status_ujian,
+      ];
+    });
+    const label = targetKelasName || 'Semua_Kelas';
+    const html = buildExcelHtmlTable(
+      `Siswa ${label}`,
+      [
+        'No',
+        'nama_siswa',
+        'kelas',
+        'Tingkatan Kelas',
+        'Token Ujian (6 Karakter)',
+        'Status Ujian',
+      ],
+      rows
+    );
+    triggerBrowserDownload(
+      html,
+      `Database_Siswa_${label.replace(/[^a-zA-Z0-9]+/g, '_')}.xls`,
+      'application/vnd.ms-excel;charset=utf-8;'
+    );
+  };
+
   const ensureActiveExamForQuestions = async (): Promise<ExamItem> => {
     if (currentExam) return currentExam;
     const createdExam = await saveExamCbt({
@@ -599,6 +784,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
     setSelectedExamId(createdExam.id);
     return createdExam;
+  };
+
+  const handleStartEditQuestion = (q: QuestionItem) => {
+    setQuestionInputMode('manual');
+    setEditingQuestionId(q.id);
+    const isKompleks =
+      q.tipe_soal === 'Kompleks' || q.kunci_jawaban.length > 1;
+    setManualTipe(isKompleks ? 'Kompleks' : 'PG');
+    setManualBobot(String(q.bobot || (isKompleks ? 3 : 2)));
+    setManualWacana(q.data_opsi?.wacana || '');
+    setManualTeksSoal(q.teks_soal || '');
+    setManualOpsiA(q.data_opsi?.opsi?.A || '');
+    setManualOpsiB(q.data_opsi?.opsi?.B || '');
+    setManualOpsiC(q.data_opsi?.opsi?.C || '');
+    setManualOpsiD(q.data_opsi?.opsi?.D || '');
+    setManualOpsiE(q.data_opsi?.opsi?.E || '');
+    setManualKunci(q.kunci_jawaban?.length ? q.kunci_jawaban : ['A']);
+    setUploadStatus(null);
+  };
+
+  const handleCancelEditQuestion = () => {
+    setEditingQuestionId(null);
+    setManualWacana('');
+    setManualTeksSoal('');
+    setManualOpsiA('');
+    setManualOpsiB('');
+    setManualOpsiC('');
+    setManualOpsiD('');
+    setManualOpsiE('');
+    setManualKunci(['A']);
   };
 
   const handleAddManualQuestion = async (e: React.FormEvent) => {
@@ -615,25 +830,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setUploadStatus(null);
     try {
       const targetExam = await ensureActiveExamForQuestions();
-      await addManualQuestionCbt({
-        examId: targetExam.id,
-        tipe_soal: manualTipe,
-        wacana: manualWacana,
-        teks_soal: manualTeksSoal,
-        opsi: {
-          A: manualOpsiA,
-          B: manualOpsiB,
-          C: manualOpsiC,
-          D: manualOpsiD,
-          E: manualOpsiE,
-        },
-        kunci_jawaban: manualKunci,
-        bobot: Number(manualBobot) || (manualTipe === 'Kompleks' ? 3 : 2),
-      });
-      setUploadStatus({
-        type: 'success',
-        message: `Butir soal baru berhasil ditambahkan ke ujian "${targetExam.judul_ujian}".`,
-      });
+      if (editingQuestionId) {
+        await updateManualQuestionCbt({
+          questionId: editingQuestionId,
+          examId: targetExam.id,
+          tipe_soal: manualTipe,
+          wacana: manualWacana,
+          teks_soal: manualTeksSoal,
+          opsi: {
+            A: manualOpsiA,
+            B: manualOpsiB,
+            C: manualOpsiC,
+            D: manualOpsiD,
+            E: manualOpsiE,
+          },
+          kunci_jawaban: manualKunci,
+          bobot: Number(manualBobot) || (manualTipe === 'Kompleks' ? 3 : 2),
+        });
+        setUploadStatus({
+          type: 'success',
+          message: `Butir soal berhasil diperbarui pada paket "${targetExam.judul_ujian}".`,
+        });
+        setEditingQuestionId(null);
+      } else {
+        await addManualQuestionCbt({
+          examId: targetExam.id,
+          tipe_soal: manualTipe,
+          wacana: manualWacana,
+          teks_soal: manualTeksSoal,
+          opsi: {
+            A: manualOpsiA,
+            B: manualOpsiB,
+            C: manualOpsiC,
+            D: manualOpsiD,
+            E: manualOpsiE,
+          },
+          kunci_jawaban: manualKunci,
+          bobot: Number(manualBobot) || (manualTipe === 'Kompleks' ? 3 : 2),
+        });
+        setUploadStatus({
+          type: 'success',
+          message: `Butir soal baru berhasil ditambahkan ke ujian "${targetExam.judul_ujian}".`,
+        });
+      }
       setManualWacana('');
       setManualTeksSoal('');
       setManualOpsiA('');
@@ -655,7 +894,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDeleteQuestion = async (questionId: number) => {
     await deleteQuestionCbt(questionId);
+    if (editingQuestionId === questionId) {
+      handleCancelEditQuestion();
+    }
     await onRefreshData();
+  };
+
+  const handleClearExamQuestions = async () => {
+    if (!currentExam || currentExamQuestions.length === 0) return;
+    setUploadStatus(null);
+    const removedCount = await clearExamQuestionsCbt(
+      currentExam.id,
+      questions
+    );
+    setUploadStatus({
+      type: 'success',
+      message: `Seluruh soal (${removedCount} butir) pada paket "${currentExam.judul_ujian}" telah dikosongkan.`,
+    });
+    await onRefreshData();
+  };
+
+  const handleCopyQuestionsToExam = async () => {
+    if (!currentExam || !copyTargetExamId || currentExamQuestions.length === 0)
+      return;
+    const destExam = exams.find((e) => e.id === copyTargetExamId);
+    if (!destExam) return;
+    setIsCopyingQuestions(true);
+    setUploadStatus(null);
+    try {
+      const copied = await copyQuestionsToExamCbt(
+        destExam.id,
+        currentExamQuestions
+      );
+      setUploadStatus({
+        type: 'success',
+        message: `Berhasil menyalin ${copied} butir soal ke paket ujian "${destExam.judul_ujian}".`,
+      });
+      await onRefreshData();
+    } finally {
+      setIsCopyingQuestions(false);
+    }
   };
 
   const executeQuestionsCsvUpload = async (
@@ -743,10 +1021,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   };
 
-  const handleExportQuestionsExcel = () => {
+  const handleExportQuestionsExcel = (exportAllPackages = false) => {
     const targetQuestions =
-      currentExamQuestions.length > 0 ? currentExamQuestions : questions;
+      exportAllPackages || currentExamQuestions.length === 0
+        ? questions
+        : currentExamQuestions;
     const rows = targetQuestions.map((q, idx) => {
+      const ex = exams.find((e) => e.id === q.exam_id);
       const isKompleks =
         q.tipe_soal === 'Kompleks' || q.kunci_jawaban.length > 1;
       const logikaPenilaian = isKompleks
@@ -764,6 +1045,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         q.data_opsi?.opsi?.E || '',
         q.kunci_jawaban.join(','),
         q.bobot || (isKompleks ? 3 : 2),
+        ex?.judul_ujian || `Ujian #${q.exam_id}`,
         logikaPenilaian,
       ];
     });
@@ -781,13 +1063,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         'opsi_e',
         'kunci_jawaban',
         'bobot',
+        'paket_ujian',
         'keterangan_logika_skor',
       ],
       rows
     );
-    const examSlug = (currentExam?.judul_ujian || 'Semua_Paket')
-      .replace(/[^a-zA-Z0-9]+/g, '_')
-      .slice(0, 30);
+    const examSlug = exportAllPackages
+      ? 'Semua_Paket_Ujian'
+      : (currentExam?.judul_ujian || 'Semua_Paket')
+          .replace(/[^a-zA-Z0-9]+/g, '_')
+          .slice(0, 30);
     triggerBrowserDownload(
       html,
       `Bank_Soal_${examSlug}.xls`,
@@ -795,62 +1080,281 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   };
 
-  const handleExportResultsExcel = () => {
-    const rows = results.map((resItem, idx) => {
+  const handleExportQuestionsCsv = () => {
+    const targetQuestions =
+      currentExamQuestions.length > 0 ? currentExamQuestions : questions;
+    const rows = targetQuestions.map((q, idx) => {
+      const isKompleks =
+        q.tipe_soal === 'Kompleks' || q.kunci_jawaban.length > 1;
+      return [
+        q.data_opsi?.id_soal_csv || `SOAL-${String(idx + 1).padStart(2, '0')}`,
+        isKompleks ? 'Kompleks' : 'PG',
+        q.data_opsi?.wacana || '',
+        q.teks_soal,
+        q.data_opsi?.opsi?.A || '',
+        q.data_opsi?.opsi?.B || '',
+        q.data_opsi?.opsi?.C || '',
+        q.data_opsi?.opsi?.D || '',
+        q.data_opsi?.opsi?.E || '',
+        q.kunci_jawaban.join(','),
+        q.bobot || (isKompleks ? 3 : 2),
+      ];
+    });
+    const csvContent = buildSemicolonCsv(
+      [
+        'id_soal',
+        'jenis_soal',
+        'wacana',
+        'teks_soal',
+        'opsi_a',
+        'opsi_b',
+        'opsi_c',
+        'opsi_d',
+        'opsi_e',
+        'kunci_jawaban',
+        'bobot',
+      ],
+      rows
+    );
+    const examSlug = (currentExam?.judul_ujian || 'Semua_Paket')
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .slice(0, 30);
+    triggerBrowserDownload(
+      csvContent,
+      `Bank_Soal_${examSlug}.csv`,
+      'text/csv;charset=utf-8;'
+    );
+  };
+
+  const buildResultReportRows = (
+    targetResultsList: ResultItem[],
+    rosterStudentsList: StudentItem[] = []
+  ) => {
+    const sortedList = [...targetResultsList].sort((a, b) => {
+      const stA = students.find((s) => s.id === a.student_id);
+      const stB = students.find((s) => s.id === b.student_id);
+      const klsCmp = (stA?.kelas || '').localeCompare(stB?.kelas || '');
+      if (klsCmp !== 0) return klsCmp;
+      return (stA?.nama || '').localeCompare(stB?.nama || '');
+    });
+
+    const submittedStudentIds = new Set<number>();
+    const submittedRows = sortedList.map((resItem) => {
+      submittedStudentIds.add(resItem.student_id);
       const st = students.find((s) => s.id === resItem.student_id);
       const ex = exams.find((e) => e.id === resItem.exam_id);
       const tkt = st ? extractTingkatFromKelas(st.kelas) : 'LAINNYA';
       const ai = resItem.analisis_ai;
+      const ketuntasan =
+        resItem.skor_angka >= 70 ? 'Tuntas (>=70)' : 'Belum Tuntas (<70)';
+      const kategori =
+        ai?.kategori_nilai ||
+        (resItem.skor_angka >= 85
+          ? 'Sangat Baik (A)'
+          : resItem.skor_angka >= 70
+            ? 'Baik (B)'
+            : resItem.skor_angka >= 55
+              ? 'Cukup (C)'
+              : 'Perlu Bimbingan (D)');
+      const ringkasanJawaban = Object.entries(resItem.jawaban_siswa || {})
+        .map(([qId, keys]) => `#${qId}:${(keys || []).join('')}`)
+        .join(' ');
+
       return [
-        idx + 1,
         st?.nama || `Siswa #${resItem.student_id}`,
         st?.kelas || '-',
         tkt === 'LAINNYA' ? '-' : `Tingkat ${tkt}`,
         st?.token_ujian || '-',
         ex?.judul_ujian || `Ujian #${resItem.exam_id}`,
         resItem.skor_angka,
-        ai?.kategori_nilai ||
-          (resItem.skor_angka >= 85
-            ? 'Sangat Baik (A)'
-            : resItem.skor_angka >= 70
-              ? 'Baik (B)'
-              : resItem.skor_angka >= 55
-                ? 'Cukup (C)'
-                : 'Perlu Bimbingan (D)'),
+        kategori,
+        ketuntasan,
         `${resItem.pelanggaran_tab || 0}x Pindah Tab`,
+        ringkasanJawaban || '-',
         ai?.evaluasi_hots || 'Belum Dianalisis AI',
         ai?.analisis_kompetensi?.kekuatan?.join(' | ') || '-',
         ai?.analisis_kompetensi?.kelemahan?.join(' | ') || '-',
         ai?.rekomendasi_belajar?.join(' | ') || '-',
       ];
     });
+
+    const pendingStudents = rosterStudentsList
+      .filter((s) => !submittedStudentIds.has(s.id))
+      .sort((a, b) => {
+        const klsCmp = a.kelas.localeCompare(b.kelas);
+        if (klsCmp !== 0) return klsCmp;
+        return a.nama.localeCompare(b.nama);
+      });
+
+    const pendingRows = pendingStudents.map((st) => {
+      const tkt = extractTingkatFromKelas(st.kelas);
+      return [
+        st.nama,
+        st.kelas,
+        tkt === 'LAINNYA' ? '-' : `Tingkat ${tkt}`,
+        st.token_ujian,
+        '-',
+        '-',
+        st.status_ujian || 'Belum Mulai',
+        'Belum Mengumpulkan Ujian',
+        '-',
+        '-',
+        '-',
+        '-',
+        '-',
+        '-',
+      ];
+    });
+
+    return [...submittedRows, ...pendingRows].map((row, idx) => [
+      idx + 1,
+      ...row,
+    ]);
+  };
+
+  const RESULT_REPORT_HEADERS = [
+    'No',
+    'Nama Siswa',
+    'Kelas',
+    'Tingkatan',
+    'Token Ujian',
+    'Paket Ujian',
+    'Skor Akhir (0-100)',
+    'Kategori / Status Ujian',
+    'Status Ketuntasan',
+    'Log Anti-Cheat',
+    'Rekaman Jawaban Siswa',
+    'Evaluasi Kognitif HOTS',
+    'Kekuatan Kompetensi',
+    'Kelemahan Kognitif',
+    '3 Rekomendasi Belajar',
+  ];
+
+  const resolveScopeResultsAndRoster = (
+    scope: 'filtered' | 'all' | { kelas: string } = 'all'
+  ) => {
+    let targetResults = results;
+    let targetRoster = students;
+    let label = 'Semua_Kelas';
+
+    if (typeof scope === 'object' && scope.kelas) {
+      label = `Kelas_${scope.kelas}`;
+      const normKls = scope.kelas.trim().toLowerCase();
+      targetRoster = students.filter(
+        (s) => s.kelas.trim().toLowerCase() === normKls
+      );
+      targetResults = results.filter((r) => {
+        const st = students.find((s) => s.id === r.student_id);
+        return st && st.kelas.trim().toLowerCase() === normKls;
+      });
+    } else if (scope === 'filtered') {
+      targetResults = filteredResults;
+      if (filterResultKelas !== 'SEMUA') {
+        label = `Kelas_${filterResultKelas}`;
+        const normKls = filterResultKelas.trim().toLowerCase();
+        targetRoster = students.filter(
+          (s) => s.kelas.trim().toLowerCase() === normKls
+        );
+      } else if (filterResultTingkat !== 'SEMUA') {
+        label = `Tingkat_${filterResultTingkat}`;
+        targetRoster = students.filter(
+          (s) => extractTingkatFromKelas(s.kelas) === filterResultTingkat
+        );
+      } else {
+        label = 'Filter_Aktif';
+        targetRoster = students;
+      }
+    }
+
+    return { targetResults, targetRoster, label };
+  };
+
+  const handleExportResultsExcel = (
+    scope: 'filtered' | 'all' | { kelas: string } = 'all'
+  ) => {
+    const { targetResults, targetRoster, label } =
+      resolveScopeResultsAndRoster(scope);
+    const rows = buildResultReportRows(targetResults, targetRoster);
     const html = buildExcelHtmlTable(
-      'Hasil Ujian & Evaluasi AI',
+      `Hasil ${label}`,
+      RESULT_REPORT_HEADERS,
+      rows
+    );
+    const safeSlug = label.replace(/[^a-zA-Z0-9]+/g, '_');
+    triggerBrowserDownload(
+      html,
+      `Laporan_Hasil_Ujian_${safeSlug}.xls`,
+      'application/vnd.ms-excel;charset=utf-8;'
+    );
+  };
+
+  const handleExportResultsCsv = (
+    scope: 'filtered' | 'all' | { kelas: string } = 'all'
+  ) => {
+    const { targetResults, targetRoster, label } =
+      resolveScopeResultsAndRoster(scope);
+    const rows = buildResultReportRows(targetResults, targetRoster);
+    const csvContent = buildSemicolonCsv(RESULT_REPORT_HEADERS, rows);
+    const safeSlug = label.replace(/[^a-zA-Z0-9]+/g, '_');
+    triggerBrowserDownload(
+      csvContent,
+      `Laporan_Hasil_Ujian_${safeSlug}.csv`,
+      'text/csv;charset=utf-8;'
+    );
+  };
+
+  const handleExportClassSummaryExcel = () => {
+    const rows = [
+      ...classAnalyticsData.perClass,
+      classAnalyticsData.overall,
+    ].map((item, idx) => [
+      idx + 1,
+      item.kelas,
+      item.tingkat === 'LAINNYA' ? 'Semua Tingkat' : `Tingkat ${item.tingkat}`,
+      item.totalStudents,
+      item.resultCount,
+      item.averageScore,
+      item.lotsScore,
+      item.hotsScore,
+      item.highestScore,
+      item.lowestScore,
+      `${item.passCount} Siswa (${item.passRate}%)`,
+      item.gradeDistribution.A,
+      item.gradeDistribution.B,
+      item.gradeDistribution.C,
+      item.gradeDistribution.D,
+      `${item.analyzedCount}/${item.resultCount} Teranalisis`,
+    ]);
+    const html = buildExcelHtmlTable(
+      'Rekap Analisis Kelas',
       [
         'No',
-        'Nama Siswa',
-        'Kelas',
+        'Nama Kelas / Rombel',
         'Tingkatan',
-        'Token Ujian',
-        'Paket Ujian',
-        'Skor Akhir (0-100)',
-        'Kategori Nilai',
-        'Log Anti-Cheat',
-        'Evaluasi Kognitif HOTS',
-        'Kekuatan Kompetensi',
-        'Kelemahan Kognitif',
-        '3 Rekomendasi Belajar',
+        'Total Siswa Terdaftar',
+        'Peserta Selesai Ujian',
+        'Rata-Rata Nilai',
+        'Rata-Rata LOTS (C1-C3)',
+        'Rata-Rata HOTS (C4-C6)',
+        'Nilai Tertinggi',
+        'Nilai Terendah',
+        'Ketuntasan (>=70)',
+        'Predikat A (85-100)',
+        'Predikat B (70-84)',
+        'Predikat C (55-69)',
+        'Predikat D (<55)',
+        'Status Evaluasi AI',
       ],
       rows
     );
     triggerBrowserDownload(
       html,
-      'Laporan_Nilai_dan_Evaluasi_AI_CBT.xls',
+      'Rekapitulasi_Analisis_Nilai_Per_Kelas_dan_Semua.xls',
       'application/vnd.ms-excel;charset=utf-8;'
     );
   };
 
-  // --- AI Evaluation Handler ---
+  // --- AI Evaluation Handler (Single & Batch Class) ---
   const handleGenerateAiAnalysis = async (result: ResultItem) => {
     const student = students.find((s) => s.id === result.student_id);
     const examForResult = questions.filter((q) => q.exam_id === result.exam_id);
@@ -879,6 +1383,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       );
     } finally {
       setAnalyzingResultId(null);
+    }
+  };
+
+  const handleBatchAiAnalysisForList = async (targetList: ResultItem[]) => {
+    if (targetList.length === 0) return;
+    setIsAnalyzingBatchClass(true);
+    setAiErrorBanner(null);
+    try {
+      for (const resItem of targetList) {
+        const student = students.find((s) => s.id === resItem.student_id);
+        const examForResult = questions.filter(
+          (q) => q.exam_id === resItem.exam_id
+        );
+        if (!student) continue;
+        await generateAiAnalysisCbt({
+          resultId: resItem.id,
+          nama_siswa: student.nama,
+          questions: examForResult,
+          jawaban_siswa: resItem.jawaban_siswa,
+          existingResult: resItem,
+        });
+      }
+      await onRefreshData();
+    } catch (err: any) {
+      setAiErrorBanner(
+        err.message || 'Gagal menjalankan analisis AI massal.'
+      );
+    } finally {
+      setIsAnalyzingBatchClass(false);
     }
   };
 
@@ -1419,14 +1952,193 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
           </div>
+
+          {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Recharts) */}
+          <ClassPerformanceLotsHotsChart
+            classAnalytics={classAnalyticsData}
+            questions={questions}
+            exams={exams}
+            selectedClassFilter={filterResultKelas}
+            onSelectClass={(kls) => {
+              setFilterResultKelas(kls);
+              if (kls !== 'SEMUA') {
+                setActiveTab('laporan');
+              }
+            }}
+          />
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 2: DATABASE SISWA & MANAJEMEN STATUS UJIAN                         */}
+      {/* TAB 2: MANAJEMEN KELAS, DATABASE SISWA & MANAJEMEN STATUS UJIAN        */}
       {/* ===================================================================== */}
       {activeTab === 'siswa' && (
         <div className="space-y-6">
+          {/* Panel Manajemen Kelas / Rombel (Tambah Kelas, Ubah Nama Kelas, Download per Kelas) */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Manajemen Kelas / Rombel (Kelas X, XI, XII)
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Buat daftar kelas/rombel baru, ubah nama kelas secara massal,
+                  reset status ujian satu kelas penuh, atau unduh daftar siswa &
+                  token per kelas maupun semua kelas.
+                </p>
+              </div>
+
+              <form
+                onSubmit={handleAddNewClass}
+                className="flex flex-wrap items-center gap-2 shrink-0"
+              >
+                <input
+                  type="text"
+                  aria-label="Nama Kelas Baru"
+                  value={newClassNameInput}
+                  onChange={(e) => setNewClassNameInput(e.target.value)}
+                  placeholder="Tambah Kelas (misal: X SOS 1)"
+                  className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Tambah Kelas
+                </button>
+              </form>
+            </div>
+
+            {classAnalyticsData.perClass.length > 0 && (
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                      <th className="py-2.5 px-3.5">Nama Kelas / Rombel</th>
+                      <th className="py-2.5 px-3.5">Tingkatan</th>
+                      <th className="py-2.5 px-3.5 text-right">Jumlah Siswa</th>
+                      <th className="py-2.5 px-3.5">Status Ujian Kelas</th>
+                      <th className="py-2.5 px-3.5 text-right">Rata-Rata Nilai</th>
+                      <th className="py-2.5 px-3.5 text-right">
+                        Aksi Manajemen Kelas & Download
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 text-xs">
+                    {classAnalyticsData.perClass.map((clsItem) => {
+                      const isRenaming = renamingClassTarget === clsItem.kelas;
+                      return (
+                        <tr
+                          key={clsItem.kelas}
+                          className="hover:bg-slate-50/80"
+                        >
+                          <td className="py-2.5 px-3.5 font-semibold text-slate-900">
+                            {isRenaming ? (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  aria-label={`Ubah nama kelas ${clsItem.kelas}`}
+                                  value={renameClassValue}
+                                  onChange={(e) =>
+                                    setRenameClassValue(e.target.value)
+                                  }
+                                  className="px-2 py-1 text-xs border border-blue-400 rounded"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleRenameClassSubmit(clsItem.kelas)
+                                  }
+                                  className="px-2 py-1 text-[11px] font-semibold text-white bg-blue-600 rounded cursor-pointer"
+                                >
+                                  Simpan
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRenamingClassTarget(null)}
+                                  className="px-2 py-1 text-[11px] text-slate-600 bg-slate-100 rounded cursor-pointer"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            ) : (
+                              clsItem.kelas
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3.5 text-slate-600">
+                            {clsItem.tingkat === 'LAINNYA'
+                              ? 'Umum'
+                              : `Tingkat ${clsItem.tingkat}`}
+                          </td>
+                          <td className="py-2.5 px-3.5 text-right font-mono font-bold text-slate-900">
+                            {clsItem.totalStudents} Siswa
+                          </td>
+                          <td className="py-2.5 px-3.5 text-slate-600">
+                            Selesai: <strong>{clsItem.statusCounts.selesai}</strong> ·
+                            Aktif: <strong>{clsItem.statusCounts.sedangUjian}</strong> ·
+                            Blokir: <strong className="text-red-700">{clsItem.statusCounts.diblokir}</strong>
+                          </td>
+                          <td className="py-2.5 px-3.5 text-right font-mono font-bold text-blue-700">
+                            {clsItem.resultCount > 0
+                              ? `${clsItem.averageScore}/100`
+                              : '-'}
+                          </td>
+                          <td className="py-2.5 px-3.5 text-right">
+                            <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFilterStudentTingkat('SEMUA');
+                                  setFilterKelas(clsItem.kelas);
+                                }}
+                                className="px-2 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded cursor-pointer"
+                              >
+                                Filter Siswa
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDownloadClassStudentsExcel(
+                                    clsItem.kelas
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded cursor-pointer"
+                              >
+                                <Download className="w-3 h-3" />
+                                Siswa (.xls)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRenamingClassTarget(clsItem.kelas);
+                                  setRenameClassValue(clsItem.kelas);
+                                }}
+                                className="px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                              >
+                                Ubah Nama
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDeleteClass(clsItem.kelas)
+                                }
+                                aria-label={`Hapus kelas ${clsItem.kelas}`}
+                                className="p-1 text-slate-400 hover:text-red-600 rounded cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           {/* Baris Ringkasan & Manajemen Status Ujian Siswa */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -1443,6 +2155,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {filterKelas !== 'SEMUA' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleDownloadClassStudentsExcel(filterKelas)
+                    }
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download Siswa Kelas {filterKelas} (.xls)
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleExportStudentsExcel}
@@ -1450,7 +2174,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Download Data Siswa & Token (.xls Rapi)
+                  Download Semua Siswa & Token (.xls)
                 </button>
                 <button
                   type="button"
@@ -1459,7 +2183,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  Reset Semua Status ke &ldquo;Belum Mulai&rdquo;
+                  Reset Status ke &ldquo;Belum Mulai&rdquo;
                 </button>
               </div>
             </div>
@@ -2281,14 +3005,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={isSavingQuestion}
-                  className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  {isSavingQuestion ? 'Menyimpan Soal...' : 'Simpan Butir Soal'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    disabled={isSavingQuestion}
+                    className="flex-1 py-2.5 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    {isSavingQuestion
+                      ? 'Menyimpan Soal...'
+                      : editingQuestionId
+                        ? 'Simpan Perubahan Soal'
+                        : 'Simpan Butir Soal'}
+                  </button>
+                  {editingQuestionId && (
+                    <button
+                      type="button"
+                      onClick={handleCancelEditQuestion}
+                      className="px-3 py-2.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    >
+                      Batal Edit
+                    </button>
+                  )}
+                </div>
               </form>
             ) : (
               <form
@@ -2447,12 +3186,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
           </div>
 
-          {/* Right 7 Cols: Daftar Soal pada Ujian Terpilih */}
+          {/* Right 7 Cols: Manajemen & Daftar Soal pada Ujian Terpilih */}
           <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
               <div>
                 <h2 className="text-base font-bold text-slate-900">
-                  Daftar Soal:{' '}
+                  Manajemen Soal:{' '}
                   {currentExam ? currentExam.judul_ujian : 'Belum Ada Ujian'} (
                   {currentExamQuestions.length} Butir)
                 </h2>
@@ -2467,21 +3206,120 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={handleExportQuestionsExcel}
-                disabled={questions.length === 0}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Export Bank Soal (.xls Rapi)
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleExportQuestionsExcel(false)}
+                  disabled={questions.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Soal Paket (.xls)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportQuestionsCsv}
+                  disabled={questions.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download CSV (.csv)
+                </button>
+                {exams.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleExportQuestionsExcel(true)}
+                    disabled={questions.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Semua Paket (.xls)
+                  </button>
+                )}
+              </div>
             </div>
 
-            {currentExamQuestions.length === 0 ? (
+            {/* Toolbar Filter, Pencarian, Salin Antar Paket & Kosongkan Soal */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
+              <div className="flex flex-wrap items-center gap-2 flex-1">
+                <input
+                  type="text"
+                  aria-label="Cari butir soal"
+                  value={searchQuestionQuery}
+                  onChange={(e) => setSearchQuestionQuery(e.target.value)}
+                  placeholder="Cari kata kunci soal / wacana..."
+                  className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-md flex-1 min-w-[160px]"
+                />
+                <select
+                  aria-label="Filter Tipe Soal"
+                  value={filterQuestionType}
+                  onChange={(e) =>
+                    setFilterQuestionType(
+                      e.target.value as 'SEMUA' | 'PG' | 'Kompleks'
+                    )
+                  }
+                  className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                >
+                  <option value="SEMUA">Semua Tipe Soal</option>
+                  <option value="PG">PG Biasa (2 Poin)</option>
+                  <option value="Kompleks">PG Kompleks (3 Poin)</option>
+                </select>
+              </div>
+
+              {currentExamQuestions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearExamQuestions}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-md cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Kosongkan Paket Ini
+                </button>
+              )}
+            </div>
+
+            {/* Fitur Salin Soal ke Paket Ujian Kelas Lain */}
+            {exams.length > 1 && currentExamQuestions.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-blue-50/60 border border-blue-200 text-xs">
+                <span className="font-semibold text-slate-800">
+                  Salin {currentExamQuestions.length} Soal ke Paket Ujian Kelas Lain:
+                </span>
+                <div className="flex items-center gap-2">
+                  <select
+                    aria-label="Pilih Paket Ujian Tujuan Salin"
+                    value={copyTargetExamId || ''}
+                    onChange={(e) =>
+                      setCopyTargetExamId(
+                        e.target.value ? Number(e.target.value) : null
+                      )
+                    }
+                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                  >
+                    <option value="">-- Pilih Paket Tujuan --</option>
+                    {exams
+                      .filter((ex) => ex.id !== currentExam?.id)
+                      .map((ex) => (
+                        <option key={ex.id} value={ex.id}>
+                          {ex.judul_ujian} ({ex.target_tingkat})
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={!copyTargetExamId || isCopyingQuestions}
+                    onClick={handleCopyQuestionsToExam}
+                    className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md cursor-pointer"
+                  >
+                    {isCopyingQuestions ? 'Menyalin...' : 'Salin Soal'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {filteredExamQuestions.length === 0 ? (
               <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
                 <p className="text-sm font-semibold text-slate-700">
-                  Belum Ada Butir Soal pada Paket Ini
+                  Belum Ada Butir Soal pada Paket / Filter Ini
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
                   Tambahkan soal secara manual atau gunakan fitur Upload Massal
@@ -2490,10 +3328,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             ) : (
               <div className="space-y-3 max-h-[580px] overflow-y-auto pr-1">
-                {currentExamQuestions.map((q, idx) => (
+                {filteredExamQuestions.map((q, idx) => (
                   <div
                     key={q.id}
-                    className="p-4 border border-slate-200 rounded-lg bg-slate-50/40 space-y-2"
+                    className={`p-4 border rounded-lg space-y-2 ${
+                      editingQuestionId === q.id
+                        ? 'border-blue-600 bg-blue-50/30 ring-1 ring-blue-600'
+                        : 'border-slate-200 bg-slate-50/40'
+                    }`}
                   >
                     <div className="flex items-center justify-between text-xs text-slate-500">
                       <span className="font-mono font-bold text-slate-900">
@@ -2502,7 +3344,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           ? 'Pilihan Ganda Kompleks (Benar Semua 3 Poin, Sebagian 1-2 Poin)'
                           : 'Pilihan Ganda Biasa (Benar 2 Poin)'}
                       </span>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2.5">
                         <span className="font-mono">
                           Kunci:{' '}
                           <strong className="text-emerald-700">
@@ -2512,9 +3354,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                         <button
                           type="button"
+                          onClick={() => handleStartEditQuestion(q)}
+                          aria-label={`Edit soal nomor ${idx + 1}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded cursor-pointer"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => handleDeleteQuestion(q.id)}
                           aria-label={`Hapus soal nomor ${idx + 1}`}
-                          className="text-slate-400 hover:text-red-600 cursor-pointer"
+                          className="text-slate-400 hover:text-red-600 cursor-pointer p-1"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -2549,168 +3400,529 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 4: LAPORAN HASIL UJIAN & EVALUASI GEMINI AI                        */}
+      {/* TAB 4: ANALISIS & DOWNLOAD HASIL UJIAN SISWA PER KELAS DAN SEMUANYA    */}
       {/* ===================================================================== */}
       {activeTab === 'laporan' && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">
-                Laporan Hasil Ujian Siswa & Evaluasi Kognitif Gemini AI
-              </h2>
-              <p className="text-xs text-slate-600 mt-0.5">
-                Setiap siswa yang menyelesaikan ujian akan muncul di tabel ini.
-                Klik <strong>Generate AI Analysis</strong> untuk menganalisis
-                kekuatan/kelemahan LOTS vs HOTS, atau unduh laporan Excel rapi.
-              </p>
+        <div className="space-y-6">
+          {/* Panel Rekapitulasi Analisis & Download Per Kelas dan Semua Kelas */}
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">
+                  Analisis Statistik & Download Hasil Ujian Siswa Per Kelas & Semuanya
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Lihat analisis capaian nilai rata-rata, ketuntasan, sebaran
+                  predikat (A/B/C/D), serta unduh laporan hasil ujian siswa baik{' '}
+                  <strong>per kelas (rombel)</strong> maupun{' '}
+                  <strong>semua kelas sekaligus</strong> dalam format Excel
+                  (.xls) & CSV.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleExportResultsExcel('all')}
+                  disabled={students.length === 0 && results.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Semua Hasil Ujian (.xls)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportResultsCsv('all')}
+                  disabled={students.length === 0 && results.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Semua Hasil (.csv)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportClassSummaryExcel}
+                  disabled={
+                    students.length === 0 && results.length === 0
+                  }
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Rekap Analisis Kelas (.xls)
+                </button>
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={handleExportResultsExcel}
-                disabled={results.length === 0}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Download Laporan Nilai & AI (.xls)
-              </button>
-              <button
-                type="button"
-                onClick={onRefreshData}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Muat Ulang Data
-              </button>
+
+            {/* 4 Kartu Ringkasan Statistik Keseluruhan */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
+                <div className="text-xs text-slate-500">
+                  Rata-Rata Skor Nasional / Sekolah
+                </div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-blue-700 mt-1">
+                  {classAnalyticsData.overall.averageScore}
+                  <span className="text-xs font-normal text-slate-500">
+                    /100
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  Tertinggi: {classAnalyticsData.overall.highestScore} · Terendah:{' '}
+                  {classAnalyticsData.overall.lowestScore}
+                </div>
+              </div>
+
+              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
+                <div className="text-xs text-slate-500">
+                  Tingkat Ketuntasan (&ge; 70)
+                </div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-emerald-700 mt-1">
+                  {classAnalyticsData.overall.passRate}%
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  {classAnalyticsData.overall.passCount} dari{' '}
+                  {classAnalyticsData.overall.resultCount} peserta tuntas
+                </div>
+              </div>
+
+              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
+                <div className="text-xs text-slate-500">
+                  Sebaran Predikat Nilai (A / B / C / D)
+                </div>
+                <div className="text-sm font-bold font-mono tabular-nums text-slate-900 mt-1.5">
+                  A: {classAnalyticsData.overall.gradeDistribution.A} · B:{' '}
+                  {classAnalyticsData.overall.gradeDistribution.B} · C:{' '}
+                  {classAnalyticsData.overall.gradeDistribution.C} · D:{' '}
+                  {classAnalyticsData.overall.gradeDistribution.D}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  A (&ge;85), B (70-84), C (55-69), D (&lt;55)
+                </div>
+              </div>
+
+              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
+                <div className="text-xs text-slate-500">
+                  Cakupan Evaluasi AI LOTS vs HOTS
+                </div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
+                  {classAnalyticsData.overall.analyzedCount}
+                  <span className="text-xs font-normal text-slate-500">
+                    /{classAnalyticsData.overall.resultCount} hasil
+                  </span>
+                </div>
+                <div className="mt-1">
+                  <button
+                    type="button"
+                    disabled={
+                      results.length === 0 || isAnalyzingBatchClass
+                    }
+                    onClick={() => handleBatchAiAnalysisForList(results)}
+                    className="text-[11px] font-semibold text-blue-700 hover:text-blue-800 underline disabled:opacity-50 cursor-pointer"
+                  >
+                    {isAnalyzingBatchClass
+                      ? 'Sedang Menganalisis AI...'
+                      : 'Analisis AI Semua Peserta Sekaligus'}
+                  </button>
+                </div>
+              </div>
             </div>
+
+            {/* Visualisasi Recharts LOTS vs HOTS per Kelas */}
+            <ClassPerformanceLotsHotsChart
+              classAnalytics={classAnalyticsData}
+              questions={questions}
+              exams={exams}
+              selectedClassFilter={filterResultKelas}
+              onSelectClass={(kls) => {
+                setFilterResultTingkat('SEMUA');
+                setFilterResultKelas(kls);
+              }}
+            />
+
+            {/* Tabel Rekapitulasi Analisis & Download Per Kelas */}
+            {classAnalyticsData.perClass.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-bold text-slate-900">
+                  Tabel Analisis Capaian & Download Hasil Ujian Per Kelas
+                </h3>
+                <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                        <th className="py-3 px-3.5">Kelas / Rombel</th>
+                        <th className="py-3 px-3.5 text-right">
+                          Peserta Selesai
+                        </th>
+                        <th className="py-3 px-3.5 text-right">
+                          Rata-Rata Skor
+                        </th>
+                        <th className="py-3 px-3.5 text-right">
+                          LOTS vs HOTS
+                        </th>
+                        <th className="py-3 px-3.5 text-right">
+                          Max / Min
+                        </th>
+                        <th className="py-3 px-3.5 text-right">
+                          Ketuntasan
+                        </th>
+                        <th className="py-3 px-3.5">Sebaran A / B / C / D</th>
+                        <th className="py-3 px-3.5 text-right">
+                          Download & Analisis Per Kelas
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 text-xs">
+                      {classAnalyticsData.perClass.map((cls) => {
+                        const clsResults = results.filter((r) => {
+                          const st = students.find(
+                            (s) => s.id === r.student_id
+                          );
+                          return (
+                            st &&
+                            st.kelas.trim().toLowerCase() ===
+                              cls.kelas.trim().toLowerCase()
+                          );
+                        });
+                        return (
+                          <tr
+                            key={cls.kelas}
+                            className="hover:bg-slate-50/80"
+                          >
+                            <td className="py-3 px-3.5 font-semibold text-slate-900">
+                              {cls.kelas}{' '}
+                              {cls.tingkat !== 'LAINNYA' && (
+                                <span className="text-slate-500 font-normal">
+                                  (Tingkat {cls.tingkat})
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3.5 text-right font-mono tabular-nums">
+                              <strong>{cls.resultCount}</strong> /{' '}
+                              {cls.totalStudents} siswa
+                            </td>
+                            <td className="py-3 px-3.5 text-right font-mono tabular-nums font-bold text-blue-700">
+                              {cls.resultCount > 0 ? cls.averageScore : '-'}
+                            </td>
+                            <td className="py-3 px-3.5 text-right font-mono tabular-nums text-slate-700">
+                              {cls.resultCount > 0
+                                ? `LOTS ${cls.lotsScore} · HOTS ${cls.hotsScore}`
+                                : '-'}
+                            </td>
+                            <td className="py-3 px-3.5 text-right font-mono tabular-nums text-slate-700">
+                              {cls.resultCount > 0
+                                ? `${cls.highestScore} / ${cls.lowestScore}`
+                                : '-'}
+                            </td>
+                            <td className="py-3 px-3.5 text-right font-mono tabular-nums text-emerald-700 font-semibold">
+                              {cls.resultCount > 0 ? `${cls.passRate}%` : '-'}
+                            </td>
+                            <td className="py-3 px-3.5 font-mono text-slate-600">
+                              A:{cls.gradeDistribution.A} · B:
+                              {cls.gradeDistribution.B} · C:
+                              {cls.gradeDistribution.C} · D:
+                              {cls.gradeDistribution.D}
+                            </td>
+                            <td className="py-3 px-3.5 text-right">
+                              <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFilterResultTingkat('SEMUA');
+                                    setFilterResultKelas(cls.kelas);
+                                  }}
+                                  className="px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                                >
+                                  Lihat Kelas
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    cls.totalStudents === 0 &&
+                                    clsResults.length === 0
+                                  }
+                                  onClick={() =>
+                                    handleExportResultsExcel({
+                                      kelas: cls.kelas,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 rounded cursor-pointer"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Excel Kelas (.xls)
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    cls.totalStudents === 0 &&
+                                    clsResults.length === 0
+                                  }
+                                  onClick={() =>
+                                    handleExportResultsCsv({
+                                      kelas: cls.kelas,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-40 rounded cursor-pointer"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  CSV Kelas
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    clsResults.length === 0 ||
+                                    isAnalyzingBatchClass
+                                  }
+                                  onClick={() =>
+                                    handleBatchAiAnalysisForList(clsResults)
+                                  }
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-blue-800 bg-blue-100/80 hover:bg-blue-200 disabled:opacity-40 rounded cursor-pointer"
+                                >
+                                  <Sparkles className="w-3 h-3" />
+                                  Analisis AI Kelas
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
-          {aiErrorBanner && (
-            <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{aiErrorBanner}</span>
-            </div>
-          )}
+          {/* Tabel Detail Hasil Ujian Siswa (Dengan Filter Per Kelas, Tingkatan & Paket Ujian) */}
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+            <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Daftar Nilai & Evaluasi AI Peserta (
+                  {filterResultKelas === 'SEMUA'
+                    ? 'Semua Kelas'
+                    : `Kelas ${filterResultKelas}`}{' '}
+                  — {filteredResults.length} Peserta)
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Pilih filter Kelas/Rombel di bawah untuk melihat dan mengunduh
+                  hasil ujian khusus kelas tersebut atau seluruh kelas.
+                </p>
+              </div>
 
-          {results.length === 0 ? (
-            <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
-              <p className="text-sm font-semibold text-slate-700">
-                Belum Ada Hasil Ujian Siswa
-              </p>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Hasil nilai dan analisis AI akan otomatis tercatat di sini
-                setelah siswa login menggunakan Token Ujian dan mengumpulkan
-                jawaban.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto border border-slate-200 rounded-lg">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                    <th className="py-3 px-4">Nama Siswa</th>
-                    <th className="py-3 px-4">Kelas · Token</th>
-                    <th className="py-3 px-4">Paket Ujian</th>
-                    <th className="py-3 px-4 text-right">Skor Akhir</th>
-                    <th className="py-3 px-4">Log Anti-Cheat</th>
-                    <th className="py-3 px-4">Status Analisis AI</th>
-                    <th className="py-3 px-4 text-right">Aksi Evaluasi AI</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 text-sm">
-                  {results.map((resItem) => {
-                    const st = students.find(
-                      (s) => s.id === resItem.student_id
-                    );
-                    const ex = exams.find((e) => e.id === resItem.exam_id);
-                    const isBusy = analyzingResultId === resItem.id;
-                    const hasAi = Boolean(resItem.analisis_ai);
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {/* Filter 3 Tingkatan */}
+                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                  {(
+                    [
+                      ['SEMUA', 'Semua'],
+                      ['10', 'Kelas X'],
+                      ['11', 'Kelas XI'],
+                      ['12', 'Kelas XII'],
+                    ] as const
+                  ).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => {
+                        setFilterResultTingkat(val);
+                        setFilterResultKelas('SEMUA');
+                      }}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                        filterResultTingkat === val
+                          ? 'bg-white text-slate-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
 
-                    return (
-                      <tr
-                        key={resItem.id}
-                        className="hover:bg-slate-50/80 transition-colors"
-                      >
-                        <td className="py-3.5 px-4 font-semibold text-slate-900">
-                          {st?.nama || `Siswa #${resItem.student_id}`}
-                        </td>
-                        <td className="py-3.5 px-4 text-xs text-slate-600">
-                          <span>{st?.kelas || '-'}</span>
-                          <span className="mx-1.5">·</span>
-                          <code className="font-mono font-bold text-slate-800">
-                            {st?.token_ujian || '-'}
-                          </code>
-                        </td>
-                        <td className="py-3.5 px-4 text-xs text-slate-700">
-                          {ex?.judul_ujian || `Ujian #${resItem.exam_id}`}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
-                          {resItem.skor_angka}
-                          <span className="text-xs font-normal text-slate-400">
-                            /100
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 text-xs font-mono tabular-nums">
-                          {resItem.pelanggaran_tab > 0 ? (
-                            <span className="text-amber-700 font-semibold">
-                              {resItem.pelanggaran_tab}x Pindah Tab
+                {/* Dropdown Filter Kelas Spesifik */}
+                <select
+                  aria-label="Filter Hasil Per Kelas"
+                  value={filterResultKelas}
+                  onChange={(e) => setFilterResultKelas(e.target.value)}
+                  className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-medium"
+                >
+                  <option value="SEMUA">Semua Kelas / Rombel</option>
+                  {uniqueClasses.map((kls) => (
+                    <option key={kls} value={kls}>
+                      Kelas {kls}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Dropdown Filter Paket Ujian */}
+                {exams.length > 0 && (
+                  <select
+                    aria-label="Filter Hasil Per Paket Ujian"
+                    value={filterResultExamId}
+                    onChange={(e) => setFilterResultExamId(e.target.value)}
+                    className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                  >
+                    <option value="SEMUA">Semua Paket Ujian</option>
+                    {exams.map((ex) => (
+                      <option key={ex.id} value={String(ex.id)}>
+                        {ex.judul_ujian}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => handleExportResultsExcel('filtered')}
+                  disabled={students.length === 0 && filteredResults.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  {filterResultKelas !== 'SEMUA'
+                    ? `Download Kelas ${filterResultKelas} (.xls)`
+                    : 'Download Filter Ini (.xls)'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onRefreshData}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Muat Ulang
+                </button>
+              </div>
+            </div>
+
+            {aiErrorBanner && (
+              <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{aiErrorBanner}</span>
+              </div>
+            )}
+
+            {filteredResults.length === 0 ? (
+              <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
+                <p className="text-sm font-semibold text-slate-700">
+                  Belum Ada Hasil Ujian pada Kelas / Filter Ini
+                </p>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Hasil nilai dan analisis AI akan otomatis tercatat di sini
+                  setelah siswa login menggunakan Token Ujian dan mengumpulkan
+                  jawaban.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                      <th className="py-3 px-4">Nama Siswa</th>
+                      <th className="py-3 px-4">Kelas · Token</th>
+                      <th className="py-3 px-4">Paket Ujian</th>
+                      <th className="py-3 px-4 text-right">Skor Akhir</th>
+                      <th className="py-3 px-4">Log Anti-Cheat</th>
+                      <th className="py-3 px-4">Status Analisis AI</th>
+                      <th className="py-3 px-4 text-right">Aksi Evaluasi AI</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 text-sm">
+                    {filteredResults.map((resItem) => {
+                      const st = students.find(
+                        (s) => s.id === resItem.student_id
+                      );
+                      const ex = exams.find((e) => e.id === resItem.exam_id);
+                      const isBusy = analyzingResultId === resItem.id;
+                      const hasAi = Boolean(resItem.analisis_ai);
+
+                      return (
+                        <tr
+                          key={resItem.id}
+                          className="hover:bg-slate-50/80 transition-colors"
+                        >
+                          <td className="py-3.5 px-4 font-semibold text-slate-900">
+                            {st?.nama || `Siswa #${resItem.student_id}`}
+                          </td>
+                          <td className="py-3.5 px-4 text-xs text-slate-600">
+                            <span className="font-semibold text-slate-800">
+                              {st?.kelas || '-'}
                             </span>
-                          ) : (
-                            <span className="text-emerald-700">
-                              0 Pelanggaran
+                            <span className="mx-1.5">·</span>
+                            <code className="font-mono font-bold text-blue-700">
+                              {st?.token_ujian || '-'}
+                            </code>
+                          </td>
+                          <td className="py-3.5 px-4 text-xs text-slate-700">
+                            {ex?.judul_ujian || `Ujian #${resItem.exam_id}`}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
+                            {resItem.skor_angka}
+                            <span className="text-xs font-normal text-slate-400">
+                              /100
                             </span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 text-xs">
-                          {hasAi ? (
-                            <span className="text-emerald-700 font-medium">
-                              Tersedia · {resItem.analisis_ai?.kategori_nilai}
-                            </span>
-                          ) : (
-                            <span className="text-slate-500">
-                              Belum Dianalisis AI
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          <div className="inline-flex items-center justify-end gap-2">
-                            {hasAi && resItem.analisis_ai && (
+                          </td>
+                          <td className="py-3.5 px-4 text-xs font-mono tabular-nums">
+                            {resItem.pelanggaran_tab > 0 ? (
+                              <span className="text-amber-700 font-semibold">
+                                {resItem.pelanggaran_tab}x Pindah Tab
+                              </span>
+                            ) : (
+                              <span className="text-emerald-700">
+                                0 Pelanggaran
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-xs">
+                            {hasAi ? (
+                              <span className="text-emerald-700 font-medium">
+                                Tersedia · {resItem.analisis_ai?.kategori_nilai}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">
+                                Belum Dianalisis AI
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="inline-flex items-center justify-end gap-2">
+                              {hasAi && resItem.analisis_ai && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedAiModal({
+                                      studentName: st?.nama || 'Siswa',
+                                      studentClass: st?.kelas || '-',
+                                      analysis: resItem.analisis_ai!,
+                                    })
+                                  }
+                                  className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  Lihat Hasil AI
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setSelectedAiModal({
-                                    studentName: st?.nama || 'Siswa',
-                                    studentClass: st?.kelas || '-',
-                                    analysis: resItem.analisis_ai!,
-                                  })
+                                  handleGenerateAiAnalysis(resItem)
                                 }
-                                className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                disabled={isBusy}
+                                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                               >
-                                Lihat Hasil AI
+                                <Sparkles className="w-3.5 h-3.5" />
+                                {isBusy
+                                  ? 'Menganalisis...'
+                                  : hasAi
+                                    ? 'Re-Generate AI Analysis'
+                                    : 'Generate AI Analysis'}
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => handleGenerateAiAnalysis(resItem)}
-                              disabled={isBusy}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                            >
-                              <Sparkles className="w-3.5 h-3.5" />
-                              {isBusy
-                                ? 'Menganalisis...'
-                                : hasAi
-                                  ? 'Re-Generate AI Analysis'
-                                  : 'Generate AI Analysis'}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

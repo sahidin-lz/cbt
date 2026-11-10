@@ -222,6 +222,7 @@ export default function App() {
         ) : portalView === 'student' ? (
           <StudentExamPortal
             exams={exams}
+            students={students}
             onExamCompleted={fetchDashboardData}
           />
         ) : (

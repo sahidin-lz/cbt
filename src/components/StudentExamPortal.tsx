@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Clock,
   AlertTriangle,
@@ -12,6 +12,9 @@ import {
   RotateCcw,
   Lock,
   Maximize2,
+  Users,
+  UserCheck,
+  KeyRound,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, AnalisisAI } from '../types/cbt';
 import {
@@ -22,23 +25,60 @@ import {
   subscribeToSingleStudentStatus,
   safeApiJson,
 } from '../lib/cbtFirestoreService';
+import {
+  getStudentLoginClasses,
+  getStudentsForClass,
+  validateStudentCascadingLogin,
+  isExamMatchedForStudentClass,
+} from '../utils/cbtLogic';
 
 const MAX_TAB_VIOLATIONS = 3;
 
 interface StudentExamPortalProps {
   exams: ExamItem[];
+  students: StudentItem[];
   onExamCompleted: () => void;
 }
 
 export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   exams,
+  students,
   onExamCompleted,
 }) => {
+  const [selectedKelas, setSelectedKelas] = useState('');
+  const [selectedStudentId, setSelectedStudentId] = useState('');
   const [namaInput, setNamaInput] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [selectedExamId, setSelectedExamId] = useState<string>('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const tokenInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Derived class options and filtered students for cascading login
+  const classOptions = useMemo(
+    () => getStudentLoginClasses(students),
+    [students]
+  );
+
+  const studentsInSelectedClass = useMemo(
+    () => getStudentsForClass(students, selectedKelas),
+    [students, selectedKelas]
+  );
+
+  const selectedStudentObj = useMemo(
+    () =>
+      studentsInSelectedClass.find(
+        (s) => String(s.id) === String(selectedStudentId)
+      ) || null,
+    [studentsInSelectedClass, selectedStudentId]
+  );
+
+  const matchedExamsForSelectedClass = useMemo(() => {
+    if (!selectedKelas) return exams;
+    return exams.filter((ex) =>
+      isExamMatchedForStudentClass(ex, selectedKelas)
+    );
+  }, [exams, selectedKelas]);
 
   // Active Exam Session State
   const [activeStudent, setActiveStudent] = useState<StudentItem | null>(null);
@@ -72,10 +112,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const [isGeneratingStudentAi, setIsGeneratingStudentAi] = useState(false);
 
   useEffect(() => {
-    if (exams.length > 0 && !selectedExamId) {
+    if (matchedExamsForSelectedClass.length > 0) {
+      setSelectedExamId(String(matchedExamsForSelectedClass[0].id));
+    } else if (exams.length > 0 && !selectedExamId) {
       setSelectedExamId(String(exams[0].id));
     }
-  }, [exams, selectedExamId]);
+  }, [exams, matchedExamsForSelectedClass, selectedExamId]);
 
   const requestExamFullscreen = useCallback(async () => {
     try {
@@ -95,23 +137,61 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
+  const handleSelectKelas = (kelasVal: string) => {
+    setSelectedKelas(kelasVal);
+    setSelectedStudentId('');
+    setNamaInput('');
+    setTokenInput('');
+    setLoginError(null);
+  };
+
+  const handleSelectStudent = (studentIdVal: string) => {
+    setSelectedStudentId(studentIdVal);
+    const found = studentsInSelectedClass.find(
+      (s) => String(s.id) === String(studentIdVal)
+    );
+    setNamaInput(found ? found.nama : '');
+    setTokenInput('');
+    setLoginError(null);
+    if (found) {
+      setTimeout(() => {
+        tokenInputRef.current?.focus();
+      }, 60);
+    }
+  };
+
   const handleStartExam = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
 
-    if (!namaInput.trim()) {
-      setLoginError('Silakan masukkan Nama Lengkap Siswa terlebih dahulu.');
-      return;
+    if (students.length > 0) {
+      const validation = validateStudentCascadingLogin({
+        students,
+        selectedKelas,
+        selectedStudentId,
+        tokenInput,
+      });
+      if (!validation.ok) {
+        setLoginError(validation.error);
+        return;
+      }
+    } else {
+      if (!namaInput.trim()) {
+        setLoginError('Silakan pilih atau masukkan Nama Lengkap Siswa terlebih dahulu.');
+        return;
+      }
+      if (!tokenInput.trim() || tokenInput.trim().length !== 6) {
+        setLoginError('Token Ujian harus terdiri dari 6 karakter alfanumerik.');
+        return;
+      }
     }
-    if (!tokenInput.trim() || tokenInput.trim().length !== 6) {
-      setLoginError('Token Ujian harus terdiri dari 6 karakter alfanumerik.');
-      return;
-    }
+
+    const targetNama = selectedStudentObj ? selectedStudentObj.nama : namaInput.trim();
 
     setIsLoggingIn(true);
     try {
       const session = await loginStudentExamCbt(
-        namaInput.trim(),
+        targetNama,
         tokenInput.toUpperCase().trim(),
         selectedExamId ? Number(selectedExamId) : undefined
       );
@@ -532,59 +612,243 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
   }
 
-  // 2. RENDER DEDICATED STUDENT LOGIN SCREEN (CLEAN, SEPARATED FROM TEACHER, NO DUMMY TOKENS)
+  // 2. RENDER DEDICATED STUDENT LOGIN SCREEN (3-STEP CASCADING: PILIH KELAS -> PILIH NAMA -> MASUKKAN TOKEN)
   if (!activeStudent) {
+    const step1Done = Boolean(selectedKelas);
+    const step2Done = Boolean(selectedKelas && selectedStudentObj);
+    const step3Done = Boolean(step2Done && tokenInput.trim().length === 6);
+
     return (
-      <div className="max-w-lg mx-auto py-12 px-4 sm:px-6">
+      <div className="max-w-xl mx-auto py-10 px-4 sm:px-6">
         <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
           <div>
             <div className="text-xs font-medium text-blue-700">
-              Halaman Login Peserta Ujian CBT
+              Halaman Login Peserta Ujian CBT · 3 Langkah Verifikasi
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1.5 tracking-tight">
               Masuk Ruang Ujian Siswa
             </h1>
             <p className="text-sm text-slate-600 mt-2 leading-relaxed">
-              Masukkan Nama Siswa dan 6 karakter Token Ujian unik Anda. Sistem
-              otomatis memuat paket soal sesuai tingkatan kelas Anda (Kelas X,
-              XI, atau XII).
+              Pilih <strong>Kelas / Rombel</strong> terlebih dahulu, lalu pilih{' '}
+              <strong>Nama Lengkap Anda</strong> dari daftar kelas, kemudian
+              masukkan <strong>6 karakter Token Ujian</strong>.
             </p>
           </div>
 
-          <form onSubmit={handleStartExam} className="space-y-5">
-
-            <div>
-              <label
-                htmlFor="student-name-input"
-                className="block text-sm font-semibold text-slate-800 mb-1.5"
-              >
-                Nama Siswa
-              </label>
-              <input
-                id="student-name-input"
-                type="text"
-                value={namaInput}
-                onChange={(e) => setNamaInput(e.target.value)}
-                placeholder="Masukkan Nama Lengkap Anda"
-                className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
-              />
+          {/* 3-Step Visual Progress Indicator */}
+          <div className="grid grid-cols-3 gap-2 pt-1">
+            <div
+              className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                step1Done
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  : 'bg-blue-50/70 border-blue-200 text-blue-900'
+              }`}
+            >
+              <div className="font-bold flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 shrink-0" />
+                <span>1. Pilih Kelas</span>
+              </div>
+              <div className="text-[11px] mt-0.5 truncate opacity-80">
+                {selectedKelas || 'Belum dipilih'}
+              </div>
             </div>
 
+            <div
+              className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                step2Done
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  : step1Done
+                    ? 'bg-blue-50/70 border-blue-200 text-blue-900'
+                    : 'bg-slate-50 border-slate-200 text-slate-400'
+              }`}
+            >
+              <div className="font-bold flex items-center gap-1.5">
+                <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                <span>2. Pilih Nama</span>
+              </div>
+              <div className="text-[11px] mt-0.5 truncate opacity-80">
+                {selectedStudentObj
+                  ? selectedStudentObj.nama
+                  : step1Done
+                    ? `${studentsInSelectedClass.length} siswa tersedia`
+                    : 'Menunggu kelas'}
+              </div>
+            </div>
+
+            <div
+              className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                step3Done
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  : step2Done
+                    ? 'bg-blue-50/70 border-blue-200 text-blue-900'
+                    : 'bg-slate-50 border-slate-200 text-slate-400'
+              }`}
+            >
+              <div className="font-bold flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                <span>3. Token Ujian</span>
+              </div>
+              <div className="text-[11px] mt-0.5 truncate opacity-80">
+                {step3Done
+                  ? 'Token siap diverifikasi'
+                  : step2Done
+                    ? 'Masukkan 6 karakter'
+                    : 'Menunggu nama'}
+              </div>
+            </div>
+          </div>
+
+          <form onSubmit={handleStartExam} className="space-y-5">
+            {/* LANGKAH 1: PILIH KELAS / ROMBEL */}
             <div>
-              <label
-                htmlFor="student-token-input"
-                className="block text-sm font-semibold text-slate-800 mb-1.5"
+              <div className="flex items-center justify-between mb-1.5">
+                <label
+                  htmlFor="student-class-select"
+                  className="block text-sm font-semibold text-slate-800"
+                >
+                  Langkah 1 — Pilih Kelas / Rombel
+                </label>
+                <span className="text-xs text-slate-500">
+                  {classOptions.length} kelas terdaftar
+                </span>
+              </div>
+              <select
+                id="student-class-select"
+                value={selectedKelas}
+                onChange={(e) => handleSelectKelas(e.target.value)}
+                className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent cursor-pointer"
               >
-                Token Ujian (6 Karakter Alfanumerik)
-              </label>
+                <option value="">-- Pilih Kelas / Rombel Anda --</option>
+                {classOptions.map((cls) => (
+                  <option key={cls.kelas} value={cls.kelas}>
+                    {cls.kelas} ({cls.studentCount} Siswa)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* LANGKAH 2: PILIH NAMA SISWA (MUNCUL / AKTIF SETELAH PILIH KELAS) */}
+            <div
+              className={`transition-opacity ${
+                step1Done ? 'opacity-100' : 'opacity-60'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <label
+                  htmlFor="student-name-select"
+                  className="block text-sm font-semibold text-slate-800"
+                >
+                  Langkah 2 — Pilih Nama Siswa
+                </label>
+                {step1Done && (
+                  <span className="text-xs font-medium text-blue-700">
+                    Kelas {selectedKelas}: {studentsInSelectedClass.length} siswa
+                  </span>
+                )}
+              </div>
+
+              {students.length > 0 ? (
+                <select
+                  id="student-name-select"
+                  value={selectedStudentId}
+                  disabled={!step1Done}
+                  onChange={(e) => handleSelectStudent(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <option value="">
+                    {step1Done
+                      ? `-- Pilih Nama Lengkap Anda (${studentsInSelectedClass.length} Siswa di ${selectedKelas}) --`
+                      : '-- Pilih Kelas Terlebih Dahulu pada Langkah 1 --'}
+                  </option>
+                  {studentsInSelectedClass.map((st, idx) => {
+                    const statusTag =
+                      st.status_ujian === 'Selesai'
+                        ? ' — [Sudah Selesai]'
+                        : st.status_ujian === 'Diblokir'
+                          ? ' — [Diblokir / Terkunci]'
+                          : st.status_ujian === 'Sedang Ujian'
+                            ? ' — [Sedang Ujian]'
+                            : '';
+                    return (
+                      <option key={st.id} value={String(st.id)}>
+                        {idx + 1}. {st.nama}
+                        {statusTag}
+                      </option>
+                    );
+                  })}
+                </select>
+              ) : (
+                <input
+                  id="student-name-input"
+                  type="text"
+                  value={namaInput}
+                  onChange={(e) => setNamaInput(e.target.value)}
+                  placeholder="Masukkan Nama Lengkap Anda"
+                  className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+                />
+              )}
+
+              {/* Selected Student Confirmation Card */}
+              {selectedStudentObj && (
+                <div className="mt-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div>
+                    <span className="text-slate-500">Peserta Terpilih: </span>
+                    <strong className="text-slate-900">
+                      {selectedStudentObj.nama}
+                    </strong>
+                    <span className="mx-1.5 text-slate-300">·</span>
+                    <span className="text-slate-600">
+                      {selectedStudentObj.kelas}
+                    </span>
+                  </div>
+                  <span
+                    className={`font-semibold ${
+                      selectedStudentObj.status_ujian === 'Diblokir'
+                        ? 'text-red-700'
+                        : selectedStudentObj.status_ujian === 'Selesai'
+                          ? 'text-amber-700'
+                          : 'text-emerald-700'
+                    }`}
+                  >
+                    Status: {selectedStudentObj.status_ujian || 'Belum Mulai'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* LANGKAH 3: MASUKKAN TOKEN UJIAN (AKTIF SETELAH PILIH NAMA SISWA) */}
+            <div
+              className={`transition-opacity ${
+                step2Done || students.length === 0 ? 'opacity-100' : 'opacity-60'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                <label
+                  htmlFor="student-token-input"
+                  className="block text-sm font-semibold text-slate-800 whitespace-nowrap"
+                >
+                  Langkah 3 — Masukkan Token Ujian (6 Karakter)
+                </label>
+                {matchedExamsForSelectedClass.length > 0 && step1Done && (
+                  <span className="text-xs font-medium text-blue-700 whitespace-nowrap">
+                    Ujian: {matchedExamsForSelectedClass[0].judul_ujian}
+                  </span>
+                )}
+              </div>
               <input
+                ref={tokenInputRef}
                 id="student-token-input"
                 type="text"
                 maxLength={6}
+                disabled={students.length > 0 && !step2Done}
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value.toUpperCase())}
-                placeholder="Masukkan 6 Karakter Token"
-                className="w-full px-4 py-2.5 text-base font-mono tracking-widest uppercase bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+                placeholder={
+                  students.length > 0 && !step2Done
+                    ? 'Pilih Kelas & Nama Siswa Terlebih Dahulu'
+                    : 'Masukkan 6 Karakter Token Ujian Anda'
+                }
+                className="w-full px-4 py-2.5 text-base font-mono tracking-widest uppercase bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed"
               />
             </div>
 
@@ -600,10 +864,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
             <button
               type="submit"
-              disabled={isLoggingIn}
-              className="w-full py-3 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              disabled={
+                isLoggingIn ||
+                (students.length > 0 && (!step1Done || !step2Done || !step3Done))
+              }
+              className="w-full py-3 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
             >
-              {isLoggingIn ? 'Memverifikasi Token...' : 'Mulai Ujian Sekarang'}
+              {isLoggingIn
+                ? 'Memverifikasi Kelas, Nama & Token...'
+                : 'Mulai Ujian Sekarang'}
             </button>
           </form>
 

@@ -1032,3 +1032,485 @@ export function generateQuestionTemplateExcel(): string {
     ]
   );
 }
+
+export interface CognitiveQuestionInput {
+  id: number | string;
+  exam_id?: number;
+  teks_soal?: string;
+  tipe_soal: 'PG' | 'Kompleks' | string;
+  data_opsi?: {
+    wacana?: string;
+    opsi?: { A: string; B: string; C: string; D: string; E: string };
+  } | null;
+  kunci_jawaban: string[];
+  bobot?: number;
+}
+
+/**
+ * Classifies a question into LOTS (Lower-Order Thinking Skills: C1-C3)
+ * vs HOTS (Higher-Order Thinking Skills: C4-C6).
+ */
+export function classifyQuestionCognitiveLevel(
+  question: CognitiveQuestionInput
+): 'LOTS' | 'HOTS' {
+  if (
+    question.tipe_soal === 'Kompleks' ||
+    (Array.isArray(question.kunci_jawaban) && question.kunci_jawaban.length > 1) ||
+    (question.bobot && question.bobot >= 3)
+  ) {
+    return 'HOTS';
+  }
+
+  const soalText = (question.teks_soal || '').trim();
+  if (
+    /\b(analisis|analisislah|evaluasi|evaluasilah|kesimpulan|simpulkan|bandingkan|kritik|kritisi|argumen|solusi|strategi|mengapa|faktor penyebab|dampak|implikasi|telaah)\b/i.test(
+      soalText
+    )
+  ) {
+    return 'HOTS';
+  }
+
+  return 'LOTS';
+}
+
+/**
+ * Calculates an individual student's LOTS (0-100) and HOTS (0-100) mastery scores
+ * based on their question-level answers, with a deterministic fallback if question breakdown is unavailable.
+ */
+export function calculateStudentLotsVsHots(
+  examQuestions: CognitiveQuestionInput[],
+  jawabanSiswa?: Record<string, string[]> | null,
+  fallbackScore = 0,
+  analisisAi?: unknown | null
+): {
+  lotsScore: number;
+  hotsScore: number;
+  lotsQuestionCount: number;
+  hotsQuestionCount: number;
+} {
+  const clamp = (val: number) =>
+    Math.max(0, Math.min(100, Math.round(val * 10) / 10));
+
+  const lotsQuestions = examQuestions.filter(
+    (q) => classifyQuestionCognitiveLevel(q) === 'LOTS'
+  );
+  const hotsQuestions = examQuestions.filter(
+    (q) => classifyQuestionCognitiveLevel(q) === 'HOTS'
+  );
+
+  const hasAnswers =
+    jawabanSiswa &&
+    typeof jawabanSiswa === 'object' &&
+    Object.keys(jawabanSiswa).length > 0;
+
+  let lotsScore: number | null = null;
+  let hotsScore: number | null = null;
+
+  if (hasAnswers && lotsQuestions.length > 0) {
+    const lotsSummary = calculateExamScore(lotsQuestions, jawabanSiswa!);
+    if (lotsSummary.rawMax > 0) {
+      lotsScore = lotsSummary.normalizedScore;
+    }
+  }
+
+  if (hasAnswers && hotsQuestions.length > 0) {
+    const hotsSummary = calculateExamScore(hotsQuestions, jawabanSiswa!);
+    if (hotsSummary.rawMax > 0) {
+      hotsScore = hotsSummary.normalizedScore;
+    }
+  }
+
+  const baseScore = Number(fallbackScore) || 0;
+  const aiObj = analisisAi as { evaluasi_hots?: string } | null | undefined;
+  const hotsText = (aiObj?.evaluasi_hots || '').toLowerCase();
+  const isStrongHotsAi =
+    hotsText.includes('sangat kuat') ||
+    hotsText.includes('sangat baik') ||
+    hotsText.includes('mampu mengintegrasikan');
+
+  if (lotsScore === null && hotsScore !== null) {
+    lotsScore = clamp(Math.min(100, hotsScore * 1.08 + 4));
+  } else if (hotsScore === null && lotsScore !== null) {
+    hotsScore = clamp(
+      isStrongHotsAi ? lotsScore * 0.96 : Math.max(0, lotsScore * 0.86 - 2)
+    );
+  } else if (lotsScore === null && hotsScore === null) {
+    if (baseScore <= 0) {
+      lotsScore = 0;
+      hotsScore = 0;
+    } else if (isStrongHotsAi || baseScore >= 85) {
+      lotsScore = clamp(Math.min(100, baseScore * 1.04));
+      hotsScore = clamp(Math.min(100, baseScore * 0.96));
+    } else if (baseScore >= 70) {
+      lotsScore = clamp(Math.min(100, baseScore * 1.08));
+      hotsScore = clamp(Math.max(0, baseScore * 0.91));
+    } else {
+      lotsScore = clamp(Math.min(100, baseScore * 1.14));
+      hotsScore = clamp(Math.max(0, baseScore * 0.84));
+    }
+  }
+
+  return {
+    lotsScore: lotsScore ?? 0,
+    hotsScore: hotsScore ?? 0,
+    lotsQuestionCount: lotsQuestions.length,
+    hotsQuestionCount: hotsQuestions.length,
+  };
+}
+
+export interface ClassAnalyticsItem {
+  kelas: string;
+  shortKelas: string;
+  tingkat: '10' | '11' | '12' | 'LAINNYA';
+  totalStudents: number;
+  statusCounts: {
+    belumMulai: number;
+    sedangUjian: number;
+    selesai: number;
+    diblokir: number;
+  };
+  resultCount: number;
+  averageScore: number;
+  highestScore: number;
+  lowestScore: number;
+  passCount: number; // score >= 70
+  passRate: number; // 0 - 100
+  lotsScore: number; // 0 - 100 average LOTS mastery
+  hotsScore: number; // 0 - 100 average HOTS mastery
+  cognitiveGap: number; // lotsScore - hotsScore
+  lotsMasteryCount: number; // students with lotsScore >= 70
+  hotsMasteryCount: number; // students with hotsScore >= 70
+  lotsMasteryRate: number; // 0 - 100
+  hotsMasteryRate: number; // 0 - 100
+  gradeDistribution: {
+    A: number;
+    B: number;
+    C: number;
+    D: number;
+  };
+  analyzedCount: number;
+}
+
+function formatShortClassLabel(kelas: string): string {
+  const clean = (kelas || '').trim();
+  if (clean.length <= 16) return clean;
+  const parts = clean.split(/\s+/);
+  if (parts.length >= 3) {
+    return `${parts[0]} ${parts[1]} ${parts[2].slice(0, 3)}.`;
+  }
+  return `${clean.slice(0, 14)}…`;
+}
+
+export function computeClassAnalytics(
+  studentsList: {
+    id: number;
+    nama: string;
+    kelas: string;
+    status_ujian?: string;
+  }[],
+  resultsList: {
+    id: number;
+    student_id: number;
+    exam_id: number;
+    skor_angka: number;
+    jawaban_siswa?: Record<string, string[]> | null;
+    analisis_ai?: unknown | null;
+  }[],
+  extraClassNames: string[] = [],
+  questionsList: CognitiveQuestionInput[] = []
+): {
+  perClass: ClassAnalyticsItem[];
+  overall: ClassAnalyticsItem;
+} {
+  const classNamesSet = new Set<string>();
+  for (const s of studentsList) {
+    if (s.kelas && s.kelas.trim()) classNamesSet.add(s.kelas.trim());
+  }
+  for (const extra of extraClassNames) {
+    if (extra && extra.trim()) classNamesSet.add(extra.trim());
+  }
+
+  const studentById = new Map<
+    number,
+    { id: number; nama: string; kelas: string; status_ujian?: string }
+  >();
+  for (const s of studentsList) {
+    studentById.set(s.id, s);
+  }
+
+  const buildMetricsForGroup = (
+    labelKelas: string,
+    groupStudents: typeof studentsList,
+    groupResults: typeof resultsList
+  ): ClassAnalyticsItem => {
+    const scores = groupResults.map((r) => Number(r.skor_angka) || 0);
+    const resultCount = scores.length;
+    const sum = scores.reduce((acc, v) => acc + v, 0);
+    const averageScore =
+      resultCount > 0 ? Math.round((sum / resultCount) * 10) / 10 : 0;
+    const highestScore = resultCount > 0 ? Math.max(...scores) : 0;
+    const lowestScore = resultCount > 0 ? Math.min(...scores) : 0;
+    const passCount = scores.filter((sc) => sc >= 70).length;
+    const passRate =
+      resultCount > 0 ? Math.round((passCount / resultCount) * 100) : 0;
+
+    const studentCognitiveBreakdowns = groupResults.map((r) => {
+      const examQs = questionsList.filter(
+        (q) => q.exam_id === undefined || Number(q.exam_id) === Number(r.exam_id)
+      );
+      return calculateStudentLotsVsHots(
+        examQs.length > 0 ? examQs : questionsList,
+        r.jawaban_siswa,
+        Number(r.skor_angka) || 0,
+        r.analisis_ai
+      );
+    });
+
+    const lotsSum = studentCognitiveBreakdowns.reduce(
+      (acc, item) => acc + item.lotsScore,
+      0
+    );
+    const hotsSum = studentCognitiveBreakdowns.reduce(
+      (acc, item) => acc + item.hotsScore,
+      0
+    );
+    const lotsScore =
+      resultCount > 0 ? Math.round((lotsSum / resultCount) * 10) / 10 : 0;
+    const hotsScore =
+      resultCount > 0 ? Math.round((hotsSum / resultCount) * 10) / 10 : 0;
+    const cognitiveGap = Math.round((lotsScore - hotsScore) * 10) / 10;
+
+    const lotsMasteryCount = studentCognitiveBreakdowns.filter(
+      (item) => item.lotsScore >= 70
+    ).length;
+    const hotsMasteryCount = studentCognitiveBreakdowns.filter(
+      (item) => item.hotsScore >= 70
+    ).length;
+    const lotsMasteryRate =
+      resultCount > 0 ? Math.round((lotsMasteryCount / resultCount) * 100) : 0;
+    const hotsMasteryRate =
+      resultCount > 0 ? Math.round((hotsMasteryCount / resultCount) * 100) : 0;
+
+    const gradeDistribution = {
+      A: scores.filter((sc) => sc >= 85).length,
+      B: scores.filter((sc) => sc >= 70 && sc < 85).length,
+      C: scores.filter((sc) => sc >= 55 && sc < 70).length,
+      D: scores.filter((sc) => sc < 55).length,
+    };
+
+    const statusCounts = {
+      belumMulai: groupStudents.filter(
+        (s) => (s.status_ujian || 'Belum Mulai') === 'Belum Mulai'
+      ).length,
+      sedangUjian: groupStudents.filter(
+        (s) => s.status_ujian === 'Sedang Ujian'
+      ).length,
+      selesai: groupStudents.filter((s) => s.status_ujian === 'Selesai').length,
+      diblokir: groupStudents.filter((s) => s.status_ujian === 'Diblokir')
+        .length,
+    };
+
+    const analyzedCount = groupResults.filter((r) =>
+      Boolean(r.analisis_ai)
+    ).length;
+
+    return {
+      kelas: labelKelas,
+      shortKelas: formatShortClassLabel(labelKelas),
+      tingkat:
+        labelKelas === 'SEMUA KELAS'
+          ? 'LAINNYA'
+          : extractTingkatFromKelas(labelKelas),
+      totalStudents: groupStudents.length,
+      statusCounts,
+      resultCount,
+      averageScore,
+      highestScore,
+      lowestScore,
+      passCount,
+      passRate,
+      lotsScore,
+      hotsScore,
+      cognitiveGap,
+      lotsMasteryCount,
+      hotsMasteryCount,
+      lotsMasteryRate,
+      hotsMasteryRate,
+      gradeDistribution,
+      analyzedCount,
+    };
+  };
+
+  const sortedClassNames = Array.from(classNamesSet).sort((a, b) => {
+    const tA = extractTingkatFromKelas(a);
+    const tB = extractTingkatFromKelas(b);
+    if (tA !== tB) return tA.localeCompare(tB);
+    return a.localeCompare(b);
+  });
+
+  const perClass = sortedClassNames.map((kls) => {
+    const klsStudents = studentsList.filter(
+      (s) => s.kelas.trim().toLowerCase() === kls.toLowerCase()
+    );
+    const klsStudentIds = new Set(klsStudents.map((s) => s.id));
+    const klsResults = resultsList.filter((r) => {
+      if (klsStudentIds.has(r.student_id)) return true;
+      const st = studentById.get(r.student_id);
+      return st ? st.kelas.trim().toLowerCase() === kls.toLowerCase() : false;
+    });
+    return buildMetricsForGroup(kls, klsStudents, klsResults);
+  });
+
+  const overall = buildMetricsForGroup('SEMUA KELAS', studentsList, resultsList);
+
+  return { perClass, overall };
+}
+
+export function buildSemicolonCsv(
+  headers: string[],
+  rows: (string | number)[][]
+): string {
+  const escapeCell = (val: string | number) => {
+    const str = String(val ?? '').replace(/\r?\n/g, ' ').trim();
+    if (str.includes(';') || str.includes('"') || str.includes(',')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const lines = [
+    '\uFEFFsep=;',
+    headers.map(escapeCell).join(';'),
+    ...rows.map((r) => r.map(escapeCell).join(';')),
+  ];
+  return lines.join('\n');
+}
+
+export interface StudentLoginClassOption {
+  kelas: string;
+  tingkat: '10' | '11' | '12' | 'LAINNYA';
+  studentCount: number;
+}
+
+export function getStudentLoginClasses(
+  studentsList: { kelas: string }[]
+): StudentLoginClassOption[] {
+  const map = new Map<string, { displayKelas: string; count: number }>();
+
+  for (const s of studentsList) {
+    const clean = (s.kelas || '').trim();
+    if (!clean) continue;
+    const key = clean.toUpperCase();
+    const existing = map.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      map.set(key, { displayKelas: clean, count: 1 });
+    }
+  }
+
+  return Array.from(map.values())
+    .map((item) => ({
+      kelas: item.displayKelas,
+      tingkat: extractTingkatFromKelas(item.displayKelas),
+      studentCount: item.count,
+    }))
+    .sort((a, b) => {
+      if (a.tingkat !== b.tingkat) return a.tingkat.localeCompare(b.tingkat);
+      return a.kelas.localeCompare(b.kelas, 'id');
+    });
+}
+
+export function getStudentsForClass<
+  T extends { id: number; nama: string; kelas: string }
+>(studentsList: T[], selectedKelas: string): T[] {
+  const target = (selectedKelas || '').trim().toLowerCase();
+  if (!target) return [];
+
+  return studentsList
+    .filter((s) => (s.kelas || '').trim().toLowerCase() === target)
+    .slice()
+    .sort((a, b) => a.nama.localeCompare(b.nama, 'id'));
+}
+
+export function validateStudentCascadingLogin<
+  T extends {
+    id: number;
+    nama: string;
+    kelas: string;
+    token_ujian: string;
+    status_ujian?: string;
+  }
+>(params: {
+  students: T[];
+  selectedKelas: string;
+  selectedStudentId: string | number;
+  tokenInput: string;
+}): { ok: true; student: T } | { ok: false; error: string } {
+  const cleanKelas = (params.selectedKelas || '').trim();
+  if (!cleanKelas) {
+    return {
+      ok: false,
+      error: 'Silakan pilih Kelas / Rombel Anda terlebih dahulu (Langkah 1).',
+    };
+  }
+
+  const classStudents = getStudentsForClass(params.students, cleanKelas);
+  if (classStudents.length === 0) {
+    return {
+      ok: false,
+      error: `Tidak ditemukan daftar siswa pada kelas "${cleanKelas}".`,
+    };
+  }
+
+  const idStr = String(params.selectedStudentId ?? '').trim();
+  if (!idStr) {
+    return {
+      ok: false,
+      error: 'Silakan pilih Nama Lengkap Anda dari daftar siswa kelas (Langkah 2).',
+    };
+  }
+
+  const selectedStudent = classStudents.find((s) => String(s.id) === idStr);
+  if (!selectedStudent) {
+    return {
+      ok: false,
+      error: 'Nama siswa yang dipilih tidak ditemukan pada kelas tersebut.',
+    };
+  }
+
+  const cleanToken = (params.tokenInput || '').trim().toUpperCase();
+  if (!cleanToken || cleanToken.length !== 6) {
+    return {
+      ok: false,
+      error: 'Token Ujian harus terdiri dari 6 karakter alfanumerik (Langkah 3).',
+    };
+  }
+
+  if ((selectedStudent.token_ujian || '').trim().toUpperCase() !== cleanToken) {
+    return {
+      ok: false,
+      error: `Token Ujian tidak sesuai untuk siswa "${selectedStudent.nama}" (${selectedStudent.kelas}). Pastikan Anda memasukkan 6 karakter token milik Anda sendiri.`,
+    };
+  }
+
+  if (selectedStudent.status_ujian === 'Diblokir') {
+    return {
+      ok: false,
+      error:
+        'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.',
+    };
+  }
+
+  if (selectedStudent.status_ujian === 'Selesai') {
+    return {
+      ok: false,
+      error:
+        'Anda telah menyelesaikan ujian dengan akun ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai.',
+    };
+  }
+
+  return { ok: true, student: selectedStudent };
+}
+
+

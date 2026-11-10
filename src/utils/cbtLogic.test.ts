@@ -12,6 +12,13 @@ import {
   generateQuestionTemplateExcel,
   SAMPLE_CSV_TEMPLATE,
   SAMPLE_STUDENT_CSV_TEMPLATE,
+  computeClassAnalytics,
+  buildSemicolonCsv,
+  classifyQuestionCognitiveLevel,
+  calculateStudentLotsVsHots,
+  getStudentLoginClasses,
+  getStudentsForClass,
+  validateStudentCascadingLogin,
 } from './cbtLogic.ts';
 
 test('generateExamToken returns 6-character uppercase alphanumeric string', () => {
@@ -134,3 +141,164 @@ test('parseStudentsCsv parses semicolon-separated CSV, comma-separated CSV, and 
   assert.equal(parsedXls.rows.length, 6);
   assert.equal(parsedXls.rows[1].nama, 'Siti Nurhaliza');
 });
+
+test('computeClassAnalytics and buildSemicolonCsv compute per-class statistics and clean CSV output', () => {
+  const students = [
+    { id: 1, nama: 'Budi', kelas: 'X MIPA 1', status_ujian: 'Selesai' },
+    { id: 2, nama: 'Siti', kelas: 'X MIPA 1', status_ujian: 'Belum Mulai' },
+    { id: 3, nama: 'Andi', kelas: 'XI IPS 1', status_ujian: 'Selesai' },
+  ];
+  const results = [
+    { id: 101, student_id: 1, exam_id: 1, skor_angka: 90, analisis_ai: { ringkasan: 'Sangat baik' } },
+    { id: 102, student_id: 2, exam_id: 1, skor_angka: 60, analisis_ai: null },
+    { id: 103, student_id: 3, exam_id: 1, skor_angka: 80, analisis_ai: { ringkasan: 'Baik' } },
+  ];
+  const analytics = computeClassAnalytics(students, results, ['XII SOS 1']);
+  assert.equal(analytics.perClass.length, 3);
+  assert.equal(analytics.overall.totalStudents, 3);
+  assert.equal(analytics.overall.resultCount, 3);
+  const xMipa = analytics.perClass.find((c) => c.kelas === 'X MIPA 1')!;
+  assert.equal(xMipa.totalStudents, 2);
+  assert.equal(xMipa.resultCount, 2);
+  assert.equal(xMipa.averageScore, 75);
+  assert.equal(xMipa.highestScore, 90);
+  assert.equal(xMipa.lowestScore, 60);
+  assert.equal(xMipa.passCount, 1);
+  assert.equal(xMipa.passRate, 50);
+  assert.equal(xMipa.gradeDistribution.A, 1);
+  assert.equal(xMipa.gradeDistribution.C, 1);
+  assert.equal(xMipa.analyzedCount, 1);
+
+  const xiiSos = analytics.perClass.find((c) => c.kelas === 'XII SOS 1')!;
+  assert.equal(xiiSos.totalStudents, 0);
+  assert.equal(xiiSos.tingkat, '12');
+
+  const csv = buildSemicolonCsv(['Nama', 'Kelas'], [['Budi;Santoso', 'X MIPA 1']]);
+  assert.ok(csv.includes('sep=;'));
+  assert.ok(csv.includes('"Budi;Santoso";X MIPA 1'));
+});
+
+test('classifyQuestionCognitiveLevel and calculateStudentLotsVsHots compute LOTS vs HOTS scores accurately', () => {
+  const questions = [
+    {
+      id: 1,
+      exam_id: 1,
+      tipe_soal: 'PG',
+      teks_soal: 'Siapa bapak sosiologi dunia?',
+      kunci_jawaban: ['A'],
+      bobot: 2,
+    },
+    {
+      id: 2,
+      exam_id: 1,
+      tipe_soal: 'Kompleks',
+      teks_soal: 'Analisislah faktor penyebab konflik sosial berikut!',
+      kunci_jawaban: ['A', 'C', 'E'],
+      bobot: 3,
+    },
+  ];
+
+  assert.equal(classifyQuestionCognitiveLevel(questions[0]), 'LOTS');
+  assert.equal(classifyQuestionCognitiveLevel(questions[1]), 'HOTS');
+
+  const studentBreakdown = calculateStudentLotsVsHots(questions, {
+    '1': ['A'], // 100% LOTS
+    '2': ['A', 'C'], // 2/3 = 67% HOTS
+  });
+  assert.equal(studentBreakdown.lotsScore, 100);
+  assert.equal(studentBreakdown.hotsScore, 67);
+
+  const analytics = computeClassAnalytics(
+    [{ id: 1, nama: 'Budi', kelas: 'X MIPA 1', status_ujian: 'Selesai' }],
+    [
+      {
+        id: 101,
+        student_id: 1,
+        exam_id: 1,
+        skor_angka: 80,
+        jawaban_siswa: { '1': ['A'], '2': ['A', 'C'] },
+      },
+    ],
+    [],
+    questions
+  );
+  assert.equal(analytics.perClass[0].lotsScore, 100);
+  assert.equal(analytics.perClass[0].hotsScore, 67);
+  assert.equal(analytics.perClass[0].cognitiveGap, 33);
+});
+
+test('getStudentLoginClasses, getStudentsForClass, and validateStudentCascadingLogin enforce 3-step student login', () => {
+  const roster = [
+    {
+      id: 10,
+      nama: 'Zaki Pratama',
+      kelas: '10 ABU BAKAR',
+      token_ujian: 'ABC123',
+      status_ujian: 'Belum Mulai',
+    },
+    {
+      id: 11,
+      nama: 'Ahmad Fauzi',
+      kelas: '10 ABU BAKAR',
+      token_ujian: 'XYZ789',
+      status_ujian: 'Belum Mulai',
+    },
+    {
+      id: 12,
+      nama: 'Siti Aisyah',
+      kelas: '10 ASIAH',
+      token_ujian: 'QWE456',
+      status_ujian: 'Diblokir',
+    },
+  ];
+
+  const classes = getStudentLoginClasses(roster);
+  assert.equal(classes.length, 2);
+  assert.equal(classes[0].kelas, '10 ABU BAKAR');
+  assert.equal(classes[0].studentCount, 2);
+
+  const abuBakarStudents = getStudentsForClass(roster, '10 ABU BAKAR');
+  assert.equal(abuBakarStudents.length, 2);
+  assert.equal(abuBakarStudents[0].nama, 'Ahmad Fauzi');
+  assert.equal(abuBakarStudents[1].nama, 'Zaki Pratama');
+
+  // Missing class
+  const failStep1 = validateStudentCascadingLogin({
+    students: roster,
+    selectedKelas: '',
+    selectedStudentId: '',
+    tokenInput: '',
+  });
+  assert.equal(failStep1.ok, false);
+
+  // Wrong token for selected student
+  const failWrongToken = validateStudentCascadingLogin({
+    students: roster,
+    selectedKelas: '10 ABU BAKAR',
+    selectedStudentId: 11,
+    tokenInput: 'ABC123', // belongs to Zaki, not Ahmad
+  });
+  assert.equal(failWrongToken.ok, false);
+
+  // Blocked student
+  const failBlocked = validateStudentCascadingLogin({
+    students: roster,
+    selectedKelas: '10 ASIAH',
+    selectedStudentId: 12,
+    tokenInput: 'QWE456',
+  });
+  assert.equal(failBlocked.ok, false);
+
+  // Valid cascading login
+  const validLogin = validateStudentCascadingLogin({
+    students: roster,
+    selectedKelas: '10 ABU BAKAR',
+    selectedStudentId: 11,
+    tokenInput: 'xyz789',
+  });
+  assert.equal(validLogin.ok, true);
+  if (validLogin.ok) {
+    assert.equal(validLogin.student.nama, 'Ahmad Fauzi');
+  }
+});
+

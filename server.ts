@@ -8,7 +8,9 @@ import {
   getDashboardData,
   createOrReplaceQuestionsFromCsv,
   createManualQuestionRecord,
+  updateManualQuestionRecord,
   deleteQuestionRecord,
+  clearQuestionsByExamRecord,
   addStudentRecord,
   createStudentsFromCsv,
   updateStudentRecord,
@@ -16,6 +18,8 @@ import {
   updateStudentStatusRecord,
   bulkUpdateStudentStatusRecord,
   deleteStudentRecord,
+  renameStudentClassRecord,
+  deleteStudentsByClassRecord,
   createNewExamRecord,
   updateExamRecord,
   deleteExamRecord,
@@ -220,6 +224,35 @@ app.post('/api/questions/manual', async (req, res) => {
   }
 });
 
+// PUT /api/questions/:id - Update an existing question
+app.put('/api/questions/:id', async (req, res) => {
+  try {
+    const qId = Number(req.params.id);
+    const { examId, teks_soal, tipe_soal, wacana, opsi, kunci_jawaban, bobot } = req.body;
+    if (!examId || !teks_soal || !opsi) {
+      return res.status(400).json({ error: 'Paket ujian, teks soal, dan opsi wajib diisi.' });
+    }
+    const normalizedKeys = normalizeAnswerKeys(kunci_jawaban);
+    if (normalizedKeys.length === 0) {
+      return res.status(400).json({ error: 'Pilih minimal satu kunci jawaban yang benar (A-E).' });
+    }
+    const updated = await updateManualQuestionRecord(
+      qId,
+      Number(examId),
+      String(teks_soal),
+      tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+      String(wacana || ''),
+      opsi,
+      normalizedKeys,
+      Number(bobot) || (tipe_soal === 'Kompleks' ? 3 : 2)
+    );
+    await broadcastFirestoreSync(`Butir soal #${qId} diperbarui`);
+    res.json({ question: updated });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal memperbarui soal.' });
+  }
+});
+
 // DELETE /api/questions/:id - Delete a question
 app.delete('/api/questions/:id', async (req, res) => {
   try {
@@ -230,6 +263,18 @@ app.delete('/api/questions/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menghapus soal.' });
+  }
+});
+
+// DELETE /api/exams/:id/questions - Clear all questions in an exam package
+app.delete('/api/exams/:id/questions', async (req, res) => {
+  try {
+    const examId = Number(req.params.id);
+    await clearQuestionsByExamRecord(examId);
+    await broadcastFirestoreSync(`Semua soal pada ujian #${examId} dikosongkan`);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal mengosongkan soal.' });
   }
 });
 
@@ -340,6 +385,36 @@ app.put('/api/students/:id', async (req, res) => {
     res.json({ student: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal memperbarui data siswa.' });
+  }
+});
+
+// POST /api/classes/rename - Rename a class across all students in that class
+app.post('/api/classes/rename', async (req, res) => {
+  try {
+    const { oldKelas, newKelas } = req.body;
+    if (!oldKelas || !newKelas || !String(newKelas).trim()) {
+      return res.status(400).json({ error: 'Nama kelas lama dan baru wajib diisi.' });
+    }
+    const updated = await renameStudentClassRecord(String(oldKelas), String(newKelas));
+    await broadcastFirestoreSync(`Nama kelas diubah: ${oldKelas} -> ${newKelas}`);
+    res.json({ updatedCount: updated.length, students: updated });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal mengubah nama kelas.' });
+  }
+});
+
+// POST /api/classes/delete - Delete all students in a specific class
+app.post('/api/classes/delete', async (req, res) => {
+  try {
+    const { kelas } = req.body;
+    if (!kelas || !String(kelas).trim()) {
+      return res.status(400).json({ error: 'Nama kelas wajib diisi.' });
+    }
+    await deleteStudentsByClassRecord(String(kelas));
+    await broadcastFirestoreSync(`Kelas ${kelas} dihapus`);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal menghapus kelas.' });
   }
 });
 

@@ -749,6 +749,79 @@ export async function deleteStudentCbt(
   }
 }
 
+export async function renameClassCbt(
+  oldKelas: string,
+  newKelas: string,
+  currentStudents: StudentItem[]
+): Promise<number> {
+  const cleanOld = oldKelas.trim();
+  const cleanNew = newKelas.trim();
+  if (!cleanOld || !cleanNew) return 0;
+
+  await safeApiJson('/api/classes/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldKelas: cleanOld, newKelas: cleanNew }),
+  });
+
+  const matching = currentStudents.filter(
+    (s) => s.kelas.trim().toLowerCase() === cleanOld.toLowerCase()
+  );
+
+  if (db && matching.length > 0) {
+    const nowIso = new Date().toISOString();
+    const batch = writeBatch(db);
+    for (const st of matching) {
+      batch.set(doc(db, 'students', String(st.id)), {
+        id: Number(st.id),
+        nama: st.nama.slice(0, 150),
+        kelas: cleanNew.slice(0, 64),
+        token_ujian: st.token_ujian.slice(0, 6),
+        status_ujian: st.status_ujian.slice(0, 32),
+        authorUid: 'sahidin30@gmail.com',
+        updatedAt: nowIso,
+      });
+    }
+    await batch.commit();
+    await updateFirestorePulse(
+      `Nama kelas diubah: ${cleanOld} menjadi ${cleanNew} (${matching.length} siswa)`
+    );
+  }
+
+  return matching.length;
+}
+
+export async function deleteClassStudentsCbt(
+  kelas: string,
+  currentStudents: StudentItem[]
+): Promise<number> {
+  const cleanKelas = kelas.trim();
+  if (!cleanKelas) return 0;
+
+  await safeApiJson('/api/classes/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kelas: cleanKelas }),
+  });
+
+  const matching = currentStudents.filter(
+    (s) => s.kelas.trim().toLowerCase() === cleanKelas.toLowerCase()
+  );
+
+  if (db && matching.length > 0) {
+    const batch = writeBatch(db);
+    for (const st of matching) {
+      batch.delete(doc(db, 'students', String(st.id)));
+    }
+    await batch.commit();
+    await updateFirestorePulse(
+      `Kelas ${cleanKelas} beserta ${matching.length} siswa dihapus`
+    );
+  }
+
+  return matching.length;
+}
+
 export async function addManualQuestionCbt(payload: {
   examId: number;
   tipe_soal: 'PG' | 'Kompleks';
@@ -803,6 +876,67 @@ export async function addManualQuestionCbt(payload: {
     });
     await updateFirestorePulse(
       `Butir soal baru ditambahkan ke paket ujian #${payload.examId}`
+    );
+  }
+
+  return questionRecord;
+}
+
+export async function updateManualQuestionCbt(payload: {
+  questionId: number;
+  examId: number;
+  tipe_soal: 'PG' | 'Kompleks';
+  wacana: string;
+  teks_soal: string;
+  opsi: { A: string; B: string; C: string; D: string; E: string };
+  kunci_jawaban: string[];
+  bobot: number;
+}): Promise<QuestionItem> {
+  const normalizedKeys = normalizeAnswerKeys(payload.kunci_jawaban);
+  if (normalizedKeys.length === 0) {
+    throw new Error('Pilih minimal satu kunci jawaban yang benar (A-E).');
+  }
+
+  const apiRes = await safeApiJson<{ question?: QuestionItem; error?: string }>(
+    `/api/questions/${payload.questionId}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, kunci_jawaban: normalizedKeys }),
+    }
+  );
+
+  const nowIso = new Date().toISOString();
+  const questionRecord: QuestionItem =
+    apiRes.ok && apiRes.data?.question
+      ? apiRes.data.question
+      : {
+          id: payload.questionId,
+          exam_id: payload.examId,
+          teks_soal: payload.teks_soal.trim(),
+          tipe_soal: payload.tipe_soal,
+          data_opsi: {
+            wacana: payload.wacana.trim(),
+            opsi: payload.opsi,
+          },
+          kunci_jawaban: normalizedKeys,
+          bobot: payload.bobot,
+        };
+
+  if (db) {
+    await setDoc(doc(db, 'questions', String(questionRecord.id)), {
+      id: Number(questionRecord.id),
+      exam_id: Number(questionRecord.exam_id),
+      teks_soal: questionRecord.teks_soal.slice(0, 4000),
+      tipe_soal: questionRecord.tipe_soal,
+      data_opsi: questionRecord.data_opsi,
+      kunci_jawaban: questionRecord.kunci_jawaban,
+      bobot: Number(questionRecord.bobot),
+      authorUid: 'sahidin30@gmail.com',
+      updatedAt: nowIso,
+    });
+    await updateFirestorePulse(
+      `Butir soal #${questionRecord.id} berhasil diperbarui`
     );
   }
 
@@ -904,6 +1038,50 @@ export async function deleteQuestionCbt(questionId: number): Promise<void> {
   }
 }
 
+export async function clearExamQuestionsCbt(
+  examId: number,
+  currentQuestions: QuestionItem[]
+): Promise<number> {
+  await safeApiJson(`/api/exams/${examId}/questions`, { method: 'DELETE' });
+  const toRemove = currentQuestions.filter((q) => q.exam_id === examId);
+  if (db && toRemove.length > 0) {
+    const batch = writeBatch(db);
+    toRemove.forEach((q) => batch.delete(doc(db!, 'questions', String(q.id))));
+    await batch.commit();
+    await updateFirestorePulse(
+      `Semua soal (${toRemove.length} butir) pada ujian #${examId} dikosongkan`
+    );
+  }
+  return toRemove.length;
+}
+
+export async function copyQuestionsToExamCbt(
+  targetExamId: number,
+  sourceQuestions: QuestionItem[]
+): Promise<number> {
+  if (sourceQuestions.length === 0) return 0;
+  let copiedCount = 0;
+  for (const q of sourceQuestions) {
+    await addManualQuestionCbt({
+      examId: targetExamId,
+      tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+      wacana: q.data_opsi?.wacana || '',
+      teks_soal: q.teks_soal,
+      opsi: {
+        A: q.data_opsi?.opsi?.A || '',
+        B: q.data_opsi?.opsi?.B || '',
+        C: q.data_opsi?.opsi?.C || '',
+        D: q.data_opsi?.opsi?.D || '',
+        E: q.data_opsi?.opsi?.E || '',
+      },
+      kunci_jawaban: q.kunci_jawaban,
+      bobot: q.bobot || (q.tipe_soal === 'Kompleks' ? 3 : 2),
+    });
+    copiedCount++;
+  }
+  return copiedCount;
+}
+
 export async function loginStudentExamCbt(
   nama: string,
   token_ujian: string,
@@ -959,6 +1137,12 @@ export async function loginStudentExamCbt(
     );
   }
 
+  if (matchedStudent.nama.trim().toLowerCase() !== cleanNama.toLowerCase()) {
+    throw new Error(
+      `Token Ujian tidak sesuai untuk siswa "${cleanNama}". Pastikan Anda memilih Kelas, Nama Siswa, dan memasukkan 6 karakter Token milik Anda sendiri.`
+    );
+  }
+
   if (matchedStudent.status_ujian === 'Diblokir') {
     throw new Error(
       'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.'
@@ -1001,7 +1185,6 @@ export async function loginStudentExamCbt(
 
   const updatedStudent: StudentItem = {
     ...matchedStudent,
-    nama: cleanNama,
     status_ujian: 'Sedang Ujian',
   };
 

@@ -125,12 +125,54 @@ export async function createManualQuestionRecord(
   }
 }
 
+export async function updateManualQuestionRecord(
+  questionId: number,
+  examId: number,
+  teks_soal: string,
+  tipe_soal: 'PG' | 'Kompleks',
+  wacana: string,
+  opsi: { A: string; B: string; C: string; D: string; E: string },
+  kunci_jawaban: string[],
+  bobot: number
+) {
+  try {
+    const [updated] = await db
+      .update(questions)
+      .set({
+        exam_id: examId,
+        teks_soal: teks_soal.trim(),
+        tipe_soal,
+        data_opsi: {
+          wacana: wacana.trim(),
+          opsi,
+        },
+        kunci_jawaban,
+        bobot,
+      })
+      .where(eq(questions.id, questionId))
+      .returning();
+    return updated;
+  } catch (error) {
+    console.error('Database query failed in updateManualQuestionRecord:', error);
+    throw new Error('Gagal memperbarui butir soal.', { cause: error });
+  }
+}
+
 export async function deleteQuestionRecord(questionId: number) {
   try {
     await db.delete(questions).where(eq(questions.id, questionId));
   } catch (error) {
     console.error('Database query failed in deleteQuestionRecord:', error);
     throw new Error('Gagal menghapus butir soal.', { cause: error });
+  }
+}
+
+export async function clearQuestionsByExamRecord(examId: number) {
+  try {
+    await db.delete(questions).where(eq(questions.exam_id, examId));
+  } catch (error) {
+    console.error('Database query failed in clearQuestionsByExamRecord:', error);
+    throw new Error('Gagal mengosongkan soal pada paket ujian.', { cause: error });
   }
 }
 
@@ -266,6 +308,28 @@ export async function deleteStudentRecord(studentId: number) {
   }
 }
 
+export async function renameStudentClassRecord(oldKelas: string, newKelas: string) {
+  try {
+    return await db
+      .update(students)
+      .set({ kelas: newKelas.trim() })
+      .where(eq(students.kelas, oldKelas.trim()))
+      .returning();
+  } catch (error) {
+    console.error('Database query failed in renameStudentClassRecord:', error);
+    throw new Error('Gagal mengubah nama kelas.', { cause: error });
+  }
+}
+
+export async function deleteStudentsByClassRecord(kelas: string) {
+  try {
+    await db.delete(students).where(eq(students.kelas, kelas.trim()));
+  } catch (error) {
+    console.error('Database query failed in deleteStudentsByClassRecord:', error);
+    throw new Error('Gagal menghapus kelas.', { cause: error });
+  }
+}
+
 export async function createNewExamRecord(
   judul_ujian: string,
   durasi_menit: number,
@@ -344,7 +408,13 @@ export async function verifyStudentTokenForExam(
     const student = matchedStudents[0];
     const cleanNama = namaInput.trim();
     if (!cleanNama) {
-      return { error: 'Nama Siswa wajib diisi.' };
+      return { error: 'Nama Siswa wajib dipilih terlebih dahulu.' };
+    }
+
+    if (student.nama.trim().toLowerCase() !== cleanNama.toLowerCase()) {
+      return {
+        error: `Token Ujian tidak sesuai untuk siswa "${cleanNama}". Pastikan Anda memilih Kelas, Nama Siswa, dan memasukkan 6 karakter Token milik Anda sendiri.`,
+      };
     }
 
     if (student.status_ujian === 'Diblokir') {
@@ -400,7 +470,6 @@ export async function verifyStudentTokenForExam(
     const [updatedStudent] = await db
       .update(students)
       .set({
-        nama: cleanNama,
         status_ujian: 'Sedang Ujian',
       })
       .where(eq(students.id, student.id))
