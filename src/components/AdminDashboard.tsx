@@ -37,6 +37,7 @@ import {
   generateQuestionTemplateExcel,
   parseQuestionsCsv,
   computeClassAnalytics,
+  classifyQuestionCognitiveLevel,
 } from '../utils/cbtLogic';
 import {
   auth,
@@ -126,6 +127,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   >('ujian');
 
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
+  const [isBankSoalDetailOpen, setIsBankSoalDetailOpen] = useState(false);
+  const [bankSoalDeleteModal, setBankSoalDeleteModal] = useState<{
+    examId: number;
+    title: string;
+    questionCount: number;
+  } | null>(null);
+  const [isDeletingBankSoal, setIsDeletingBankSoal] = useState(false);
+  const [bankSoalFeedback, setBankSoalFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     if (exams.length > 0 && selectedExamId === null) {
@@ -455,6 +467,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await deleteExamCbt(examId, title);
     setExamFeedback(`Paket ujian "${title}" telah dihapus.`);
     await onRefreshData();
+  };
+
+  const handleClearBankSoalOnly = async (examId: number, title: string) => {
+    setIsDeletingBankSoal(true);
+    setBankSoalFeedback(null);
+    setUploadStatus(null);
+    try {
+      const removedCount = await clearExamQuestionsCbt(examId, questions);
+      setBankSoalFeedback({
+        type: 'success',
+        message: `Seluruh butir soal (${removedCount} soal) pada Bank Soal "${title}" berhasil dikosongkan. Paket ujian tetap tersimpan.`,
+      });
+      setBankSoalDeleteModal(null);
+      await onRefreshData();
+    } catch (err: any) {
+      setBankSoalFeedback({
+        type: 'error',
+        message: err.message || 'Gagal mengosongkan butir soal pada bank soal.',
+      });
+    } finally {
+      setIsDeletingBankSoal(false);
+    }
+  };
+
+  const handleDeleteFullBankSoal = async (examId: number, title: string) => {
+    setIsDeletingBankSoal(true);
+    setBankSoalFeedback(null);
+    setUploadStatus(null);
+    try {
+      await deleteExamCbt(examId, title);
+      setBankSoalDeleteModal(null);
+      setIsBankSoalDetailOpen(false);
+      if (selectedExamId === examId) {
+        const remaining = exams.filter((e) => e.id !== examId);
+        setSelectedExamId(remaining.length > 0 ? remaining[0].id : null);
+      }
+      setBankSoalFeedback({
+        type: 'success',
+        message: `Bank Soal "${title}" beserta seluruh butir soalnya telah berhasil dihapus dari sistem.`,
+      });
+      await onRefreshData();
+    } catch (err: any) {
+      setBankSoalFeedback({
+        type: 'error',
+        message: err.message || 'Gagal menghapus Bank Soal dari sistem.',
+      });
+    } finally {
+      setIsDeletingBankSoal(false);
+    }
   };
 
   // --- Student Database CRUD, Status Management & Excel/CSV Handlers ---
@@ -1360,6 +1421,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const examForResult = questions.filter((q) => q.exam_id === result.exam_id);
     if (!student) return;
 
+    const answeredCount = Object.keys(result.jawaban_siswa || {}).filter(
+      (k) =>
+        Array.isArray(result.jawaban_siswa[k]) &&
+        result.jawaban_siswa[k].length > 0
+    ).length;
+
+    if (result.skor_angka === 0 || answeredCount === 0) {
+      setAiErrorBanner(
+        `Skor 0: Analisis AI tidak tersedia untuk hasil ujian kosong (${student.nama}).`
+      );
+      return;
+    }
+
     setAnalyzingResultId(result.id);
     setAiErrorBanner(null);
 
@@ -1387,11 +1461,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleBatchAiAnalysisForList = async (targetList: ResultItem[]) => {
-    if (targetList.length === 0) return;
+    const validTargets = targetList.filter((resItem) => {
+      const answeredCount = Object.keys(resItem.jawaban_siswa || {}).filter(
+        (k) =>
+          Array.isArray(resItem.jawaban_siswa[k]) &&
+          resItem.jawaban_siswa[k].length > 0
+      ).length;
+      return resItem.skor_angka > 0 && answeredCount > 0;
+    });
+
+    if (validTargets.length === 0) {
+      setAiErrorBanner(
+        'Tidak ada hasil ujian dengan skor > 0 untuk dianalisis oleh AI.'
+      );
+      return;
+    }
+
     setIsAnalyzingBatchClass(true);
     setAiErrorBanner(null);
     try {
-      for (const resItem of targetList) {
+      for (const resItem of validTargets) {
         const student = students.find((s) => s.id === resItem.student_id);
         const examForResult = questions.filter(
           (q) => q.exam_id === resItem.exam_id
@@ -1560,7 +1649,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 role="tab"
                 aria-selected={activeTab === 'soal'}
-                onClick={() => setActiveTab('soal')}
+                onClick={() => {
+                  setActiveTab('soal');
+                  setIsBankSoalDetailOpen(false);
+                }}
                 className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
                   activeTab === 'soal'
                     ? 'bg-white text-slate-900 shadow-xs'
@@ -1908,6 +2000,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   onClick={() => {
                                     setSelectedExamId(ex.id);
                                     setActiveTab('soal');
+                                    setIsBankSoalDetailOpen(true);
                                   }}
                                   className="px-2.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                                 >
@@ -2744,12 +2837,323 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 3: BANK SOAL (TAMBAH SOAL MANUAL & UPLOAD SOAL MASSAL EXCEL/CSV)   */}
+      {/* TAB 3: BANK SOAL (DAFTAR BANK SOAL -> KLIK BARU KELUAR SEMUA SOALNYA) */}
       {/* ===================================================================== */}
       {activeTab === 'soal' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left 5 Cols: Input Soal Manual atau Upload Excel/CSV */}
-          <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+        <div className="space-y-6">
+          {/* Notifikasi Feedback Hapus / Kelola Bank Soal */}
+          {bankSoalFeedback && (
+            <div
+              role="status"
+              className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${
+                bankSoalFeedback.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  : 'bg-red-50 border-red-200 text-red-900'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 text-xs font-semibold">
+                {bankSoalFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                )}
+                <span>{bankSoalFeedback.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBankSoalFeedback(null)}
+                className="text-xs font-semibold underline opacity-75 hover:opacity-100 cursor-pointer shrink-0"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
+
+          {/* Modal / Panel Konfirmasi Hapus Bank Soal */}
+          {bankSoalDeleteModal && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="modal-hapus-bank-soal-title"
+              className="bg-red-50/90 border-2 border-red-300 rounded-xl p-5 space-y-4 shadow-sm"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-red-700">
+                    <Trash2 className="w-4 h-4" />
+                    Konfirmasi Hapus Bank Soal dari Sistem
+                  </div>
+                  <h3
+                    id="modal-hapus-bank-soal-title"
+                    className="text-base font-bold text-slate-900"
+                  >
+                    Hapus Bank Soal: &ldquo;{bankSoalDeleteModal.title}&rdquo; ({bankSoalDeleteModal.questionCount} Butir Soal)
+                  </h3>
+                  <p className="text-xs text-slate-700 leading-relaxed max-w-3xl">
+                    Pilih tindakan penghapusan yang Anda inginkan: Anda dapat{' '}
+                    <strong>mengosongkan seluruh butir soalnya saja</strong>{' '}
+                    (agar nama paket ujian tetap ada dan bisa diupload soal baru), atau{' '}
+                    <strong>menghapus permanen Bank Soal beserta Paket Ujiannya</strong>{' '}
+                    dari sistem.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={isDeletingBankSoal}
+                  onClick={() => setBankSoalDeleteModal(null)}
+                  className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-300 rounded-md cursor-pointer"
+                >
+                  Batal
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                {bankSoalDeleteModal.questionCount > 0 && (
+                  <button
+                    type="button"
+                    disabled={isDeletingBankSoal}
+                    onClick={() =>
+                      handleClearBankSoalOnly(
+                        bankSoalDeleteModal.examId,
+                        bankSoalDeleteModal.title
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    {isDeletingBankSoal
+                      ? 'Memproses...'
+                      : `Kosongkan Isi Soal Saja (${bankSoalDeleteModal.questionCount} Soal)`}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={isDeletingBankSoal}
+                  onClick={() =>
+                    handleDeleteFullBankSoal(
+                      bankSoalDeleteModal.examId,
+                      bankSoalDeleteModal.title
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {isDeletingBankSoal
+                    ? 'Menghapus Bank Soal...'
+                    : 'Hapus Permanen Bank Soal & Paket Ujian'}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isDeletingBankSoal}
+                  onClick={() => setBankSoalDeleteModal(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!isBankSoalDetailOpen && exams.length > 0 ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Daftar Bank Soal Ujian ({exams.length} Paket Bank Soal · Total {questions.length} Butir Soal)
+                  </h2>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Pilih atau klik salah satu <strong>Bank Soal</strong> di bawah ini untuk melihat seluruh daftar butir soal, kunci jawaban, menambah/upload soal, atau menghapus bank soal.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('ujian')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors shrink-0 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Buat Paket Bank Soal Baru
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                      <th className="py-3.5 px-4">Nama Bank Soal / Paket Ujian</th>
+                      <th className="py-3.5 px-4">Target Distribusi Kelas</th>
+                      <th className="py-3.5 px-4 text-right">Durasi</th>
+                      <th className="py-3.5 px-4 text-right">Jumlah Butir Soal</th>
+                      <th className="py-3.5 px-4">Komposisi Tipe & Kognitif</th>
+                      <th className="py-3.5 px-4 text-right">Aksi & Hapus Bank Soal</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 text-sm">
+                    {exams.map((ex) => {
+                      const exQuestions = questions.filter(
+                        (q) => Number(q.exam_id) === Number(ex.id)
+                      );
+                      const pgKompleksCount = exQuestions.filter(
+                        (q) => q.tipe_soal === 'Kompleks'
+                      ).length;
+                      const pgBiasaCount = exQuestions.length - pgKompleksCount;
+                      const hotsCount = exQuestions.filter(
+                        (q) => classifyQuestionCognitiveLevel(q) === 'HOTS'
+                      ).length;
+                      const lotsCount = exQuestions.length - hotsCount;
+
+                      return (
+                        <tr
+                          key={ex.id}
+                          onClick={() => {
+                            setSelectedExamId(ex.id);
+                            setIsBankSoalDetailOpen(true);
+                          }}
+                          className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                        >
+                          <td className="py-4 px-4">
+                            <div className="font-bold text-slate-900 group-hover:text-blue-700 transition-colors">
+                              {ex.judul_ujian}
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-0.5">
+                              Klik untuk membuka daftar seluruh soal pada bank soal ini
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 text-xs font-medium text-blue-700">
+                            {formatDistribusiLabel(
+                              ex.target_tingkat,
+                              ex.target_kelas
+                            )}
+                          </td>
+                          <td className="py-4 px-4 text-right font-mono tabular-nums text-xs text-slate-700">
+                            {ex.durasi_menit} Menit
+                          </td>
+                          <td className="py-4 px-4 text-right">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold font-mono tabular-nums bg-blue-50 text-blue-800 border border-blue-200">
+                              {exQuestions.length} Soal
+                            </span>
+                          </td>
+                          <td className="py-4 px-4 text-xs text-slate-600">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">
+                                PG Biasa: {pgBiasaCount}
+                              </span>
+                              <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 font-medium">
+                                PG Kompleks: {pgKompleksCount}
+                              </span>
+                              <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 font-medium">
+                                LOTS: {lotsCount} · HOTS: {hotsCount}
+                              </span>
+                            </div>
+                          </td>
+                          <td
+                            className="py-4 px-4 text-right"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="inline-flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedExamId(ex.id);
+                                  setIsBankSoalDetailOpen(true);
+                                }}
+                                className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                              >
+                                Buka Bank Soal ({exQuestions.length} Soal)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setBankSoalDeleteModal({
+                                    examId: ex.id,
+                                    title: ex.judul_ujian,
+                                    questionCount: exQuestions.length,
+                                  })
+                                }
+                                aria-label={`Hapus Bank Soal ${ex.judul_ujian}`}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Hapus Bank Soal
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {exams.length > 0 && (
+                <div className="bg-white border border-slate-200 rounded-xl px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsBankSoalDetailOpen(false)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                    >
+                      ← Kembali ke Daftar Bank Soal
+                    </button>
+                    <div>
+                      <div className="text-sm font-bold text-slate-900">
+                        Bank Soal: {currentExam?.judul_ujian || 'Paket Ujian'}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        Menampilkan {currentExamQuestions.length} butir soal pada paket bank soal ini
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label
+                      htmlFor="quick-switch-bank-soal"
+                      className="text-xs font-medium text-slate-600"
+                    >
+                      Ganti Bank Soal:
+                    </label>
+                    <select
+                      id="quick-switch-bank-soal"
+                      value={currentExam?.id || ''}
+                      onChange={(e) => setSelectedExamId(Number(e.target.value))}
+                      className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg text-slate-800"
+                    >
+                      {exams.map((ex) => {
+                        const cnt = questions.filter(
+                          (q) => Number(q.exam_id) === Number(ex.id)
+                        ).length;
+                        return (
+                          <option key={ex.id} value={ex.id}>
+                            {ex.judul_ujian} ({cnt} Soal)
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {currentExam && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBankSoalDeleteModal({
+                            examId: currentExam.id,
+                            title: currentExam.judul_ujian,
+                            questionCount: currentExamQuestions.length,
+                          })
+                        }
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Hapus Bank Soal Ini
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Left 5 Cols: Input Soal Manual atau Upload Excel/CSV */}
+                <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
             <div>
               <label
                 htmlFor="select-active-exam-soal"
@@ -3396,6 +3800,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
           </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -3898,21 +4305,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   Lihat Hasil AI
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleGenerateAiAnalysis(resItem)
-                                }
-                                disabled={isBusy}
-                                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                              >
-                                <Sparkles className="w-3.5 h-3.5" />
-                                {isBusy
-                                  ? 'Menganalisis...'
-                                  : hasAi
-                                    ? 'Re-Generate AI Analysis'
-                                    : 'Generate AI Analysis'}
-                              </button>
+                              {resItem.skor_angka > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleGenerateAiAnalysis(resItem)
+                                  }
+                                  disabled={isBusy}
+                                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                  {isBusy
+                                    ? 'Menganalisis...'
+                                    : hasAi
+                                      ? 'Re-Generate AI Analysis'
+                                      : 'Generate AI Analysis'}
+                                </button>
+                              ) : (
+                                <span className="px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md whitespace-nowrap">
+                                  Skor 0: Analisis AI Nonaktif
+                                </span>
+                              )}
                             </div>
                           </td>
                         </tr>

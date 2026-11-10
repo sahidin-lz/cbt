@@ -105,16 +105,16 @@ export default function App() {
   useEffect(() => {
     const unsubCollections = subscribeRealtimeFirestoreCollections({
       onExams: (items) => {
-        if (items.length > 0) setExams(items);
+        setExams(items);
       },
       onStudents: (items) => {
-        if (items.length > 0) setStudents(items);
+        setStudents(items);
       },
       onQuestions: (items) => {
-        if (items.length > 0) setQuestions(items);
+        setQuestions(items);
       },
       onResults: (items) => {
-        if (items.length > 0) setResults(items);
+        setResults(items);
       },
     });
 
@@ -134,6 +134,18 @@ export default function App() {
       unsubPulse();
     };
   }, [fetchDashboardData]);
+
+  // Ensure only questions and results belonging to active exams & students are counted
+  const activeExamIds = new Set(exams.map((e) => Number(e.id)));
+  const activeStudentIds = new Set(students.map((s) => Number(s.id)));
+  const activeQuestions = questions.filter((q) =>
+    activeExamIds.has(Number(q.exam_id))
+  );
+  const activeResults = results.filter(
+    (r) =>
+      activeExamIds.has(Number(r.exam_id)) &&
+      activeStudentIds.has(Number(r.student_id))
+  );
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
@@ -228,9 +240,9 @@ export default function App() {
         ) : (
           <AdminDashboard
             exams={exams}
-            questions={questions}
+            questions={activeQuestions}
             students={students}
-            results={results}
+            results={activeResults}
             onRefreshData={fetchDashboardData}
             syncPulse={syncPulse}
             isSyncingFirebase={isSyncingFirebase}

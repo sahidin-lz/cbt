@@ -536,6 +536,15 @@ app.post('/api/exam/submit', async (req, res) => {
     if (!studentId || !examId || !jawabanSiswa) {
       return res.status(400).json({ error: 'Data jawaban ujian tidak lengkap.' });
     }
+    const answeredKeys = Object.keys(jawabanSiswa || {}).filter(
+      (k) => Array.isArray(jawabanSiswa[k]) && jawabanSiswa[k].length > 0
+    );
+    if (answeredKeys.length === 0) {
+      return res.status(400).json({
+        error:
+          'Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!',
+      });
+    }
     const outcome = await submitStudentExamResult(
       Number(studentId),
       Number(examId),
@@ -562,7 +571,16 @@ app.post('/api/analyze', async (req, res) => {
       });
     }
 
+    const answeredKeys = Object.keys(jawaban_siswa || {}).filter(
+      (k) => Array.isArray(jawaban_siswa[k]) && jawaban_siswa[k].length > 0
+    );
     const scoreSummary = calculateExamScore(examQuestions, jawaban_siswa);
+
+    if (answeredKeys.length === 0 || scoreSummary.rawEarned === 0) {
+      return res.status(400).json({
+        error: 'Skor 0: Analisis AI tidak tersedia untuk ujian kosong.',
+      });
+    }
 
     const detailItems = examQuestions.map((q: any, idx: number) => {
       const qId = String(q.id);

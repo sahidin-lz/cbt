@@ -158,7 +158,43 @@ export async function fetchAllFromFirestore(): Promise<{
       })
       .sort((a, b) => b.id - a.id);
 
-    return { exams, students, questions, results };
+    const validExamIds = new Set(exams.map((e) => Number(e.id)));
+    const validStudentIds = new Set(students.map((s) => Number(s.id)));
+
+    const orphanedQuestionDocs = qSnap.docs.filter((d) => {
+      const raw = d.data() as any;
+      return !validExamIds.has(Number(raw.exam_id));
+    });
+    const orphanedResultDocs = rSnap.docs.filter((d) => {
+      const raw = d.data() as any;
+      return (
+        !validExamIds.has(Number(raw.exam_id)) ||
+        !validStudentIds.has(Number(raw.student_id))
+      );
+    });
+
+    if (orphanedQuestionDocs.length > 0 || orphanedResultDocs.length > 0) {
+      const cleanupBatch = writeBatch(db);
+      orphanedQuestionDocs.forEach((d) => cleanupBatch.delete(d.ref));
+      orphanedResultDocs.forEach((d) => cleanupBatch.delete(d.ref));
+      cleanupBatch.commit().catch(() => {});
+    }
+
+    const validQuestions = questions.filter((q) =>
+      validExamIds.has(Number(q.exam_id))
+    );
+    const validResults = results.filter(
+      (r) =>
+        validExamIds.has(Number(r.exam_id)) &&
+        validStudentIds.has(Number(r.student_id))
+    );
+
+    return {
+      exams,
+      students,
+      questions: validQuestions,
+      results: validResults,
+    };
   } catch (err) {
     try {
       handleFirestoreError(err, OperationType.GET, 'exams|students|questions|results');
@@ -472,8 +508,26 @@ export async function saveExamCbt(
 export async function deleteExamCbt(examId: number, title: string): Promise<void> {
   await safeApiJson(`/api/exams/${examId}`, { method: 'DELETE' });
   if (db) {
-    await deleteDoc(doc(db, 'exams', String(examId)));
-    await updateFirestorePulse(`Paket ujian "${title}" dihapus`);
+    const [qSnap, rSnap] = await Promise.all([
+      getDocs(cbtCollectionQuery('questions')),
+      getDocs(cbtCollectionQuery('results')),
+    ]);
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'exams', String(examId)));
+    qSnap.docs.forEach((d) => {
+      const raw = d.data() as any;
+      if (Number(raw.exam_id) === Number(examId)) {
+        batch.delete(d.ref);
+      }
+    });
+    rSnap.docs.forEach((d) => {
+      const raw = d.data() as any;
+      if (Number(raw.exam_id) === Number(examId)) {
+        batch.delete(d.ref);
+      }
+    });
+    await batch.commit();
+    await updateFirestorePulse(`Paket ujian "${title}" beserta soal terkait dihapus`);
   }
 }
 
@@ -1043,14 +1097,31 @@ export async function clearExamQuestionsCbt(
   currentQuestions: QuestionItem[]
 ): Promise<number> {
   await safeApiJson(`/api/exams/${examId}/questions`, { method: 'DELETE' });
-  const toRemove = currentQuestions.filter((q) => q.exam_id === examId);
-  if (db && toRemove.length > 0) {
-    const batch = writeBatch(db);
-    toRemove.forEach((q) => batch.delete(doc(db!, 'questions', String(q.id))));
-    await batch.commit();
-    await updateFirestorePulse(
-      `Semua soal (${toRemove.length} butir) pada ujian #${examId} dikosongkan`
+  const toRemove = currentQuestions.filter(
+    (q) => Number(q.exam_id) === Number(examId)
+  );
+  if (db) {
+    const qSnap = await getDocs(cbtCollectionQuery('questions'));
+    const matchingDocIds = new Set<string>(
+      toRemove.map((q) => String(q.id))
     );
+    qSnap.docs.forEach((d) => {
+      const data = d.data();
+      if (Number(data.exam_id) === Number(examId)) {
+        matchingDocIds.add(d.id);
+      }
+    });
+    if (matchingDocIds.size > 0) {
+      const batch = writeBatch(db);
+      matchingDocIds.forEach((docId) =>
+        batch.delete(doc(db!, 'questions', docId))
+      );
+      await batch.commit();
+      await updateFirestorePulse(
+        `Semua soal (${matchingDocIds.size} butir) pada bank soal ujian #${examId} dihapus`
+      );
+      return matchingDocIds.size;
+    }
   }
   return toRemove.length;
 }
@@ -1223,6 +1294,17 @@ export async function submitStudentExamCbt(payload: {
   rawEarned: number;
   rawMax: number;
 }> {
+  const answeredKeys = Object.keys(payload.jawabanSiswa || {}).filter(
+    (k) =>
+      Array.isArray(payload.jawabanSiswa[k]) &&
+      payload.jawabanSiswa[k].length > 0
+  );
+  if (answeredKeys.length === 0) {
+    throw new Error(
+      'Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!'
+    );
+  }
+
   const scoreSummary = calculateExamScore(
     payload.questions,
     payload.jawabanSiswa
@@ -1290,6 +1372,22 @@ export async function generateAiAnalysisCbt(payload: {
   jawaban_siswa: Record<string, string[]>;
   existingResult?: ResultItem;
 }): Promise<AnalisisAI> {
+  const answeredKeys = Object.keys(payload.jawaban_siswa || {}).filter(
+    (k) =>
+      Array.isArray(payload.jawaban_siswa[k]) &&
+      payload.jawaban_siswa[k].length > 0
+  );
+  const preScore = calculateExamScore(
+    payload.questions,
+    payload.jawaban_siswa || {}
+  );
+
+  if (answeredKeys.length === 0 || preScore.rawEarned === 0) {
+    throw new Error(
+      'Skor 0: Analisis AI tidak tersedia untuk ujian kosong atau belum ada jawaban benar.'
+    );
+  }
+
   const apiRes = await safeApiJson<AnalisisAI & { error?: string }>(
     '/api/analyze',
     {
@@ -1310,10 +1408,7 @@ export async function generateAiAnalysisCbt(payload: {
     aiAnalysis = apiRes.data;
   } else {
     // Structured cognitive LOTS vs HOTS evaluation rubric when running on static Vercel without backend server
-    const scoreSummary = calculateExamScore(
-      payload.questions,
-      payload.jawaban_siswa
-    );
+    const scoreSummary = preScore;
     const detailItems = payload.questions.map((q, idx) => {
       const qId = String(q.id);
       const breakdownItem = scoreSummary.breakdown.find(

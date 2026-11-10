@@ -65,15 +65,13 @@ export const ClassPerformanceLotsHotsChart: React.FC<
     'SEMUA' | '10' | '11' | '12'
   >('SEMUA');
 
-  // Count how many classes actually have submitted results
+  // Count how many classes and total students actually have submitted results
   const classesWithActualResults = useMemo(
     () => classAnalytics.perClass.filter((c) => c.resultCount > 0).length,
     [classAnalytics.perClass]
   );
 
-  const [dataScopeMode, setDataScopeMode] = useState<'hybrid' | 'actualOnly'>(
-    'hybrid'
-  );
+  const totalActualResults = classAnalytics.overall.resultCount;
 
   // Question bank LOTS vs HOTS breakdown
   const questionBankStats = useMemo(() => {
@@ -122,140 +120,39 @@ export const ClassPerformanceLotsHotsChart: React.FC<
     };
   }, [questions, exams]);
 
-  // Build chart data rows for each class
+  // Build chart data rows strictly from real class results (0 when no student has taken the exam yet)
   const chartData: ChartRowData[] = useMemo(() => {
     const baseClasses = classAnalytics.perClass.filter((cls) => {
       if (tingkatFilter === 'SEMUA') return true;
       return cls.tingkat === tingkatFilter;
     });
 
-    const rows: ChartRowData[] = baseClasses.map((cls, idx) => {
-      if (cls.resultCount > 0) {
-        return {
-          kelas: cls.kelas,
-          shortKelas: cls.shortKelas,
-          tingkat:
-            cls.tingkat === 'LAINNYA' ? 'Umum' : `Kelas ${cls.tingkat}`,
-          lotsScore: cls.lotsScore,
-          hotsScore: cls.hotsScore,
-          averageScore: cls.averageScore,
-          passRate: cls.passRate,
-          cognitiveGap: cls.cognitiveGap,
-          resultCount: cls.resultCount,
-          totalStudents: cls.totalStudents,
-          isProjected: false,
-        };
-      }
+    return baseClasses.map((cls) => ({
+      kelas: cls.kelas,
+      shortKelas: cls.shortKelas,
+      tingkat: cls.tingkat === 'LAINNYA' ? 'Umum' : `Kelas ${cls.tingkat}`,
+      lotsScore: cls.resultCount > 0 ? cls.lotsScore : 0,
+      hotsScore: cls.resultCount > 0 ? cls.hotsScore : 0,
+      averageScore: cls.resultCount > 0 ? cls.averageScore : 0,
+      passRate: cls.resultCount > 0 ? cls.passRate : 0,
+      cognitiveGap: cls.resultCount > 0 ? cls.cognitiveGap : 0,
+      resultCount: cls.resultCount,
+      totalStudents: cls.totalStudents,
+      isProjected: false,
+    }));
+  }, [classAnalytics.perClass, tingkatFilter]);
 
-      if (dataScopeMode === 'actualOnly') {
-        return {
-          kelas: cls.kelas,
-          shortKelas: cls.shortKelas,
-          tingkat:
-            cls.tingkat === 'LAINNYA' ? 'Umum' : `Kelas ${cls.tingkat}`,
-          lotsScore: 0,
-          hotsScore: 0,
-          averageScore: 0,
-          passRate: 0,
-          cognitiveGap: 0,
-          resultCount: 0,
-          totalStudents: cls.totalStudents,
-          isProjected: false,
-        };
-      }
-
-      // Deterministic readiness benchmark based on class size, grade level, and question bank LOTS/HOTS ratio
-      const seed =
-        cls.kelas
-          .split('')
-          .reduce((acc, ch) => acc + ch.charCodeAt(0), 0) +
-        idx * 7;
-      const baseLots = 76 + (seed % 14); // 76 - 89
-      const baseHots = Math.max(
-        58,
-        baseLots - (8 + (seed % 11))
-      ); // realistic HOTS gap
-      const avg = Math.round(((baseLots + baseHots) / 2) * 10) / 10;
-      const pass = Math.min(96, Math.max(62, Math.round(avg - 4 + (seed % 9))));
-
-      return {
-        kelas: cls.kelas,
-        shortKelas: cls.shortKelas,
-        tingkat:
-          cls.tingkat === 'LAINNYA' ? 'Umum' : `Kelas ${cls.tingkat}`,
-        lotsScore: baseLots,
-        hotsScore: baseHots,
-        averageScore: avg,
-        passRate: pass,
-        cognitiveGap: Math.round((baseLots - baseHots) * 10) / 10,
-        resultCount: 0,
-        totalStudents: cls.totalStudents,
-        isProjected: true,
-      };
-    });
-
-    // If no classes exist at all yet, provide 3 default grade-level benchmark rows
-    if (rows.length === 0) {
-      return [
-        {
-          kelas: 'Kelas X (Tingkat 10)',
-          shortKelas: 'Kelas X',
-          tingkat: 'Kelas 10',
-          lotsScore: 82,
-          hotsScore: 71,
-          averageScore: 76.5,
-          passRate: 78,
-          cognitiveGap: 11,
-          resultCount: 0,
-          totalStudents: 0,
-          isProjected: true,
-        },
-        {
-          kelas: 'Kelas XI (Tingkat 11)',
-          shortKelas: 'Kelas XI',
-          tingkat: 'Kelas 11',
-          lotsScore: 85,
-          hotsScore: 74,
-          averageScore: 79.5,
-          passRate: 82,
-          cognitiveGap: 11,
-          resultCount: 0,
-          totalStudents: 0,
-          isProjected: true,
-        },
-        {
-          kelas: 'Kelas XII (Tingkat 12)',
-          shortKelas: 'Kelas XII',
-          tingkat: 'Kelas 12',
-          lotsScore: 88,
-          hotsScore: 79,
-          averageScore: 83.5,
-          passRate: 88,
-          cognitiveGap: 9,
-          resultCount: 0,
-          totalStudents: 0,
-          isProjected: true,
-        },
-      ];
-    }
-
-    return rows;
-  }, [classAnalytics.perClass, tingkatFilter, dataScopeMode]);
-
-  // Aggregate summary metrics across the currently displayed chart rows
+  // Aggregate summary metrics strictly across classes with actual submitted results
   const summaryStats = useMemo(() => {
-    const activeRows =
-      dataScopeMode === 'actualOnly'
-        ? chartData.filter((r) => r.resultCount > 0)
-        : chartData;
+    const activeRows = chartData.filter((r) => r.resultCount > 0);
 
     if (activeRows.length === 0) {
       return {
-        avgLots: classAnalytics.overall.lotsScore,
-        avgHots: classAnalytics.overall.hotsScore,
-        gap: classAnalytics.overall.cognitiveGap,
-        avgOverall: classAnalytics.overall.averageScore,
-        avgPassRate: classAnalytics.overall.passRate,
+        avgLots: 0,
+        avgHots: 0,
+        gap: 0,
+        avgOverall: 0,
+        avgPassRate: 0,
       };
     }
 
@@ -288,7 +185,7 @@ export const ClassPerformanceLotsHotsChart: React.FC<
       avgOverall,
       avgPassRate,
     };
-  }, [chartData, dataScopeMode, classAnalytics.overall]);
+  }, [chartData]);
 
   // Radar profile data for the 5 cognitive dimensions
   const radarData = useMemo(() => {
@@ -315,7 +212,7 @@ export const ClassPerformanceLotsHotsChart: React.FC<
       },
       {
         metric: 'Porsi Soal HOTS',
-        skorSekolah: questionBankStats.hotsPct || 50,
+        skorSekolah: questionBankStats.hotsPct || 0,
         targetKkm: 50,
       },
     ];
@@ -340,7 +237,7 @@ export const ClassPerformanceLotsHotsChart: React.FC<
             <strong>LOTS (Lower-Order Thinking Skills: C1–C3 / PG Biasa)</strong>{' '}
             terhadap kemampuan berpikir tingkat tinggi{' '}
             <strong>
-              HOTS (Higher-Order Thinking Skills: C4–C6 / PG Kompleks & Analisis Wacana)
+              HOTS (Higher-Order Thinking Skills: C4–C6 / PG Kompleks &amp; Analisis Wacana)
             </strong>{' '}
             di setiap kelas.
           </p>
@@ -404,34 +301,9 @@ export const ClassPerformanceLotsHotsChart: React.FC<
             ))}
           </div>
 
-          {/* Toggle Mode Data Aktual vs Proyeksi */}
-          <div
-            role="group"
-            aria-label="Mode Data Grafik"
-            className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200"
-          >
-            <button
-              type="button"
-              onClick={() => setDataScopeMode('hybrid')}
-              className={`px-2.5 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                dataScopeMode === 'hybrid'
-                  ? 'bg-white text-blue-700 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Aktual + Proyeksi Kelas
-            </button>
-            <button
-              type="button"
-              onClick={() => setDataScopeMode('actualOnly')}
-              className={`px-2.5 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                dataScopeMode === 'actualOnly'
-                  ? 'bg-white text-blue-700 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Hanya Hasil Masuk ({classesWithActualResults})
-            </button>
+          {/* Info Status Data Aktual */}
+          <div className="px-3 py-1.5 text-xs font-semibold rounded-lg border bg-slate-50 border-slate-200 text-slate-700">
+            Data Aktual: {totalActualResults} Siswa Selesai ({classesWithActualResults} Kelas)
           </div>
         </div>
       </div>
@@ -443,11 +315,13 @@ export const ClassPerformanceLotsHotsChart: React.FC<
             Rata-Rata Capaian LOTS (C1–C3)
           </div>
           <div className="text-2xl font-bold font-mono tabular-nums text-blue-700 mt-1">
-            {summaryStats.avgLots}
+            {totalActualResults > 0 ? summaryStats.avgLots : 0}
             <span className="text-xs font-normal text-slate-500">/100</span>
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
-            Pemahaman konsep dasar &amp; fakta tunggal · {questionBankStats.lotsCount} butir soal
+            {totalActualResults > 0
+              ? `Berdasarkan ${totalActualResults} hasil siswa · ${questionBankStats.lotsCount} soal LOTS`
+              : `Belum ada siswa mengerjakan · ${questionBankStats.lotsCount} butir soal LOTS`}
           </div>
         </div>
 
@@ -456,11 +330,13 @@ export const ClassPerformanceLotsHotsChart: React.FC<
             Rata-Rata Capaian HOTS (C4–C6)
           </div>
           <div className="text-2xl font-bold font-mono tabular-nums text-teal-700 mt-1">
-            {summaryStats.avgHots}
+            {totalActualResults > 0 ? summaryStats.avgHots : 0}
             <span className="text-xs font-normal text-slate-500">/100</span>
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
-            Analisis wacana &amp; evaluasi multi-opsi · {questionBankStats.hotsCount} butir soal
+            {totalActualResults > 0
+              ? `Berdasarkan ${totalActualResults} hasil siswa · ${questionBankStats.hotsCount} soal HOTS`
+              : `Belum ada siswa mengerjakan · ${questionBankStats.hotsCount} butir soal HOTS`}
           </div>
         </div>
 
@@ -469,13 +345,19 @@ export const ClassPerformanceLotsHotsChart: React.FC<
             Selisih / Gap Kognitif (LOTS − HOTS)
           </div>
           <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
-            {summaryStats.gap > 0 ? `+${summaryStats.gap}` : summaryStats.gap}
+            {totalActualResults > 0
+              ? summaryStats.gap > 0
+                ? `+${summaryStats.gap}`
+                : summaryStats.gap
+              : 0}
             <span className="text-xs font-normal text-slate-500"> poin</span>
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
-            {Math.abs(summaryStats.gap) <= 10
-              ? 'Proporsi penalaran LOTS & HOTS seimbang'
-              : 'Perlu penguatan latihan soal analisis wacana (HOTS)'}
+            {totalActualResults === 0
+              ? 'Masih kosong (menunggu siswa menyelesaikan ujian)'
+              : Math.abs(summaryStats.gap) <= 10
+                ? 'Proporsi penalaran LOTS & HOTS seimbang'
+                : 'Perlu penguatan latihan soal analisis wacana (HOTS)'}
           </div>
         </div>
 
@@ -488,10 +370,25 @@ export const ClassPerformanceLotsHotsChart: React.FC<
             {questionBankStats.hotsCount} ({questionBankStats.hotsPct}%)
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
-            Target KKM: 70/100 · Ketuntasan Kelas: {summaryStats.avgPassRate}%
+            Target KKM: 70/100 · Ketuntasan Aktual: {summaryStats.avgPassRate}%
           </div>
         </div>
       </div>
+
+      {/* Empty State Notice when 0 students have completed the exam */}
+      {totalActualResults === 0 && (
+        <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+          <span>
+            <strong>Status Data Kelas Masih Kosong (0 Siswa Selesai):</strong>{' '}
+            Belum ada siswa yang mengumpulkan ujian. Grafik capaian LOTS vs HOTS
+            di setiap kelas bernilai <strong>0</strong> dan akan terisi otomatis
+            begitu siswa menyelesaikan ujian.
+          </span>
+          <span className="font-mono text-[11px] text-slate-500">
+            Hasil Ujian Masuk: 0 Peserta
+          </span>
+        </div>
+      )}
 
       {/* Main Recharts Canvas */}
       {chartType === 'bar' && (
@@ -504,8 +401,8 @@ export const ClassPerformanceLotsHotsChart: React.FC<
             </span>
             <span className="font-mono text-[11px] text-slate-500">
               {classesWithActualResults > 0
-                ? `${classesWithActualResults} kelas memiliki hasil aktual`
-                : 'Menampilkan simulasi kesiapan kelas (0 hasil ujian masuk)'}
+                ? `${classesWithActualResults} kelas memiliki hasil ujian masuk`
+                : 'Belum ada hasil ujian masuk (Semua Kelas: 0)'}
             </span>
           </div>
 
@@ -563,9 +460,11 @@ export const ClassPerformanceLotsHotsChart: React.FC<
                     color: '#0F172A',
                   }}
                   formatter={(value: any, name: any, props: any) => {
-                    const suffix = props?.payload?.isProjected
-                      ? ' (Proyeksi Kesiapan)'
-                      : ' (Data Aktual)';
+                    const count = props?.payload?.resultCount || 0;
+                    const suffix =
+                      count > 0
+                        ? ` (${count} siswa selesai)`
+                        : ' (Belum ada siswa mengerjakan)';
                     return [`${value}/100${suffix}`, name];
                   }}
                   labelFormatter={(label, payload) => {
@@ -573,7 +472,7 @@ export const ClassPerformanceLotsHotsChart: React.FC<
                       | ChartRowData
                       | undefined;
                     if (!row) return String(label);
-                    return `${row.kelas} (${row.tingkat}) · ${row.totalStudents} Siswa`;
+                    return `${row.kelas} (${row.tingkat}) · ${row.resultCount}/${row.totalStudents} Siswa Selesai`;
                   }}
                 />
                 <Legend

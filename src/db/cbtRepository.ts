@@ -46,11 +46,36 @@ export async function getDashboardData() {
     const allQuestions = await db.select().from(questions).orderBy(questions.id);
     const allResults = await db.select().from(results).orderBy(desc(results.created_at));
 
+    const validExamIds = new Set(allExams.map((e) => Number(e.id)));
+    const validStudentIds = new Set(allStudents.map((s) => Number(s.id)));
+
+    const orphanedQuestionIds = allQuestions
+      .filter((q) => !validExamIds.has(Number(q.exam_id)))
+      .map((q) => q.id);
+    if (orphanedQuestionIds.length > 0) {
+      await db.delete(questions).where(inArray(questions.id, orphanedQuestionIds));
+    }
+
+    const orphanedResultIds = allResults
+      .filter(
+        (r) =>
+          !validExamIds.has(Number(r.exam_id)) ||
+          !validStudentIds.has(Number(r.student_id))
+      )
+      .map((r) => r.id);
+    if (orphanedResultIds.length > 0) {
+      await db.delete(results).where(inArray(results.id, orphanedResultIds));
+    }
+
     return {
       exams: allExams,
       students: allStudents,
-      questions: allQuestions,
-      results: allResults,
+      questions: allQuestions.filter((q) => validExamIds.has(Number(q.exam_id))),
+      results: allResults.filter(
+        (r) =>
+          validExamIds.has(Number(r.exam_id)) &&
+          validStudentIds.has(Number(r.student_id))
+      ),
     };
   } catch (error) {
     console.error('Database query failed in getDashboardData:', error);
@@ -301,6 +326,7 @@ export async function bulkUpdateStudentStatusRecord(
 
 export async function deleteStudentRecord(studentId: number) {
   try {
+    await db.delete(results).where(eq(results.student_id, studentId));
     await db.delete(students).where(eq(students.id, studentId));
   } catch (error) {
     console.error('Database query failed in deleteStudentRecord:', error);
@@ -380,6 +406,8 @@ export async function updateExamRecord(
 
 export async function deleteExamRecord(examId: number) {
   try {
+    await db.delete(results).where(eq(results.exam_id, examId));
+    await db.delete(questions).where(eq(questions.exam_id, examId));
     await db.delete(exams).where(eq(exams.id, examId));
   } catch (error) {
     console.error('Database query failed in deleteExamRecord:', error);

@@ -188,6 +188,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
     const targetNama = selectedStudentObj ? selectedStudentObj.nama : namaInput.trim();
 
+    // Panggil Fullscreen SEKARANG (sebelum ada proses await/jaringan)
+    // agar browser mendeteksi sebagai Transient User Activation dari klik user.
+    requestExamFullscreen();
+
     setIsLoggingIn(true);
     try {
       const session = await loginStudentExamCbt(
@@ -208,9 +212,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setIsStudentBlocked(session.student.status_ujian === 'Diblokir');
       setSecurityNotice(null);
       setSubmittedSummary(null);
-      requestExamFullscreen();
       onExamCompleted();
     } catch (err: any) {
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
       setLoginError(err.message || 'Gagal memulai sesi ujian.');
     } finally {
       setIsLoggingIn(false);
@@ -370,6 +376,20 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   const handleSubmitExam = useCallback(async () => {
     if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked) return;
+
+    // Cek apakah siswa sudah menjawab minimal 1 soal (Cegah submit kosong & data dumi AI)
+    const currentAnsweredCount = Object.keys(answers).filter(
+      (k) => answers[k] && answers[k].length > 0
+    ).length;
+
+    if (currentAnsweredCount === 0) {
+      setSecurityNotice(
+        'Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!'
+      );
+      setConfirmSubmitModal(false);
+      return;
+    }
+
     setIsSubmitting(true);
     setConfirmSubmitModal(false);
 
@@ -455,7 +475,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   };
 
   const handleRequestInstantAiEvaluation = async () => {
-    if (!activeStudent || !submittedSummary) return;
+    if (!activeStudent || !submittedSummary || submittedSummary.rawEarned === 0) return;
+    const currentAnsweredCount = Object.keys(answers).filter(
+      (k) => answers[k] && answers[k].length > 0
+    ).length;
+    if (currentAnsweredCount === 0) return;
+
     setIsGeneratingStudentAi(true);
     try {
       const aiData = await generateAiAnalysisCbt({
@@ -519,8 +544,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               </strong>
             </div>
 
-            <div className="flex items-center gap-3">
-              {!submittedSummary.aiResult && (
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Hanya muncul jika belum ada hasil AI DAN siswa mendapatkan poin > 0 */}
+              {!submittedSummary.aiResult && submittedSummary.rawEarned > 0 && (
                 <button
                   type="button"
                   onClick={handleRequestInstantAiEvaluation}
@@ -531,6 +557,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     ? 'Menganalisis Kognitif (Gemini AI)...'
                     : 'Generate AI Analysis Sekarang'}
                 </button>
+              )}
+
+              {!submittedSummary.aiResult && submittedSummary.rawEarned === 0 && (
+                <div className="px-4 py-2 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg">
+                  Skor 0: Analisis AI tidak tersedia untuk ujian kosong.
+                </div>
               )}
               <button
                 type="button"
@@ -1333,6 +1365,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               </strong>{' '}
               soal. Apakah Anda yakin ingin mengakhiri ujian dan mengirim jawaban?
             </p>
+            {answeredCount === 0 && (
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs font-medium text-amber-800 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                <span>
+                  Peringatan: Anda belum menjawab satu soal pun. Silakan isi
+                  jawaban terlebih dahulu sebelum mengumpulkan!
+                </span>
+              </div>
+            )}
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
@@ -1345,7 +1386,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 type="button"
                 onClick={handleSubmitExam}
                 disabled={isSubmitting}
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg cursor-pointer"
               >
                 {isSubmitting ? 'Mengirim Jawaban...' : 'Ya, Kumpulkan Jawaban'}
               </button>

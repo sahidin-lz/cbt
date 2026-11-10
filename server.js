@@ -809,12 +809,39 @@ async function createManualQuestionRecord(examId, teks_soal, tipe_soal, wacana, 
     throw new Error("Gagal menambahkan butir soal baru.", { cause: error });
   }
 }
+async function updateManualQuestionRecord(questionId, examId, teks_soal, tipe_soal, wacana, opsi, kunci_jawaban, bobot) {
+  try {
+    const [updated] = await db.update(questions).set({
+      exam_id: examId,
+      teks_soal: teks_soal.trim(),
+      tipe_soal,
+      data_opsi: {
+        wacana: wacana.trim(),
+        opsi
+      },
+      kunci_jawaban,
+      bobot
+    }).where(eq(questions.id, questionId)).returning();
+    return updated;
+  } catch (error) {
+    console.error("Database query failed in updateManualQuestionRecord:", error);
+    throw new Error("Gagal memperbarui butir soal.", { cause: error });
+  }
+}
 async function deleteQuestionRecord(questionId) {
   try {
     await db.delete(questions).where(eq(questions.id, questionId));
   } catch (error) {
     console.error("Database query failed in deleteQuestionRecord:", error);
     throw new Error("Gagal menghapus butir soal.", { cause: error });
+  }
+}
+async function clearQuestionsByExamRecord(examId) {
+  try {
+    await db.delete(questions).where(eq(questions.exam_id, examId));
+  } catch (error) {
+    console.error("Database query failed in clearQuestionsByExamRecord:", error);
+    throw new Error("Gagal mengosongkan soal pada paket ujian.", { cause: error });
   }
 }
 async function addStudentRecord(nama, kelas, token) {
@@ -908,6 +935,22 @@ async function deleteStudentRecord(studentId) {
     throw new Error("Gagal menghapus siswa.", { cause: error });
   }
 }
+async function renameStudentClassRecord(oldKelas, newKelas) {
+  try {
+    return await db.update(students).set({ kelas: newKelas.trim() }).where(eq(students.kelas, oldKelas.trim())).returning();
+  } catch (error) {
+    console.error("Database query failed in renameStudentClassRecord:", error);
+    throw new Error("Gagal mengubah nama kelas.", { cause: error });
+  }
+}
+async function deleteStudentsByClassRecord(kelas) {
+  try {
+    await db.delete(students).where(eq(students.kelas, kelas.trim()));
+  } catch (error) {
+    console.error("Database query failed in deleteStudentsByClassRecord:", error);
+    throw new Error("Gagal menghapus kelas.", { cause: error });
+  }
+}
 async function createNewExamRecord(judul_ujian, durasi_menit, target_tingkat = "SEMUA", target_kelas = "SEMUA") {
   try {
     const [created] = await db.insert(exams).values({
@@ -956,7 +999,12 @@ async function verifyStudentTokenForExam(namaInput, tokenInput, examIdInput) {
     const student = matchedStudents[0];
     const cleanNama = namaInput.trim();
     if (!cleanNama) {
-      return { error: "Nama Siswa wajib diisi." };
+      return { error: "Nama Siswa wajib dipilih terlebih dahulu." };
+    }
+    if (student.nama.trim().toLowerCase() !== cleanNama.toLowerCase()) {
+      return {
+        error: `Token Ujian tidak sesuai untuk siswa "${cleanNama}". Pastikan Anda memilih Kelas, Nama Siswa, dan memasukkan 6 karakter Token milik Anda sendiri.`
+      };
     }
     if (student.status_ujian === "Diblokir") {
       return {
@@ -990,7 +1038,6 @@ async function verifyStudentTokenForExam(namaInput, tokenInput, examIdInput) {
       };
     }
     const [updatedStudent] = await db.update(students).set({
-      nama: cleanNama,
       status_ujian: "Sedang Ujian"
     }).where(eq(students.id, student.id)).returning();
     return {
@@ -1369,6 +1416,33 @@ app.post("/api/questions/manual", async (req, res) => {
     res.status(500).json({ error: error.message || "Gagal menambahkan soal." });
   }
 });
+app.put("/api/questions/:id", async (req, res) => {
+  try {
+    const qId = Number(req.params.id);
+    const { examId, teks_soal, tipe_soal, wacana, opsi, kunci_jawaban, bobot } = req.body;
+    if (!examId || !teks_soal || !opsi) {
+      return res.status(400).json({ error: "Paket ujian, teks soal, dan opsi wajib diisi." });
+    }
+    const normalizedKeys = normalizeAnswerKeys(kunci_jawaban);
+    if (normalizedKeys.length === 0) {
+      return res.status(400).json({ error: "Pilih minimal satu kunci jawaban yang benar (A-E)." });
+    }
+    const updated = await updateManualQuestionRecord(
+      qId,
+      Number(examId),
+      String(teks_soal),
+      tipe_soal === "Kompleks" ? "Kompleks" : "PG",
+      String(wacana || ""),
+      opsi,
+      normalizedKeys,
+      Number(bobot) || (tipe_soal === "Kompleks" ? 3 : 2)
+    );
+    await broadcastFirestoreSync(`Butir soal #${qId} diperbarui`);
+    res.json({ question: updated });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal memperbarui soal." });
+  }
+});
 app.delete("/api/questions/:id", async (req, res) => {
   try {
     const qId = Number(req.params.id);
@@ -1378,6 +1452,16 @@ app.delete("/api/questions/:id", async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal menghapus soal." });
+  }
+});
+app.delete("/api/exams/:id/questions", async (req, res) => {
+  try {
+    const examId = Number(req.params.id);
+    await clearQuestionsByExamRecord(examId);
+    await broadcastFirestoreSync(`Semua soal pada ujian #${examId} dikosongkan`);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal mengosongkan soal." });
   }
 });
 app.post("/api/questions/upload-csv", async (req, res) => {
@@ -1470,6 +1554,32 @@ app.put("/api/students/:id", async (req, res) => {
     res.json({ student: updated });
   } catch (error) {
     res.status(500).json({ error: error.message || "Gagal memperbarui data siswa." });
+  }
+});
+app.post("/api/classes/rename", async (req, res) => {
+  try {
+    const { oldKelas, newKelas } = req.body;
+    if (!oldKelas || !newKelas || !String(newKelas).trim()) {
+      return res.status(400).json({ error: "Nama kelas lama dan baru wajib diisi." });
+    }
+    const updated = await renameStudentClassRecord(String(oldKelas), String(newKelas));
+    await broadcastFirestoreSync(`Nama kelas diubah: ${oldKelas} -> ${newKelas}`);
+    res.json({ updatedCount: updated.length, students: updated });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal mengubah nama kelas." });
+  }
+});
+app.post("/api/classes/delete", async (req, res) => {
+  try {
+    const { kelas } = req.body;
+    if (!kelas || !String(kelas).trim()) {
+      return res.status(400).json({ error: "Nama kelas wajib diisi." });
+    }
+    await deleteStudentsByClassRecord(String(kelas));
+    await broadcastFirestoreSync(`Kelas ${kelas} dihapus`);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Gagal menghapus kelas." });
   }
 });
 app.post("/api/students/:id/regenerate-token", async (req, res) => {
@@ -1573,6 +1683,14 @@ app.post("/api/exam/submit", async (req, res) => {
     if (!studentId || !examId || !jawabanSiswa) {
       return res.status(400).json({ error: "Data jawaban ujian tidak lengkap." });
     }
+    const answeredKeys = Object.keys(jawabanSiswa || {}).filter(
+      (k) => Array.isArray(jawabanSiswa[k]) && jawabanSiswa[k].length > 0
+    );
+    if (answeredKeys.length === 0) {
+      return res.status(400).json({
+        error: "Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!"
+      });
+    }
     const outcome = await submitStudentExamResult(
       Number(studentId),
       Number(examId),
@@ -1595,7 +1713,15 @@ app.post("/api/analyze", async (req, res) => {
         error: "Parameter nama_siswa, daftar soal, dan jawaban_siswa wajib disertakan."
       });
     }
+    const answeredKeys = Object.keys(jawaban_siswa || {}).filter(
+      (k) => Array.isArray(jawaban_siswa[k]) && jawaban_siswa[k].length > 0
+    );
     const scoreSummary = calculateExamScore(examQuestions, jawaban_siswa);
+    if (answeredKeys.length === 0 || scoreSummary.rawEarned === 0) {
+      return res.status(400).json({
+        error: "Skor 0: Analisis AI tidak tersedia untuk ujian kosong."
+      });
+    }
     const detailItems = examQuestions.map((q, idx) => {
       const qId = String(q.id);
       const chosen = jawaban_siswa[qId] || [];
