@@ -18,6 +18,7 @@ import {
   Eye,
   RefreshCw,
   HelpCircle,
+  Shuffle,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
 import { classifyQuestionCognitiveLevel, isExamMatchedForStudentClass } from '../utils/cbtLogic';
@@ -30,6 +31,7 @@ interface ExamManagementTabProps {
   results: ResultItem[];
   onRefreshData: () => Promise<void>;
   onUpdateStudentStatus: (student: StudentItem, nextStatus: string) => Promise<void>;
+  onBatchDistributePackages?: (targetClass?: string) => Promise<void>;
 }
 
 export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
@@ -39,6 +41,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
   results,
   onRefreshData,
   onUpdateStudentStatus,
+  onBatchDistributePackages,
 }) => {
   // Extract distinct class list sorted alphabetically
   const uniqueClasses = useMemo(() => {
@@ -62,6 +65,8 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
   // Search and filter for students in selected class
   const [studentSearch, setStudentSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [packageFilter, setPackageFilter] = useState<string>('ALL');
+  const [isDistributing, setIsDistributing] = useState(false);
 
   // Selected question modal / detail
   const [selectedQuestionDetail, setSelectedQuestionDetail] = useState<QuestionItem | null>(null);
@@ -87,6 +92,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     setSelectedClass(cls);
     setStudentSearch('');
     setStatusFilter('ALL');
+    setPackageFilter('ALL');
   };
 
   // Filter students by selected class
@@ -199,9 +205,14 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
         statusFilter === 'ALL'
           ? true
           : (s.status_ujian || 'Belum Mulai') === statusFilter;
-      return matchSearch && matchStatus;
+      const studentPkg = s.kode_soal || s.variasi_paket || 'PAKET-A';
+      const matchPackage =
+        packageFilter === 'ALL'
+          ? true
+          : studentPkg === packageFilter;
+      return matchSearch && matchStatus && matchPackage;
     });
-  }, [classStudents, studentSearch, statusFilter]);
+  }, [classStudents, studentSearch, statusFilter, packageFilter]);
 
   // Question-by-question analysis for this class
   const questionAnalysis = useMemo(() => {
@@ -623,6 +634,56 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                   <option value="Diblokir">Diblokir</option>
                   <option value="Belum Mulai">Belum Mulai</option>
                 </select>
+
+                <select
+                  value={packageFilter}
+                  onChange={(e) => setPackageFilter(e.target.value)}
+                  className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer font-mono font-semibold"
+                  aria-label="Filter Kode Soal Siswa"
+                >
+                  <option value="ALL">Semua Paket</option>
+                  <option value="PAKET-A">Paket A</option>
+                  <option value="PAKET-B">Paket B</option>
+                  <option value="PAKET-C">Paket C</option>
+                  <option value="PAKET-D">Paket D</option>
+                </select>
+
+                {onBatchDistributePackages && (
+                  <button
+                    type="button"
+                    disabled={isDistributing || classStudents.length === 0}
+                    onClick={async () => {
+                      setIsDistributing(true);
+                      try {
+                        await onBatchDistributePackages(
+                          selectedClass !== 'ALL' ? selectedClass : undefined
+                        );
+                        setActionFeedback({
+                          type: 'success',
+                          message: `Berhasil membagi kode soal berselang-seling (Paket A / B) untuk ${
+                            selectedClass === 'ALL'
+                              ? 'seluruh kelas'
+                              : `kelas ${selectedClass}`
+                          }.`,
+                        });
+                      } catch {
+                        setActionFeedback({
+                          type: 'error',
+                          message: 'Gagal mendistribusikan paket soal ke siswa.',
+                        });
+                      } finally {
+                        setIsDistributing(false);
+                      }
+                    }}
+                    title="Bagi paket soal berselang-seling (A/B) untuk siswa kelas ini"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <Shuffle className="w-3.5 h-3.5" />
+                    <span>
+                      {isDistributing ? 'Membagi Paket...' : 'Bagi Multi-Paket (A/B)'}
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -634,6 +695,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                     <th className="py-3 px-4">Nama Siswa</th>
                     <th className="py-3 px-4">Kelas</th>
                     <th className="py-3 px-4">Token Ujian</th>
+                    <th className="py-3 px-4 text-center">Kode Soal / Paket</th>
                     <th className="py-3 px-4 text-center">Status Ujian</th>
                     <th className="py-3 px-4 text-center">Pelanggaran Tab</th>
                     <th className="py-3 px-4 text-center">Nilai Akhir</th>
@@ -644,7 +706,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredStudents.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-8 text-center text-slate-400 text-xs">
+                      <td colSpan={10} className="py-8 text-center text-slate-400 text-xs">
                         Tidak ada siswa yang sesuai dengan filter.
                       </td>
                     </tr>
@@ -671,6 +733,12 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                           <td className="py-3 px-4 text-slate-600">{st.kelas}</td>
                           <td className="py-3 px-4 font-mono font-bold text-blue-700">
                             {st.token_ujian}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                              <Layers className="w-3 h-3 text-blue-600 shrink-0" />
+                              <span>{st.kode_soal || st.variasi_paket || 'PAKET-A'}</span>
+                            </span>
                           </td>
                           <td className="py-3 px-4 text-center">
                             {isOngoing ? (
@@ -1118,18 +1186,23 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                         {sIdx + 1}
                       </td>
                       <td className="py-2 px-3 border-r border-slate-200 font-semibold text-slate-900 sticky left-0 bg-white z-10 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSelectedStudentForModal({
-                              student: st,
-                              result: res || null,
-                            })
-                          }
-                          className="hover:text-blue-600 hover:underline text-left cursor-pointer"
-                        >
-                          {st.nama}
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedStudentForModal({
+                                student: st,
+                                result: res || null,
+                              })
+                            }
+                            className="hover:text-blue-600 hover:underline text-left cursor-pointer"
+                          >
+                            {st.nama}
+                          </button>
+                          <span className="px-1.5 py-0.5 rounded font-mono text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200 shrink-0">
+                            {st.kode_soal || st.variasi_paket || 'PAKET-A'}
+                          </span>
+                        </div>
                       </td>
                       <td className="py-2 px-3 border-r border-slate-200 text-center text-[10px] whitespace-nowrap">
                         {isFinished ? (
@@ -1289,10 +1362,24 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 <h3 className="text-lg font-bold text-slate-900 mt-0.5">
                   {selectedStudentForModal.student.nama}
                 </h3>
-                <div className="text-xs text-slate-500">
-                  Kelas {selectedStudentForModal.student.kelas} · Token{' '}
-                  <span className="font-mono font-bold text-blue-700">
-                    {selectedStudentForModal.student.token_ujian}
+                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2 mt-1">
+                  <span>Kelas {selectedStudentForModal.student.kelas}</span>
+                  <span>·</span>
+                  <span>
+                    Token{' '}
+                    <span className="font-mono font-bold text-blue-700">
+                      {selectedStudentForModal.student.token_ujian}
+                    </span>
+                  </span>
+                  <span>·</span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                    <Layers className="w-3 h-3 text-indigo-600 shrink-0" />
+                    <span>
+                      {selectedStudentForModal.result?.kode_soal ||
+                        selectedStudentForModal.student.kode_soal ||
+                        selectedStudentForModal.student.variasi_paket ||
+                        'PAKET-A'}
+                    </span>
                   </span>
                 </div>
               </div>

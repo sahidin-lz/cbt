@@ -31,6 +31,27 @@
           "minLength": 1,
           "maxLength": 64
         },
+        "acak_soal": {
+          "type": "boolean",
+          "description": "Whether question order is randomized per student."
+        },
+        "acak_opsi": {
+          "type": "boolean",
+          "description": "Whether option choices (A-E) are randomized per student."
+        },
+        "kode_paket": {
+          "type": "string",
+          "description": "Default package code for the exam (e.g. PAKET-A).",
+          "maxLength": 32
+        },
+        "mode_multi_paket": {
+          "type": "boolean",
+          "description": "Whether students in a class/grade receive distinct question variants/packages."
+        },
+        "jumlah_paket": {
+          "type": "number",
+          "description": "Number of package variants (e.g. 2, 3, 4)."
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
@@ -73,6 +94,16 @@
           "description": "Current exam status of the student.",
           "enum": ["Belum Mulai", "Sedang Ujian", "Selesai", "Diblokir"],
           "maxLength": 32
+        },
+        "kode_soal": {
+          "type": "string",
+          "description": "Assigned package code for the student (e.g. PAKET-A, PAKET-B).",
+          "maxLength": 32
+        },
+        "variasi_paket": {
+          "type": "string",
+          "description": "Package variant letter (e.g. A, B, C).",
+          "maxLength": 8
         },
         "updatedAt": {
           "type": "string",

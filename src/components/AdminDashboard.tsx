@@ -19,6 +19,7 @@ import {
   Edit3,
   LogOut,
   Layers,
+  Shuffle,
   Maximize2,
   Minimize2,
   PanelLeftClose,
@@ -44,6 +45,7 @@ import {
   parseQuestionsCsv,
   computeClassAnalytics,
   classifyQuestionCognitiveLevel,
+  assignPackageVariantsToStudents,
 } from '../utils/cbtLogic';
 import {
   auth,
@@ -60,6 +62,7 @@ import {
   regenerateStudentTokenCbt,
   updateStudentStatusCbt,
   bulkUpdateStudentStatusCbt,
+  batchAssignPackageVariantsCbt,
   deleteStudentCbt,
   renameClassCbt,
   deleteClassStudentsCbt,
@@ -192,6 +195,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     useState<string>('10');
   const [newExamTargetKelas, setNewExamTargetKelas] =
     useState<string>('SEMUA');
+  const [newExamAcakSoal, setNewExamAcakSoal] = useState<boolean>(true);
+  const [newExamAcakOpsi, setNewExamAcakOpsi] = useState<boolean>(true);
+  const [newExamKodePaket, setNewExamKodePaket] = useState<string>('PAKET-A');
+  const [newExamMultiPaket, setNewExamMultiPaket] = useState<boolean>(false);
+  const [newExamJumlahPaket, setNewExamJumlahPaket] = useState<number>(2);
+  const [isDistributingPackages, setIsDistributingPackages] = useState(false);
   const [filterExamTingkat, setFilterExamTingkat] = useState<string>('SEMUA');
   const [editingExamId, setEditingExamId] = useState<number | null>(null);
   const [isSavingExam, setIsSavingExam] = useState(false);
@@ -474,31 +483,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       durasi_menit: Number(newExamDuration) || 60,
       target_tingkat: newExamTargetTingkat,
       target_kelas: newExamTargetKelas.trim() || 'SEMUA',
+      acak_soal: newExamAcakSoal,
+      acak_opsi: newExamAcakOpsi,
+      kode_paket: newExamKodePaket.trim() || 'PAKET-A',
+      mode_multi_paket: newExamMultiPaket,
+      jumlah_paket: newExamJumlahPaket,
     };
 
     try {
       const savedExam = await saveExamCbt(payload, editingExamId);
       if (editingExamId) {
-        setExamFeedback('Paket ujian & distribusi kelas berhasil diperbarui.');
+        setExamFeedback('Paket ujian & konfigurasi pengacakan/multi-paket berhasil diperbarui.');
         setEditingExamId(null);
         setNewExamTitle('');
         setNewExamDuration('60');
         setNewExamTargetTingkat('10');
         setNewExamTargetKelas('SEMUA');
+        setNewExamAcakSoal(true);
+        setNewExamAcakOpsi(true);
+        setNewExamKodePaket('PAKET-A');
+        setNewExamMultiPaket(false);
+        setNewExamJumlahPaket(2);
       } else {
         setExamFeedback(
-          `Paket ujian "${savedExam.judul_ujian}" berhasil dibuat untuk ${formatDistribusiLabel(
-            savedExam.target_tingkat,
-            savedExam.target_kelas
-          )}.`
+          `Paket ujian "${savedExam.judul_ujian}" (${savedExam.kode_paket || 'PAKET-A'}) berhasil dibuat dengan ${savedExam.acak_soal ? 'Acak Soal' : 'Soal Urut'} & ${savedExam.acak_opsi ? 'Acak Opsi' : 'Opsi Tetap'}.`
         );
         setSelectedExamId(savedExam.id);
         setNewExamTitle('');
         setNewExamDuration('60');
+        setNewExamAcakSoal(true);
+        setNewExamAcakOpsi(true);
+        setNewExamKodePaket('PAKET-A');
+        setNewExamMultiPaket(false);
+        setNewExamJumlahPaket(2);
       }
       await onRefreshData();
     } finally {
       setIsSavingExam(false);
+    }
+  };
+
+  const handleBatchDistributePackages = async (targetClass?: string) => {
+    const targetPool = targetClass
+      ? students.filter((s) => s.kelas.trim() === targetClass.trim())
+      : filteredStudents;
+    if (targetPool.length === 0) return;
+    setIsDistributingPackages(true);
+    setStudentFeedback(null);
+    try {
+      const assigned = assignPackageVariantsToStudents(targetPool, 2);
+      await batchAssignPackageVariantsCbt(assigned);
+      setStudentFeedback({
+        type: 'success',
+        message: `Berhasil mendistribusikan kode soal berselang-seling (PAKET-A & PAKET-B) untuk ${assigned.length} siswa sekelas / satu angkatan!`,
+      });
+      await onRefreshData();
+    } catch (err: any) {
+      setStudentFeedback({
+        type: 'error',
+        message: err.message || 'Gagal mendistribusikan multi-paket siswa.',
+      });
+    } finally {
+      setIsDistributingPackages(false);
     }
   };
 
@@ -1978,6 +2024,89 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
 
+                {/* Konfigurasi Pengacakan Soal & Multi-Paket (Anti-Mencontek) */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                    <Shuffle className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span>Mekanisme Pengacakan & Multi-Paket Soal</span>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="exam-kode-paket-input"
+                      className="block text-[11px] font-semibold text-slate-700 mb-1"
+                    >
+                      Kode Soal / Paket Utama
+                    </label>
+                    <input
+                      id="exam-kode-paket-input"
+                      type="text"
+                      value={newExamKodePaket}
+                      onChange={(e) => setNewExamKodePaket(e.target.value.toUpperCase())}
+                      placeholder="Contoh: PAKET-A, PAKET-B, UTAMA"
+                      className="w-full px-3 py-1.5 text-xs font-mono font-semibold border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    />
+                  </div>
+
+                  <div className="space-y-2 pt-1 border-t border-slate-200/80">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={newExamAcakSoal}
+                        onChange={(e) => setNewExamAcakSoal(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <div className="text-xs">
+                        <span className="font-semibold text-slate-800">Acak Urutan Butir Soal</span>
+                        <p className="text-[11px] text-slate-500">Nomor butir soal diacak otomatis per siswa sekelas.</p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={newExamAcakOpsi}
+                        onChange={(e) => setNewExamAcakOpsi(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <div className="text-xs">
+                        <span className="font-semibold text-slate-800">Acak Pilihan Opsi A-E</span>
+                        <p className="text-[11px] text-slate-500">Pilihan A-E diacak otomatis (skor tetap 100% akurat sesuai kunci).</p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={newExamMultiPaket}
+                        onChange={(e) => setNewExamMultiPaket(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <div className="text-xs">
+                        <span className="font-semibold text-slate-800">Mode Multi-Paket (Beda Soal Sekelas / Angkatan)</span>
+                        <p className="text-[11px] text-slate-500">Siswa sekelas otomatis dibagi ke varian paket/kode soal yang berbeda (A vs B).</p>
+                      </div>
+                    </label>
+
+                    {newExamMultiPaket && (
+                      <div className="pl-6 pt-1">
+                        <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                          Jumlah Varian Paket Soal:
+                        </label>
+                        <select
+                          value={newExamJumlahPaket}
+                          onChange={(e) => setNewExamJumlahPaket(Number(e.target.value))}
+                          className="px-2.5 py-1 text-xs border border-slate-300 rounded bg-white"
+                        >
+                          <option value={2}>2 Varian (Paket A & Paket B)</option>
+                          <option value={3}>3 Varian (Paket A, B, C)</option>
+                          <option value={4}>4 Varian (Paket A, B, C, D)</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="flex items-center gap-2">
                   <button
                     type="submit"
@@ -2000,6 +2129,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setNewExamDuration('60');
                         setNewExamTargetTingkat('10');
                         setNewExamTargetKelas('SEMUA');
+                        setNewExamAcakSoal(true);
+                        setNewExamAcakOpsi(true);
+                        setNewExamKodePaket('PAKET-A');
+                        setNewExamMultiPaket(false);
+                        setNewExamJumlahPaket(2);
                       }}
                       className="px-3 py-2.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                     >
@@ -2064,7 +2198,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                        <th className="py-3 px-4">Judul Paket Ujian</th>
+                        <th className="py-3 px-4">Judul & Kode Paket</th>
                         <th className="py-3 px-4">Distribusi Tingkatan Kelas</th>
                         <th className="py-3 px-4 text-right">Durasi</th>
                         <th className="py-3 px-4 text-right">Bank Soal</th>
@@ -2079,7 +2213,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         return (
                           <tr key={ex.id} className="hover:bg-slate-50/80">
                             <td className="py-3.5 px-4 font-semibold text-slate-900">
-                              {ex.judul_ujian}
+                              <div>{ex.judul_ujian}</div>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                  <Layers className="w-3 h-3 text-blue-600" />
+                                  <span>{ex.kode_paket || 'PAKET-A'}</span>
+                                </span>
+                                {ex.acak_soal !== false && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    <Shuffle className="w-2.5 h-2.5" />
+                                    <span>Acak Soal</span>
+                                  </span>
+                                )}
+                                {ex.acak_opsi !== false && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-50 text-violet-700 border border-violet-200">
+                                    <span>Acak Opsi</span>
+                                  </span>
+                                )}
+                                {ex.mode_multi_paket && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
+                                    <span>Multi-Paket ({ex.jumlah_paket || 2} Varian)</span>
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-3.5 px-4 text-xs text-blue-700 font-medium">
                               {formatDistribusiLabel(
@@ -2119,6 +2275,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     setNewExamTargetKelas(
                                       ex.target_kelas || 'SEMUA'
                                     );
+                                    setNewExamAcakSoal(ex.acak_soal !== false);
+                                    setNewExamAcakOpsi(ex.acak_opsi !== false);
+                                    setNewExamKodePaket(ex.kode_paket || 'PAKET-A');
+                                    setNewExamMultiPaket(Boolean(ex.mode_multi_paket));
+                                    setNewExamJumlahPaket(ex.jumlah_paket || 2);
                                   }}
                                   aria-label={`Edit ujian ${ex.judul_ujian}`}
                                   className="p-1.5 text-slate-500 hover:text-slate-900 rounded-md cursor-pointer"
@@ -2174,6 +2335,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           results={results}
           onRefreshData={onRefreshData}
           onUpdateStudentStatus={handleUpdateStudentStatus}
+          onBatchDistributePackages={handleBatchDistributePackages}
         />
       )}
 
@@ -2775,6 +2937,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       ))}
                     </select>
                   )}
+
+                  <button
+                    type="button"
+                    disabled={isDistributingPackages || filteredStudents.length === 0}
+                    onClick={() =>
+                      handleBatchDistributePackages(
+                        filterKelas !== 'SEMUA' ? filterKelas : undefined
+                      )
+                    }
+                    title="Bagi varian paket berselang-seling (Paket A, Paket B) agar teman sekelas/sebangku mendapat paket berbeda"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <Shuffle className="w-3.5 h-3.5" />
+                    <span>
+                      {isDistributingPackages
+                        ? 'Membagi Paket...'
+                        : 'Bagi Multi-Paket (A/B)'}
+                    </span>
+                  </button>
                 </div>
               </div>
 
@@ -2797,6 +2978,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <th className="py-3 px-3.5">Nama Siswa</th>
                         <th className="py-3 px-3.5">Kelas · Tingkat</th>
                         <th className="py-3 px-3.5">Token</th>
+                        <th className="py-3 px-3.5">Kode Soal / Paket</th>
                         <th className="py-3 px-3.5">Manajemen Status Ujian</th>
                         <th className="py-3 px-3.5 text-right">Aksi</th>
                       </tr>
@@ -2828,6 +3010,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <code className="font-mono font-bold text-sm text-blue-700">
                                 {st.token_ujian}
                               </code>
+                            </td>
+                            <td className="py-3 px-3.5">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                <Layers className="w-3 h-3 text-blue-600 shrink-0" />
+                                <span>{st.kode_soal || st.variasi_paket || 'PAKET-A'}</span>
+                              </span>
                             </td>
                             <td className="py-3 px-3.5">
                               <div className="flex flex-wrap items-center gap-1.5">

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { StudentItem } from '../types/cbt';
 import {
   calculateExamScore,
   parseQuestionsCsv,
@@ -373,4 +374,187 @@ Bobot: 3
   assert.deepEqual(parsed.rows[1].kunci_jawaban, ['A', 'B', 'D']);
   assert.equal(parsed.rows[1].bobot, 3);
 });
+
+test('prepareStudentExamQuestions and shuffleQuestionOptions randomize order while preserving scoring fidelity and determinism', async () => {
+  const {
+    prepareStudentExamQuestions,
+    assignPackageVariantsToStudents,
+    calculateExamScore,
+  } = await import('./cbtLogic.ts');
+
+  const sampleQuestions = [
+    {
+      id: 1,
+      exam_id: 10,
+      teks_soal: 'Apa definisi diferensiasi sosial?',
+      tipe_soal: 'PG',
+      data_opsi: {
+        id_soal_csv: 'SOAL-01',
+        opsi: {
+          A: 'Pembedaan vertikal',
+          B: 'Pembedaan horizontal secara sejajar', // Correct key
+          C: 'Stratifikasi hierarkis',
+          D: 'Konflik antarkelas',
+          E: 'Asimilasi budaya',
+        },
+      },
+      kunci_jawaban: ['B'],
+      bobot: 2,
+    },
+    {
+      id: 2,
+      exam_id: 10,
+      teks_soal: 'Manakah bentuk interaksi sosial disosiatif?',
+      tipe_soal: 'Kompleks',
+      data_opsi: {
+        id_soal_csv: 'SOAL-02',
+        opsi: {
+          A: 'Kerjasama tim',
+          B: 'Persaingan / kompetisi', // Correct key 1
+          C: 'Akomodasi',
+          D: 'Pertikaian / konflik', // Correct key 2
+          E: 'Kontravensi', // Correct key 3
+        },
+      },
+      kunci_jawaban: ['B', 'D', 'E'],
+      bobot: 3,
+    },
+    {
+      id: 3,
+      exam_id: 10,
+      teks_soal: 'Soal nomor tiga untuk varian',
+      tipe_soal: 'PG',
+      data_opsi: {
+        id_soal_csv: 'SOAL-03',
+        opsi: { A: 'Opsi 1', B: 'Opsi 2', C: 'Opsi 3', D: 'Opsi 4', E: 'Opsi 5' },
+      },
+      kunci_jawaban: ['A'],
+      bobot: 2,
+    },
+    {
+      id: 4,
+      exam_id: 10,
+      teks_soal: 'Soal nomor empat untuk varian',
+      tipe_soal: 'PG',
+      data_opsi: {
+        id_soal_csv: 'SOAL-04',
+        opsi: { A: 'Opsi A', B: 'Opsi B', C: 'Opsi C', D: 'Opsi D', E: 'Opsi E' },
+      },
+      kunci_jawaban: ['C'],
+      bobot: 2,
+    },
+    {
+      id: 5,
+      exam_id: 10,
+      teks_soal: 'Soal nomor lima untuk varian',
+      tipe_soal: 'PG',
+      data_opsi: {
+        id_soal_csv: 'SOAL-05',
+        opsi: { A: 'Opsi 1', B: 'Opsi 2', C: 'Opsi 3', D: 'Opsi 4', E: 'Opsi 5' },
+      },
+      kunci_jawaban: ['D'],
+      bobot: 2,
+    },
+    {
+      id: 6,
+      exam_id: 10,
+      teks_soal: 'Soal nomor enam untuk varian',
+      tipe_soal: 'PG',
+      data_opsi: {
+        id_soal_csv: 'SOAL-06',
+        opsi: { A: 'Opsi 1', B: 'Opsi 2', C: 'Opsi 3', D: 'Opsi 4', E: 'Opsi 5' },
+      },
+      kunci_jawaban: ['E'],
+      bobot: 2,
+    },
+  ];
+
+  const studentA = {
+    id: 101,
+    nama: 'Ahmad Fauzi',
+    kelas: 'X-1',
+    token_ujian: 'AF8921',
+  };
+  const studentB = {
+    id: 102,
+    nama: 'Budi Santoso',
+    kelas: 'X-1',
+    token_ujian: 'BS7734',
+  };
+
+  const examConfig = {
+    id: 10,
+    judul_ujian: 'Penilaian Akhir Semester Sosiologi',
+    acak_soal: true,
+    acak_opsi: true,
+    mode_multi_paket: true,
+    jumlah_paket: 2,
+  };
+
+  // Student A preparation
+  const prepA = prepareStudentExamQuestions({
+    questions: sampleQuestions,
+    student: studentA,
+    exam: examConfig,
+  });
+
+  // Student B preparation
+  const prepB = prepareStudentExamQuestions({
+    questions: sampleQuestions,
+    student: studentB,
+    exam: examConfig,
+  });
+
+  // 1. Multi-Paket: Student A and Student B should have alternating package codes
+  assert.ok(['PAKET-A', 'PAKET-B'].includes(prepA.studentPackageCode));
+  assert.ok(['PAKET-A', 'PAKET-B'].includes(prepB.studentPackageCode));
+  assert.notEqual(prepA.studentPackageCode, prepB.studentPackageCode);
+
+  // 2. Determinism test: calling prepareStudentExamQuestions again for Student A produces identical questions and options
+  const prepA2 = prepareStudentExamQuestions({
+    questions: sampleQuestions,
+    student: studentA,
+    exam: examConfig,
+  });
+  assert.deepEqual(
+    prepA.questions.map((q) => q.id),
+    prepA2.questions.map((q) => q.id)
+  );
+  assert.deepEqual(
+    prepA.questions[0].data_opsi.opsi,
+    prepA2.questions[0].data_opsi.opsi
+  );
+
+  // 3. Scoring Fidelity: Selecting the correct option text in the randomized question gives 100% score
+  const q1A = prepA.questions.find((q) => q.id === 1);
+  if (q1A) {
+    // Find which key holds the correct text "Pembedaan horizontal secara sejajar"
+    const correctKeyNow = (Object.keys(q1A.data_opsi.opsi) as ('A' | 'B' | 'C' | 'D' | 'E')[]).find(
+      (k) => q1A.data_opsi.opsi[k] === 'Pembedaan horizontal secara sejajar'
+    );
+    assert.ok(correctKeyNow);
+    assert.deepEqual(q1A.kunci_jawaban, [correctKeyNow]);
+
+    // Grade student answers with this question
+    const scoreOutcome = calculateExamScore([q1A], {
+      '1': [correctKeyNow!],
+    });
+    assert.equal(scoreOutcome.normalizedScore, 100);
+    assert.equal(scoreOutcome.rawEarned, 2);
+  }
+
+  // 4. Batch assign package variants to class
+  const classStudents: StudentItem[] = [
+    { id: 1, nama: 'Adi', kelas: 'XII IPS 1', token_ujian: 'TOK001', status_ujian: 'Belum Mulai' },
+    { id: 2, nama: 'Beni', kelas: 'XII IPS 1', token_ujian: 'TOK002', status_ujian: 'Belum Mulai' },
+    { id: 3, nama: 'Citra', kelas: 'XII IPS 1', token_ujian: 'TOK003', status_ujian: 'Belum Mulai' },
+    { id: 4, nama: 'Dewi', kelas: 'XII IPS 1', token_ujian: 'TOK004', status_ujian: 'Belum Mulai' },
+  ];
+  const assigned = assignPackageVariantsToStudents(classStudents, 2);
+  assert.equal(assigned[0].kode_soal, 'PAKET-A');
+  assert.equal(assigned[1].kode_soal, 'PAKET-B');
+  assert.equal(assigned[2].kode_soal, 'PAKET-A');
+  assert.equal(assigned[3].kode_soal, 'PAKET-B');
+});
+
 

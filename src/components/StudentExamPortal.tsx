@@ -23,6 +23,8 @@ import {
   History,
   Check,
   X,
+  Layers,
+  Shuffle,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem, AnalisisAI } from '../types/cbt';
 import {
@@ -39,6 +41,7 @@ import {
   validateStudentCascadingLogin,
   isExamMatchedForStudentClass,
   calculateExamScore,
+  prepareStudentExamQuestions,
 } from '../utils/cbtLogic';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 
@@ -567,14 +570,27 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
       const savedProgress = getLocalProgress(cleanToken, session.exam?.id);
 
-      setActiveStudent(session.student);
-      setActiveExam(session.exam);
-      setExamQuestions(session.questions || []);
-
-      saveActiveStudentSession({
+      // Prepare questions with deterministic question & option shuffling + multi-package routing
+      const prepared = prepareStudentExamQuestions({
+        questions: session.questions || [],
         student: session.student,
         exam: session.exam,
-        questions: session.questions || [],
+      });
+
+      const updatedStudent: StudentItem = {
+        ...session.student,
+        kode_soal: prepared.studentPackageCode,
+        variasi_paket: prepared.studentPackageCode.replace(/[^A-D]/g, '') || 'A',
+      };
+
+      setActiveStudent(updatedStudent);
+      setActiveExam(session.exam);
+      setExamQuestions(prepared.questions);
+
+      saveActiveStudentSession({
+        student: updatedStudent,
+        exam: session.exam,
+        questions: prepared.questions,
       });
 
       if (savedProgress && Object.keys(savedProgress.answers || {}).length > 0) {
@@ -1945,22 +1961,48 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       {/* Top Exam Status Bar */}
       <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-500">
-            Peserta: <strong className="text-slate-800">{activeStudent.nama}</strong> ·{' '}
-            <span>Kelas {activeStudent.kelas}</span> · Token{' '}
-            <span className="font-mono font-semibold text-blue-700">
-              {activeStudent.token_ujian}
-            </span>{' '}
-            · Status:{' '}
-            <span
-              className={`font-semibold ${
-                isStudentBlocked ? 'text-red-700' : 'text-emerald-700'
-              }`}
-            >
-              {isStudentBlocked ? 'Diblokir' : activeStudent.status_ujian}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>
+              Peserta: <strong className="text-slate-800">{activeStudent.nama}</strong>
+            </span>
+            <span>·</span>
+            <span>Kelas {activeStudent.kelas}</span>
+            <span>·</span>
+            <span>
+              Token{' '}
+              <span className="font-mono font-semibold text-blue-700">
+                {activeStudent.token_ujian}
+              </span>
+            </span>
+            <span>·</span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200">
+              <Layers className="w-3 h-3 text-blue-600 shrink-0" />
+              <span>Kode Soal: {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}</span>
+            </span>
+            {activeExam?.acak_soal !== false && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200">
+                <Shuffle className="w-3 h-3 text-emerald-600 shrink-0" />
+                <span>Acak Soal</span>
+              </span>
+            )}
+            {activeExam?.acak_opsi !== false && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-violet-50 text-violet-800 border border-violet-200">
+                <span>Acak Opsi A-E</span>
+              </span>
+            )}
+            <span>·</span>
+            <span>
+              Status:{' '}
+              <span
+                className={`font-semibold ${
+                  isStudentBlocked ? 'text-red-700' : 'text-emerald-700'
+                }`}
+              >
+                {isStudentBlocked ? 'Diblokir' : activeStudent.status_ujian}
+              </span>
             </span>
           </div>
-          <h1 className="text-lg font-bold text-slate-900 mt-0.5">
+          <h1 className="text-lg font-bold text-slate-900 mt-1">
             {activeExam?.judul_ujian}
           </h1>
         </div>
@@ -2107,6 +2149,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 <span className="text-sm font-bold font-mono text-blue-700">
                   SOAL NO. {currentIndex + 1} / {examQuestions.length}
                 </span>
+                <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-mono text-xs font-bold">
+                  {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
+                </span>
                 <span className="text-slate-300">·</span>
                 <span className="text-xs font-medium text-slate-600">
                   {isKompleks
@@ -2120,7 +2165,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   <span>Autosave Aktif · Tersimpan Otomatis ✓</span>
                 </div>
                 <span className="text-xs font-mono text-slate-500">
-                  Kode: {currentQuestion.data_opsi?.id_soal_csv || `Q-${currentQuestion.id}`}
+                  ID: {currentQuestion.data_opsi?.id_soal_csv || `Q-${currentQuestion.id}`}
                 </span>
               </div>
             </div>

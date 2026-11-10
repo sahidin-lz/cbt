@@ -1514,4 +1514,382 @@ export function validateStudentCascadingLogin<
   return { ok: true, student: selectedStudent };
 }
 
+/**
+ * Generates a deterministic 32-bit positive integer hash from student identity, token, and exam.
+ */
+export function hashStudentSeed(
+  studentId: number | string,
+  token: string,
+  examId: number | string
+): number {
+  const str = `${studentId}_${(token || '').toUpperCase().trim()}_${examId}`;
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Creates a deterministic pseudo-random number generator (Mulberry32).
+ */
+export function createSeededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return function () {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Deterministically shuffles an array using Fisher-Yates with a seeded PRNG.
+ */
+export function shuffleArrayDeterministic<T>(array: T[], rng: () => number): T[] {
+  const copy = [...array];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const temp = copy[i];
+    copy[i] = copy[j];
+    copy[j] = temp;
+  }
+  return copy;
+}
+
+/**
+ * Deterministically shuffles options A, B, C, D, E for a question,
+ * and crucially recalculates the correct answer keys (kunci_jawaban)
+ * so that scoring remains 100% accurate.
+ */
+export function shuffleQuestionOptions<T extends {
+  id: number | string;
+  data_opsi: {
+    id_soal_csv?: string;
+    wacana?: string;
+    opsi: { A: string; B: string; C: string; D: string; E: string };
+    opsi_original_map?: Record<string, string>;
+  };
+  kunci_jawaban: string[];
+}>(question: T, rng: () => number): T {
+  const origOpsi = question.data_opsi?.opsi;
+  if (!origOpsi) return question;
+
+  const validKeys: ('A' | 'B' | 'C' | 'D' | 'E')[] = ['A', 'B', 'C', 'D', 'E'];
+  const populatedKeys = validKeys.filter(
+    (k) =>
+      origOpsi[k] !== undefined &&
+      origOpsi[k] !== null &&
+      String(origOpsi[k]).trim() !== ''
+  );
+  if (populatedKeys.length <= 1) return question;
+
+  // Extract populated options as { originalKey, text }
+  const pairs = populatedKeys.map((k) => ({
+    originalKey: k,
+    text: origOpsi[k],
+  }));
+
+  // Shuffle pairs
+  const shuffledPairs = shuffleArrayDeterministic(pairs, rng);
+
+  // Reassign to positions: first shuffled pair becomes A, second becomes B, etc.
+  const newOpsi: { A: string; B: string; C: string; D: string; E: string } = {
+    A: '',
+    B: '',
+    C: '',
+    D: '',
+    E: '',
+  };
+  const originalToNewMap: Record<string, string> = {};
+  const newToOriginalMap: Record<string, string> = {};
+
+  shuffledPairs.forEach((pair, idx) => {
+    const newKey = validKeys[idx];
+    newOpsi[newKey] = pair.text;
+    originalToNewMap[pair.originalKey] = newKey;
+    newToOriginalMap[newKey] = pair.originalKey;
+  });
+
+  // Fill in any remaining unpopulated keys if original had them
+  validKeys.slice(shuffledPairs.length).forEach((k) => {
+    newOpsi[k] = origOpsi[k] || '';
+  });
+
+  // Remap correct answer keys
+  const normOriginalKeys = normalizeAnswerKeys(question.kunci_jawaban);
+  const remappedKeys = normOriginalKeys
+    .map((origK) => originalToNewMap[origK])
+    .filter(Boolean);
+
+  // Return new question with updated options and keys
+  return {
+    ...question,
+    data_opsi: {
+      ...question.data_opsi,
+      opsi: newOpsi,
+      opsi_original_map: newToOriginalMap,
+    },
+    kunci_jawaban: remappedKeys.sort(),
+  };
+}
+
+/**
+ * Returns deterministic package variant for a student.
+ * If the student has an explicit `kode_soal`, it returns that.
+ * Otherwise, allocates alternatingly using a stable hash (e.g. PAKET-A vs PAKET-B).
+ */
+export function getDeterministicStudentPackage(
+  student: {
+    id: number | string;
+    nama?: string;
+    kelas?: string;
+    token_ujian?: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  },
+  numVariants = 2,
+  variantLabels: string[] = ['PAKET-A', 'PAKET-B', 'PAKET-C', 'PAKET-D']
+): string {
+  if (student.kode_soal && student.kode_soal.trim()) {
+    return student.kode_soal.trim().toUpperCase();
+  }
+  if (student.variasi_paket && student.variasi_paket.trim()) {
+    const cleanV = student.variasi_paket.trim().toUpperCase();
+    if (cleanV.startsWith('PAKET-')) return cleanV;
+    return `PAKET-${cleanV}`;
+  }
+
+  // Derive stable alternating variant: if student id is numeric, consecutive IDs (101, 102...) alternate cleanly
+  const idNum = Number(student.id);
+  const maxV = Math.max(1, Math.min(numVariants, variantLabels.length));
+  let variantIndex: number;
+  if (!isNaN(idNum) && idNum >= 0) {
+    variantIndex = idNum % maxV;
+  } else {
+    const str = `${student.kelas || ''}_${student.id}_${student.token_ujian || ''}`;
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    variantIndex = h % maxV;
+  }
+  return variantLabels[variantIndex];
+}
+
+/**
+ * Assigns alternating package variants (A, B, C, D) to students in a class or grade.
+ */
+export function assignPackageVariantsToStudents<T extends {
+  id: number | string;
+  nama: string;
+  kelas: string;
+  kode_soal?: string;
+  variasi_paket?: string;
+}>(
+  students: T[],
+  numVariants = 2,
+  variantLabels: string[] = ['PAKET-A', 'PAKET-B', 'PAKET-C', 'PAKET-D']
+): T[] {
+  // Sort students stably by class and then by name
+  const sorted = [...students].sort((a, b) => {
+    const cComp = a.kelas.localeCompare(b.kelas, undefined, { numeric: true });
+    if (cComp !== 0) return cComp;
+    return a.nama.localeCompare(b.nama);
+  });
+
+  const assignedMap = new Map<number | string, { kode_soal: string; variasi_paket: string }>();
+  // Group by class so every class has alternating A, B, A, B...
+  const classGroups: Record<string, T[]> = {};
+  for (const s of sorted) {
+    const k = s.kelas || 'DEFAULT';
+    if (!classGroups[k]) classGroups[k] = [];
+    classGroups[k].push(s);
+  }
+
+  for (const k of Object.keys(classGroups)) {
+    const group = classGroups[k];
+    group.forEach((s, idx) => {
+      const vIdx = idx % Math.max(1, Math.min(numVariants, variantLabels.length));
+      const code = variantLabels[vIdx];
+      const letter = code.replace(/[^A-D]/g, '') || String.fromCharCode(65 + vIdx);
+      assignedMap.set(s.id, {
+        kode_soal: code,
+        variasi_paket: letter,
+      });
+    });
+  }
+
+  return students.map((s) => {
+    const assigned = assignedMap.get(s.id);
+    if (!assigned) return s;
+    return {
+      ...s,
+      kode_soal: assigned.kode_soal,
+      variasi_paket: assigned.variasi_paket,
+    };
+  });
+}
+
+/**
+ * Filters or subsets questions for a specific student's package code
+ * when mode_multi_paket is enabled.
+ */
+export function filterQuestionsForPackageVariant<T extends {
+  id: number | string;
+  data_opsi?: {
+    id_soal_csv?: string;
+    variasi_paket?: string;
+  };
+}>(
+  questions: T[],
+  packageCode: string,
+  numVariants = 2
+): T[] {
+  if (questions.length === 0) return questions;
+
+  const letter = packageCode.replace(/[^A-D]/gi, '').toUpperCase() || 'A';
+  const variantIndex = Math.max(0, letter.charCodeAt(0) - 65) % Math.max(1, numVariants);
+
+  // Check if questions have explicit variant tagging in data_opsi or id_soal_csv
+  const hasTaggedQuestions = questions.some(
+    (q) =>
+      q.data_opsi?.variasi_paket ||
+      /\[(PAKET[-_]?[A-D]|VAR[-_]?[A-D])\]/i.test(q.data_opsi?.id_soal_csv || '')
+  );
+
+  if (hasTaggedQuestions) {
+    const matched = questions.filter((q) => {
+      const explicit = (q.data_opsi?.variasi_paket || '').toUpperCase();
+      if (explicit === letter || explicit === packageCode.toUpperCase() || explicit === 'SEMUA') {
+        return true;
+      }
+      const matchCsv = (q.data_opsi?.id_soal_csv || '').toUpperCase();
+      if (
+        matchCsv.includes(`PAKET-${letter}`) ||
+        matchCsv.includes(`PAKET ${letter}`) ||
+        matchCsv.includes(`[${letter}]`)
+      ) {
+        return true;
+      }
+      return false;
+    });
+    if (matched.length > 0) return matched;
+  }
+
+  // Interleaved / Alternating distribution across pool so each package gets balanced questions:
+  // For 2 packages (A & B):
+  // If pool has >= 6 questions: Paket A gets even indexes (0, 2, 4...), Paket B gets odd indexes (1, 3, 5...)
+  if (questions.length >= 6) {
+    const subset = questions.filter((_, idx) => idx % numVariants === variantIndex);
+    if (subset.length >= 3) return subset;
+  }
+
+  return questions;
+}
+
+/**
+ * Prepares the final question set for a student, orchestrating:
+ * 1. Package Code / Variant determination (Beda Soal / Beda Kode Soal)
+ * 2. Multi-Package Question Subsetting (if multi_paket mode active)
+ * 3. Seeded Question Shuffling (Acak Soal - if enabled)
+ * 4. Seeded Option Shuffling with Recalculated Answer Keys (Acak Opsi - if enabled)
+ */
+export function prepareStudentExamQuestions<T extends {
+  id: number | string;
+  exam_id: number | string;
+  teks_soal: string;
+  tipe_soal: 'PG' | 'Kompleks' | string;
+  data_opsi: {
+    id_soal_csv?: string;
+    wacana?: string;
+    opsi: { A: string; B: string; C: string; D: string; E: string };
+    opsi_original_map?: Record<string, string>;
+    variasi_paket?: string;
+  };
+  kunci_jawaban: string[];
+  bobot: number;
+}>(params: {
+  questions: T[];
+  student: {
+    id: number | string;
+    nama: string;
+    kelas: string;
+    token_ujian: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  };
+  exam: {
+    id: number | string;
+    judul_ujian: string;
+    acak_soal?: boolean;
+    acak_opsi?: boolean;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+  };
+}): {
+  questions: T[];
+  studentPackageCode: string;
+  isQuestionShuffled: boolean;
+  isOptionShuffled: boolean;
+  originalQuestionCount: number;
+} {
+  const { questions, student, exam } = params;
+  if (!questions || questions.length === 0) {
+    return {
+      questions: [],
+      studentPackageCode: student.kode_soal || exam.kode_paket || 'PAKET-A',
+      isQuestionShuffled: false,
+      isOptionShuffled: false,
+      originalQuestionCount: 0,
+    };
+  }
+
+  // 1. Determine student package code
+  const numVariants = exam.jumlah_paket || 2;
+  const packageCode =
+    student.kode_soal && student.kode_soal.trim()
+      ? student.kode_soal.trim().toUpperCase()
+      : exam.kode_paket && exam.kode_paket.trim()
+        ? exam.kode_paket.trim().toUpperCase()
+        : getDeterministicStudentPackage(student, numVariants);
+
+  // 2. Subset questions if mode_multi_paket is enabled
+  let workingQuestions = [...questions];
+  if (exam.mode_multi_paket) {
+    workingQuestions = filterQuestionsForPackageVariant(questions, packageCode, numVariants);
+  }
+
+  // 3. Deterministic Seed
+  const studentSeed = hashStudentSeed(student.id, student.token_ujian, exam.id);
+  const qRng = createSeededRandom(studentSeed);
+
+  // 4. Acak Urutan Soal (Shuffle Questions) - default true unless explicitly false
+  const shouldShuffleQuestions = exam.acak_soal !== false;
+  if (shouldShuffleQuestions && workingQuestions.length > 1) {
+    workingQuestions = shuffleArrayDeterministic(workingQuestions, qRng);
+  }
+
+  // 5. Acak Opsi Jawaban (Shuffle Options) - default true unless explicitly false
+  const shouldShuffleOptions = exam.acak_opsi !== false;
+  if (shouldShuffleOptions) {
+    workingQuestions = workingQuestions.map((q, idx) => {
+      const optSeed = (studentSeed + Number(q.id) * 37 + idx * 13) >>> 0;
+      const optRng = createSeededRandom(optSeed);
+      return shuffleQuestionOptions(q, optRng);
+    });
+  }
+
+  return {
+    questions: workingQuestions,
+    studentPackageCode: packageCode,
+    isQuestionShuffled: shouldShuffleQuestions,
+    isOptionShuffled: shouldShuffleOptions,
+    originalQuestionCount: questions.length,
+  };
+}
+
+
 

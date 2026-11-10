@@ -220,7 +220,7 @@ export async function pushSnapshotToFirestoreClient(
     const batch = writeBatch(db);
 
     for (const ex of data.exams) {
-      batch.set(doc(db, 'exams', String(ex.id)), {
+      const examDoc: Record<string, any> = {
         id: Number(ex.id),
         judul_ujian: String(ex.judul_ujian || '').slice(0, 200),
         durasi_menit: Number(ex.durasi_menit) || 60,
@@ -228,11 +228,17 @@ export async function pushSnapshotToFirestoreClient(
         target_kelas: String(ex.target_kelas || 'SEMUA').slice(0, 64),
         authorUid: 'sahidin30@gmail.com',
         updatedAt: nowIso,
-      });
+      };
+      if (ex.acak_soal !== undefined) examDoc.acak_soal = Boolean(ex.acak_soal);
+      if (ex.acak_opsi !== undefined) examDoc.acak_opsi = Boolean(ex.acak_opsi);
+      if (ex.kode_paket) examDoc.kode_paket = ex.kode_paket.slice(0, 32);
+      if (ex.mode_multi_paket !== undefined) examDoc.mode_multi_paket = Boolean(ex.mode_multi_paket);
+      if (ex.jumlah_paket !== undefined) examDoc.jumlah_paket = Number(ex.jumlah_paket);
+      batch.set(doc(db, 'exams', String(ex.id)), examDoc);
     }
 
     for (const st of data.students) {
-      batch.set(doc(db, 'students', String(st.id)), {
+      const studentDoc: Record<string, any> = {
         id: Number(st.id),
         nama: String(st.nama || '').slice(0, 150),
         kelas: String(st.kelas || '').slice(0, 64),
@@ -240,7 +246,10 @@ export async function pushSnapshotToFirestoreClient(
         status_ujian: String(st.status_ujian || 'Belum Mulai').slice(0, 32),
         authorUid: 'sahidin30@gmail.com',
         updatedAt: nowIso,
-      });
+      };
+      if (st.kode_soal) studentDoc.kode_soal = st.kode_soal.slice(0, 32);
+      if (st.variasi_paket) studentDoc.variasi_paket = st.variasi_paket.slice(0, 8);
+      batch.set(doc(db, 'students', String(st.id)), studentDoc);
     }
 
     for (const q of data.questions) {
@@ -463,6 +472,11 @@ export async function saveExamCbt(
     durasi_menit: number;
     target_tingkat: string;
     target_kelas: string;
+    acak_soal?: boolean;
+    acak_opsi?: boolean;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
   },
   editingExamId?: number | null
 ): Promise<ExamItem> {
@@ -485,10 +499,15 @@ export async function saveExamCbt(
           durasi_menit: Math.max(5, Number(payload.durasi_menit) || 60),
           target_tingkat: payload.target_tingkat || 'SEMUA',
           target_kelas: payload.target_kelas || 'SEMUA',
+          acak_soal: payload.acak_soal !== undefined ? payload.acak_soal : true,
+          acak_opsi: payload.acak_opsi !== undefined ? payload.acak_opsi : true,
+          kode_paket: payload.kode_paket?.trim() || 'PAKET-A',
+          mode_multi_paket: Boolean(payload.mode_multi_paket),
+          jumlah_paket: Number(payload.jumlah_paket) || 2,
         };
 
   if (db) {
-    await setDoc(doc(db, 'exams', String(examRecord.id)), {
+    const examDoc: Record<string, any> = {
       id: Number(examRecord.id),
       judul_ujian: examRecord.judul_ujian.slice(0, 200),
       durasi_menit: Number(examRecord.durasi_menit),
@@ -496,13 +515,56 @@ export async function saveExamCbt(
       target_kelas: examRecord.target_kelas.slice(0, 64),
       authorUid: 'sahidin30@gmail.com',
       updatedAt: nowIso,
-    });
+    };
+    if (examRecord.acak_soal !== undefined) examDoc.acak_soal = Boolean(examRecord.acak_soal);
+    if (examRecord.acak_opsi !== undefined) examDoc.acak_opsi = Boolean(examRecord.acak_opsi);
+    if (examRecord.kode_paket) examDoc.kode_paket = examRecord.kode_paket.slice(0, 32);
+    if (examRecord.mode_multi_paket !== undefined) examDoc.mode_multi_paket = Boolean(examRecord.mode_multi_paket);
+    if (examRecord.jumlah_paket !== undefined) examDoc.jumlah_paket = Number(examRecord.jumlah_paket);
+
+    await setDoc(doc(db, 'exams', String(examRecord.id)), examDoc);
     await updateFirestorePulse(
-      `Paket ujian disimpan: ${examRecord.judul_ujian} (Tingkat ${examRecord.target_tingkat})`
+      `Paket ujian disimpan: ${examRecord.judul_ujian} (${examRecord.kode_paket || 'PAKET-A'}${examRecord.acak_soal ? ' · Acak Soal' : ''}${examRecord.acak_opsi ? ' · Acak Opsi' : ''})`
     );
   }
 
   return examRecord;
+}
+
+export async function batchAssignPackageVariantsCbt(
+  updatedStudents: StudentItem[]
+): Promise<void> {
+  if (updatedStudents.length === 0) return;
+
+  await safeApiJson('/api/students/batch-variants', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ students: updatedStudents }),
+  });
+
+  const firestoreDb = db;
+  if (firestoreDb) {
+    const batch = writeBatch(firestoreDb);
+    const nowIso = new Date().toISOString();
+    updatedStudents.forEach((st) => {
+      const studentDoc: Record<string, any> = {
+        id: Number(st.id),
+        nama: st.nama.slice(0, 150),
+        kelas: st.kelas.slice(0, 64),
+        token_ujian: st.token_ujian.slice(0, 6),
+        status_ujian: st.status_ujian.slice(0, 32),
+        kode_soal: (st.kode_soal || 'PAKET-A').slice(0, 32),
+        variasi_paket: (st.variasi_paket || 'A').slice(0, 8),
+        authorUid: 'sahidin30@gmail.com',
+        updatedAt: nowIso,
+      };
+      batch.set(doc(firestoreDb, 'students', String(st.id)), studentDoc);
+    });
+    await batch.commit();
+    await updateFirestorePulse(
+      `Distribusi multi-paket kode soal diperbarui untuk ${updatedStudents.length} siswa`
+    );
+  }
 }
 
 export async function deleteExamCbt(examId: number, title: string): Promise<void> {
@@ -1328,12 +1390,19 @@ export async function submitStudentExamCbt(payload: {
   const resultId = apiRes.data?.result?.id || Date.now();
 
   if (db) {
+    const studentPkg =
+      payload.student.kode_soal?.slice(0, 64) ||
+      payload.student.variasi_paket?.slice(0, 64) ||
+      'PAKET-A';
+
     await setDoc(doc(db, 'students', String(payload.student.id)), {
       id: Number(payload.student.id),
       nama: payload.student.nama.slice(0, 150),
       kelas: payload.student.kelas.slice(0, 64),
       token_ujian: payload.student.token_ujian.slice(0, 6),
       status_ujian: 'Selesai',
+      kode_soal: studentPkg,
+      variasi_paket: studentPkg,
       authorUid: 'sahidin30@gmail.com',
       updatedAt: nowIso,
     });
@@ -1344,6 +1413,7 @@ export async function submitStudentExamCbt(payload: {
       exam_id: Number(payload.exam.id),
       skor_angka: scoreSummary.normalizedScore,
       jawaban_siswa: payload.jawabanSiswa,
+      kode_soal: studentPkg,
       analisis_ai: null,
       pelanggaran_tab: Number(payload.pelanggaranTab) || 0,
       created_at: nowIso,
