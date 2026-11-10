@@ -15,8 +15,16 @@ import {
   Users,
   UserCheck,
   KeyRound,
+  ClipboardList,
+  LogIn,
+  Activity,
+  FileText,
+  Printer,
+  History,
+  Check,
+  X,
 } from 'lucide-react';
-import { ExamItem, QuestionItem, StudentItem, AnalisisAI } from '../types/cbt';
+import { ExamItem, QuestionItem, StudentItem, ResultItem, AnalisisAI } from '../types/cbt';
 import {
   loginStudentExamCbt,
   submitStudentExamCbt,
@@ -30,21 +38,237 @@ import {
   getStudentsForClass,
   validateStudentCascadingLogin,
   isExamMatchedForStudentClass,
+  calculateExamScore,
 } from '../utils/cbtLogic';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 
-const MAX_TAB_VIOLATIONS = 3;
+export interface StudentActivityLog {
+  timestamp: string;
+  action:
+    | 'login'
+    | 'answer'
+    | 'navigate'
+    | 'violation'
+    | 'blocked'
+    | 'unblocked'
+    | 'resume'
+    | 'submit';
+  detail: string;
+}
+
+export interface StudentExamProgress {
+  studentId: number;
+  nama: string;
+  kelas: string;
+  token_ujian: string;
+  examId: number;
+  answers: Record<string, string[]>;
+  currentIndex: number;
+  remainingSeconds: number;
+  tabViolations: number;
+  logs: StudentActivityLog[];
+  lastSavedAt: string;
+}
+
+export interface LocalExamReceipt {
+  resultId: number;
+  studentId: number;
+  studentNama: string;
+  studentKelas: string;
+  tokenUjian: string;
+  examId: number;
+  examJudul: string;
+  skor: number;
+  kategori: string;
+  rawEarned: number;
+  rawMax: number;
+  answeredCount: number;
+  totalQuestions: number;
+  pelanggaranTab: number;
+  jawabanSiswa: Record<string, string[]>;
+  logs?: StudentActivityLog[];
+  analisisAi?: AnalisisAI | null;
+  submittedAt: string;
+}
+
+export const MAX_TAB_VIOLATIONS = 3;
+
+export interface StudentExamReceipt {
+  resultId: number;
+  studentId: number;
+  studentNama: string;
+  studentKelas: string;
+  tokenUjian: string;
+  examId: number;
+  examJudul: string;
+  skor: number;
+  kategori: string;
+  pelanggaranTab: number;
+  submittedAt: string;
+  breakdown: Array<{
+    pertanyaan: string;
+    studentAnswer: string[];
+    correctAnswer: string[];
+    isCorrect: boolean;
+    pointsEarned: number;
+  }>;
+}
+
+function formatReceipt(
+  item: ResultItem | LocalExamReceipt,
+  allStudents: StudentItem[],
+  allExams: ExamItem[],
+  allQuestions: QuestionItem[]
+): StudentExamReceipt {
+  if ('examJudul' in item) {
+    const qList = allQuestions.filter((q) => Number(q.exam_id) === Number(item.examId));
+    const breakdown = qList.map((q) => {
+      const studentAns = item.jawabanSiswa[String(q.id)] || [];
+      const correctAns = q.kunci_jawaban || [];
+      const isCorrect =
+        studentAns.length === correctAns.length &&
+        studentAns.every((ans) => correctAns.includes(ans));
+      return {
+        pertanyaan: q.teks_soal,
+        studentAnswer: studentAns,
+        correctAnswer: correctAns,
+        isCorrect,
+        pointsEarned: isCorrect ? q.bobot : 0,
+      };
+    });
+    return {
+      resultId: item.resultId,
+      studentId: item.studentId,
+      studentNama: item.studentNama,
+      studentKelas: item.studentKelas,
+      tokenUjian: item.tokenUjian,
+      examId: item.examId,
+      examJudul: item.examJudul,
+      skor: item.skor,
+      kategori: item.kategori,
+      pelanggaranTab: item.pelanggaranTab,
+      submittedAt: item.submittedAt,
+      breakdown,
+    };
+  } else {
+    const st = allStudents.find((s) => s.id === item.student_id);
+    const ex = allExams.find((e) => e.id === item.exam_id);
+    const qList = allQuestions.filter((q) => Number(q.exam_id) === Number(item.exam_id));
+    const breakdown = qList.map((q) => {
+      const studentAns = item.jawaban_siswa?.[String(q.id)] || [];
+      const correctAns = q.kunci_jawaban || [];
+      const isCorrect =
+        studentAns.length === correctAns.length &&
+        studentAns.every((ans) => correctAns.includes(ans));
+      return {
+        pertanyaan: q.teks_soal,
+        studentAnswer: studentAns,
+        correctAnswer: correctAns,
+        isCorrect,
+        pointsEarned: isCorrect ? q.bobot : 0,
+      };
+    });
+    return {
+      resultId: item.id,
+      studentId: item.student_id,
+      studentNama: st?.nama || `Siswa #${item.student_id}`,
+      studentKelas: st?.kelas || '-',
+      tokenUjian: st?.token_ujian || '-',
+      examId: item.exam_id,
+      examJudul: ex?.judul_ujian || `Ujian CBT #${item.exam_id}`,
+      skor: item.skor_angka,
+      kategori: item.analisis_ai?.kategori_nilai || 'Selesai',
+      pelanggaranTab: item.pelanggaran_tab || 0,
+      submittedAt: item.created_at || new Date().toISOString(),
+      breakdown,
+    };
+  }
+}
+
+const PROGRESS_KEY_PREFIX = 'cbt_progress_token_';
+const HISTORY_KEY_PREFIX = 'cbt_history_student_';
+
+function saveLocalProgress(token: string, data: StudentExamProgress) {
+  try {
+    localStorage.setItem(
+      PROGRESS_KEY_PREFIX + token.toUpperCase().trim(),
+      JSON.stringify(data)
+    );
+  } catch (e) {
+    console.error('Failed to save progress to localStorage', e);
+  }
+}
+
+function getLocalProgress(
+  token: string,
+  examId?: number
+): StudentExamProgress | null {
+  try {
+    const raw = localStorage.getItem(
+      PROGRESS_KEY_PREFIX + token.toUpperCase().trim()
+    );
+    if (!raw) return null;
+    const parsed: StudentExamProgress = JSON.parse(raw);
+    if (examId && parsed.examId && Number(parsed.examId) !== Number(examId)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearLocalProgress(token: string) {
+  try {
+    localStorage.removeItem(PROGRESS_KEY_PREFIX + token.toUpperCase().trim());
+  } catch {}
+}
+
+function saveLocalReceipt(receipt: LocalExamReceipt) {
+  try {
+    const key = HISTORY_KEY_PREFIX + String(receipt.studentId);
+    const existingRaw = localStorage.getItem(key);
+    const existingList: LocalExamReceipt[] = existingRaw
+      ? JSON.parse(existingRaw)
+      : [];
+    const filtered = existingList.filter(
+      (item) => item.resultId !== receipt.resultId
+    );
+    localStorage.setItem(
+      key,
+      JSON.stringify([receipt, ...filtered].slice(0, 30))
+    );
+  } catch (e) {
+    console.error('Failed to save receipt to localStorage', e);
+  }
+}
+
+function getLocalReceiptsForStudent(studentId: number): LocalExamReceipt[] {
+  try {
+    const key = HISTORY_KEY_PREFIX + String(studentId);
+    const existingRaw = localStorage.getItem(key);
+    return existingRaw ? JSON.parse(existingRaw) : [];
+  } catch {
+    return [];
+  }
+}
 
 interface StudentExamPortalProps {
   exams: ExamItem[];
+  questions?: QuestionItem[];
   students: StudentItem[];
+  results?: ResultItem[];
   onExamCompleted: () => void;
+  onExamStateChange?: (isActive: boolean) => void;
 }
 
 export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   exams,
+  questions = [],
   students,
+  results = [],
   onExamCompleted,
+  onExamStateChange,
 }) => {
   const [selectedKelas, setSelectedKelas] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -112,6 +336,19 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   } | null>(null);
   const [isGeneratingStudentAi, setIsGeneratingStudentAi] = useState(false);
 
+  // Student Portal Navigation & Progress Management State
+  const [studentPortalTab, setStudentPortalTab] = useState<'login' | 'history'>('login');
+  const [activityLogs, setActivityLogs] = useState<StudentActivityLog[]>([]);
+  const [resumeNotice, setResumeNotice] = useState<string | null>(null);
+  const [showActivityLogModal, setShowActivityLogModal] = useState(false);
+  const [selectedReceipt, setSelectedReceipt] = useState<StudentExamReceipt | null>(null);
+
+  // Notify parent (App.tsx) so the global header locks when student is inside active exam
+  useEffect(() => {
+    const isRunning = Boolean(activeStudent && !submittedSummary);
+    onExamStateChange?.(isRunning);
+  }, [activeStudent, submittedSummary, onExamStateChange]);
+
   useEffect(() => {
     if (matchedExamsForSelectedClass.length > 0) {
       setSelectedExamId(String(matchedExamsForSelectedClass[0].id));
@@ -165,6 +402,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     e.preventDefault();
     setLoginError(null);
 
+    // Enforce pre-validation check for Diblokir status
+    if (selectedStudentObj && selectedStudentObj.status_ujian === 'Diblokir') {
+      setLoginError(
+        'Akses ujian Anda saat ini DIBLOKIR / DIKUNCI karena terdeteksi berpindah tab atau dikunci pengawas. Silakan hubungi Guru Pengawas untuk membuka blokir Anda terlebih dahulu di Dashboard Guru.'
+      );
+      return;
+    }
+
     if (students.length > 0) {
       const validation = validateStudentCascadingLogin({
         students,
@@ -188,6 +433,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     }
 
     const targetNama = selectedStudentObj ? selectedStudentObj.nama : namaInput.trim();
+    const cleanToken = tokenInput.toUpperCase().trim();
 
     // Panggil Fullscreen SEKARANG (sebelum ada proses await/jaringan)
     // agar browser mendeteksi sebagai Transient User Activation dari klik user.
@@ -197,17 +443,54 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     try {
       const session = await loginStudentExamCbt(
         targetNama,
-        tokenInput.toUpperCase().trim(),
+        cleanToken,
         selectedExamId ? Number(selectedExamId) : undefined
       );
+
+      const savedProgress = getLocalProgress(cleanToken, session.exam?.id);
 
       setActiveStudent(session.student);
       setActiveExam(session.exam);
       setExamQuestions(session.questions || []);
-      setRemainingSeconds((session.exam?.durasi_menit || 60) * 60);
-      setCurrentIndex(0);
-      setAnswers({});
-      setTabViolations(0);
+
+      if (savedProgress && Object.keys(savedProgress.answers || {}).length > 0) {
+        // RESUME EXISTING PROGRESS (Siswa tinggal melanjutkan!)
+        setAnswers(savedProgress.answers);
+        setCurrentIndex(savedProgress.currentIndex || 0);
+        setRemainingSeconds(
+          savedProgress.remainingSeconds && savedProgress.remainingSeconds > 0
+            ? savedProgress.remainingSeconds
+            : (session.exam?.durasi_menit || 60) * 60
+        );
+        setTabViolations(savedProgress.tabViolations || 0);
+        const resumedLogs: StudentActivityLog[] = [
+          ...(savedProgress.logs || []),
+          {
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            action: 'resume',
+            detail: `Siswa masuk kembali dan melanjutkan sesi ujian (${Object.keys(savedProgress.answers).length} jawaban dipulihkan).`,
+          },
+        ];
+        setActivityLogs(resumedLogs);
+        setResumeNotice(
+          `Sesi Ujian Dilanjutkan! Jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis.`
+        );
+      } else {
+        // Fresh Session
+        setAnswers({});
+        setCurrentIndex(0);
+        setRemainingSeconds((session.exam?.durasi_menit || 60) * 60);
+        setTabViolations(0);
+        setActivityLogs([
+          {
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            action: 'login',
+            detail: 'Siswa berhasil login dan memulai sesi ujian.',
+          },
+        ]);
+        setResumeNotice(null);
+      }
+
       setShowCheatBanner(false);
       setShowCheatLockModal(false);
       setIsStudentBlocked(session.student.status_ujian === 'Diblokir');
@@ -240,17 +523,25 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         } else if (newStatus === 'Sedang Ujian') {
           setIsStudentBlocked((wasBlocked) => {
             if (wasBlocked) {
-              setTabViolations(0);
               setShowCheatLockModal(false);
               setShowCheatBanner(false);
               setSecurityNotice(
-                'Kunci ujian telah dibuka oleh Guru Pengawas. Silakan lanjutkan ujian dengan tertib.'
+                'Kunci ujian telah dibuka oleh Guru Pengawas! Silakan lanjutkan ujian dengan tertib.'
               );
+              setActivityLogs((prev) => [
+                ...prev,
+                {
+                  timestamp: new Date().toLocaleTimeString('id-ID'),
+                  action: 'unblocked',
+                  detail: 'Kunci ujian telah dibuka oleh Guru Pengawas di Dashboard.',
+                },
+              ]);
             }
             return false;
           });
         } else if (newStatus === 'Belum Mulai') {
           // Teacher reset this student's session
+          clearLocalProgress(activeStudent.token_ujian);
           setActiveStudent(null);
           setSubmittedSummary(null);
         }
@@ -258,10 +549,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
 
     return () => unsubscribe();
-  }, [activeStudent?.id, submittedSummary]);
+  }, [activeStudent?.id, activeStudent?.token_ujian, submittedSummary]);
 
   const triggerViolation = useCallback(
-    (reason = 'Terdeteksi berpindah tab atau keluar dari jendela ujian') => {
+    (reason = 'Terdeteksi berpindah tab browser atau keluar dari jendela ujian') => {
       if (!activeStudent || submittedSummary || isStudentBlocked) return;
 
       // Debounce rapid blur+visibilitychange events within 800ms
@@ -269,37 +560,77 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       if (now - lastViolationTimestampRef.current < 800) return;
       lastViolationTimestampRef.current = now;
 
-      setTabViolations((prev) => {
-        const nextCount = prev + 1;
-        const answeredNow = Object.keys(answers).filter(
-          (k) => answers[k] && answers[k].length > 0
-        ).length;
-        safeApiJson('/api/exam/heartbeat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            nama: activeStudent.nama,
-            kelas: activeStudent.kelas,
-            pelanggaranTab: nextCount,
-            answeredCount: answeredNow,
-          }),
-        });
-
-        if (nextCount >= MAX_TAB_VIOLATIONS) {
-          setIsStudentBlocked(true);
-          updateStudentStatusCbt(activeStudent, 'Diblokir').then(() => {
-            onExamCompleted();
-          });
-        }
-
-        return nextCount;
-      });
-      setShowCheatBanner(true);
-      setShowCheatLockModal(true);
+      const timeStr = new Date().toLocaleTimeString('id-ID');
+      const nextCount = tabViolations + 1;
+      setTabViolations(nextCount);
+      setLastViolationTime(timeStr);
       setSecurityNotice(reason);
-      setLastViolationTime(new Date().toLocaleTimeString('id-ID'));
+
+      const newLogItem: StudentActivityLog = {
+        timestamp: timeStr,
+        action: 'violation',
+        detail: `${reason} (Pelanggaran ke-${nextCount})`,
+      };
+      const blockedLogItem: StudentActivityLog = {
+        timestamp: timeStr,
+        action: 'blocked',
+        detail: 'Sesi ujian diblokir otomatis. Menunggu guru pengawas membuka blokir.',
+      };
+      const updatedLogs = [...activityLogs, newLogItem, blockedLogItem];
+      setActivityLogs(updatedLogs);
+
+      // Autosave answers & state so NOTHING is lost (Siswa tinggal melanjutkan!)
+      saveLocalProgress(activeStudent.token_ujian, {
+        studentId: activeStudent.id,
+        nama: activeStudent.nama,
+        kelas: activeStudent.kelas,
+        token_ujian: activeStudent.token_ujian,
+        examId: activeExam ? activeExam.id : 0,
+        answers,
+        currentIndex,
+        remainingSeconds,
+        tabViolations: nextCount,
+        logs: updatedLogs,
+        lastSavedAt: new Date().toISOString(),
+      });
+
+      // Instantly block the student as requested
+      setIsStudentBlocked(true);
+      setShowCheatLockModal(true);
+
+      // Persist blocked status to server / Firebase
+      updateStudentStatusCbt(activeStudent, 'Diblokir').then(() => {
+        onExamCompleted();
+      });
+
+      safeApiJson('/api/exam/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId: activeStudent.id,
+          nama: activeStudent.nama,
+          kelas: activeStudent.kelas,
+          pelanggaranTab: nextCount,
+          answeredCount: Object.keys(answers).filter(
+            (k) => answers[k] && answers[k].length > 0
+          ).length,
+          status: 'Diblokir',
+          reason,
+        }),
+      });
     },
-    [activeStudent, submittedSummary, isStudentBlocked, answers, onExamCompleted]
+    [
+      activeStudent,
+      activeExam,
+      answers,
+      currentIndex,
+      remainingSeconds,
+      tabViolations,
+      activityLogs,
+      submittedSummary,
+      isStudentBlocked,
+      onExamCompleted,
+    ]
   );
 
   // Strict Anti-Cheat: Detect window blur, visibilitychange, right-click, copy/paste, and shortcuts
@@ -405,6 +736,39 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       if (document.fullscreenElement && document.exitFullscreen) {
         document.exitFullscreen().catch(() => {});
       }
+
+      // Clear in-progress storage upon successful submission
+      clearLocalProgress(activeStudent.token_ujian);
+
+      // Save complete receipt to student's history
+      const finalReceipt: LocalExamReceipt = {
+        resultId: outcome.resultId,
+        studentId: activeStudent.id,
+        studentNama: activeStudent.nama,
+        studentKelas: activeStudent.kelas,
+        tokenUjian: activeStudent.token_ujian,
+        examId: activeExam.id,
+        examJudul: activeExam.judul_ujian,
+        skor: outcome.skor,
+        kategori: outcome.kategori,
+        rawEarned: outcome.rawEarned,
+        rawMax: outcome.rawMax,
+        answeredCount: currentAnsweredCount,
+        totalQuestions: examQuestions.length,
+        pelanggaranTab: tabViolations,
+        jawabanSiswa: answers,
+        logs: [
+          ...activityLogs,
+          {
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            action: 'submit',
+            detail: `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100.`,
+          },
+        ],
+        submittedAt: new Date().toISOString(),
+      };
+      saveLocalReceipt(finalReceipt);
+
       setSubmittedSummary({
         resultId: outcome.resultId,
         skor: outcome.skor,
@@ -422,6 +786,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     activeExam,
     answers,
     tabViolations,
+    activityLogs,
     isSubmitting,
     isStudentBlocked,
     examQuestions,
@@ -452,27 +817,57 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return `${String(mins).padStart(2, '0')}:${String(remSecs).padStart(2, '0')}`;
   };
 
-  // Option selection handler for PG Biasa (Radio) and PG Kompleks (Checkbox)
+  // Option selection handler for PG Biasa (Radio) and PG Kompleks (Checkbox) with autosave
   const handleSelectOption = (
     questionId: number,
     optionKey: string,
     tipeSoal: string
   ) => {
+    if (isStudentBlocked || !activeStudent || !activeExam) return;
     const qKey = String(questionId);
     const isKompleks = tipeSoal.toLowerCase().includes('kompleks');
 
+    let nextAnswersMap: Record<string, string[]> = {};
     setAnswers((prev) => {
       const currentSelected = prev[qKey] || [];
+      let nextSelected: string[];
       if (!isKompleks) {
-        return { ...prev, [qKey]: [optionKey] };
+        nextSelected = [optionKey];
       } else {
         const exists = currentSelected.includes(optionKey);
-        const nextSelected = exists
+        nextSelected = exists
           ? currentSelected.filter((k) => k !== optionKey)
           : [...currentSelected, optionKey].sort();
-        return { ...prev, [qKey]: nextSelected };
       }
+      nextAnswersMap = { ...prev, [qKey]: nextSelected };
+
+      // Immediately autosave progress (Siswa tinggal melanjutkan!)
+      saveLocalProgress(activeStudent.token_ujian, {
+        studentId: activeStudent.id,
+        nama: activeStudent.nama,
+        kelas: activeStudent.kelas,
+        token_ujian: activeStudent.token_ujian,
+        examId: activeExam.id,
+        answers: nextAnswersMap,
+        currentIndex,
+        remainingSeconds,
+        tabViolations,
+        logs: activityLogs,
+        lastSavedAt: new Date().toISOString(),
+      });
+
+      return nextAnswersMap;
     });
+
+    const timeStr = new Date().toLocaleTimeString('id-ID');
+    setActivityLogs((prev) => [
+      ...prev.slice(-49),
+      {
+        timestamp: timeStr,
+        action: 'answer',
+        detail: `Menjawab Soal #${currentIndex + 1} (${optionKey})`,
+      },
+    ]);
   };
 
   const handleRequestInstantAiEvaluation = async () => {
@@ -645,275 +1040,700 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
   }
 
-  // 2. RENDER DEDICATED STUDENT LOGIN SCREEN (3-STEP CASCADING: PILIH KELAS -> PILIH NAMA -> MASUKKAN TOKEN)
+  // 2. RENDER DEDICATED STUDENT PORTAL (TAB: MASUK UJIAN SISWA & RIWAYAT HASIL UJIAN)
   if (!activeStudent) {
     const step1Done = Boolean(selectedKelas);
     const step2Done = Boolean(selectedKelas && selectedStudentObj);
     const step3Done = Boolean(step2Done && tokenInput.trim().length === 6);
 
+    // Filter results for history tab
+    const historyStudentName = selectedStudentObj ? selectedStudentObj.nama : namaInput.trim();
+    const historyStudentKelas = selectedKelas.trim();
+
+    const matchedDbResults = (results || []).filter((r) => {
+      const st = students.find((s) => s.id === r.student_id);
+      const matchName = historyStudentName
+        ? (st?.nama || '').toLowerCase().trim() === historyStudentName.toLowerCase().trim()
+        : true;
+      const matchKelas = historyStudentKelas
+        ? (st?.kelas || '').toLowerCase().trim() === historyStudentKelas.toLowerCase().trim()
+        : true;
+      return matchName && matchKelas;
+    });
+
+    const localReceipts = selectedStudentObj
+      ? getLocalReceiptsForStudent(selectedStudentObj.id)
+      : [];
+
+    // Check if there is saved unsubmitted progress in localStorage for current student
+    const activeSavedProgress = step3Done
+      ? getLocalProgress(tokenInput.toUpperCase().trim(), selectedExamId ? Number(selectedExamId) : undefined)
+      : null;
+
     return (
-      <div className="max-w-xl mx-auto py-10 px-4 sm:px-6">
-        <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
+      <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 space-y-6">
+        {/* Navigation Tabs for Student Portal */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
           <div>
-            <div className="text-xs font-medium text-blue-700">
-              Halaman Login Peserta Ujian CBT · 3 Langkah Verifikasi
+            <div className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+              Portal Asesmen Siswa CBT
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1.5 tracking-tight">
-              Masuk Ruang Ujian Siswa
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight mt-0.5">
+              Ruang Asesmen & Riwayat Siswa
             </h1>
-            <p className="text-sm text-slate-600 mt-2 leading-relaxed">
-              Pilih <strong>Kelas / Rombel</strong> terlebih dahulu, lalu pilih{' '}
-              <strong>Nama Lengkap Anda</strong> dari daftar kelas, kemudian
-              masukkan <strong>6 karakter Token Ujian</strong>.
-            </p>
           </div>
 
-          {/* 3-Step Visual Progress Indicator */}
-          <div className="grid grid-cols-3 gap-2 pt-1">
-            <div
-              className={`p-2.5 rounded-lg border text-xs transition-colors ${
-                step1Done
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                  : 'bg-blue-50/70 border-blue-200 text-blue-900'
+          <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setStudentPortalTab('login')}
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                studentPortalTab === 'login'
+                  ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <div className="font-bold flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 shrink-0" />
-                <span>1. Pilih Kelas</span>
-              </div>
-              <div className="text-[11px] mt-0.5 truncate opacity-80">
-                {selectedKelas || 'Belum dipilih'}
-              </div>
-            </div>
-
-            <div
-              className={`p-2.5 rounded-lg border text-xs transition-colors ${
-                step2Done
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                  : step1Done
-                    ? 'bg-blue-50/70 border-blue-200 text-blue-900'
-                    : 'bg-slate-50 border-slate-200 text-slate-400'
+              <LogIn className="w-4 h-4" />
+              <span>Masuk Ruang Ujian</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setStudentPortalTab('history')}
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                studentPortalTab === 'history'
+                  ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <div className="font-bold flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5 shrink-0" />
-                <span>2. Pilih Nama</span>
-              </div>
-              <div className="text-[11px] mt-0.5 truncate opacity-80">
-                {selectedStudentObj
-                  ? selectedStudentObj.nama
-                  : step1Done
-                    ? `${studentsInSelectedClass.length} siswa tersedia`
-                    : 'Menunggu kelas'}
-              </div>
-            </div>
-
-            <div
-              className={`p-2.5 rounded-lg border text-xs transition-colors ${
-                step3Done
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                  : step2Done
-                    ? 'bg-blue-50/70 border-blue-200 text-blue-900'
-                    : 'bg-slate-50 border-slate-200 text-slate-400'
-              }`}
-            >
-              <div className="font-bold flex items-center gap-1.5">
-                <KeyRound className="w-3.5 h-3.5 shrink-0" />
-                <span>3. Token Ujian</span>
-              </div>
-              <div className="text-[11px] mt-0.5 truncate opacity-80">
-                {step3Done
-                  ? 'Token siap diverifikasi'
-                  : step2Done
-                    ? 'Masukkan 6 karakter'
-                    : 'Menunggu nama'}
-              </div>
-            </div>
-          </div>
-
-          <form onSubmit={handleStartExam} className="space-y-5">
-            {/* LANGKAH 1: PILIH KELAS / ROMBEL */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label
-                  htmlFor="student-class-select"
-                  className="block text-sm font-semibold text-slate-800"
-                >
-                  Langkah 1 — Pilih Kelas / Rombel
-                </label>
-                <span className="text-xs text-slate-500">
-                  {classOptions.length} kelas terdaftar
+              <History className="w-4 h-4" />
+              <span>Riwayat Hasil Ujian Saya</span>
+              {(matchedDbResults.length > 0 || localReceipts.length > 0) && (
+                <span className="px-1.5 py-0.5 text-[10px] bg-blue-100 text-blue-800 rounded-full font-bold">
+                  {matchedDbResults.length || localReceipts.length}
                 </span>
-              </div>
-              <select
-                id="student-class-select"
-                value={selectedKelas}
-                onChange={(e) => handleSelectKelas(e.target.value)}
-                className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent cursor-pointer"
-              >
-                <option value="">-- Pilih Kelas / Rombel Anda --</option>
-                {classOptions.map((cls) => (
-                  <option key={cls.kelas} value={cls.kelas}>
-                    {cls.kelas} ({cls.studentCount} Siswa)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* LANGKAH 2: PILIH NAMA SISWA (MUNCUL / AKTIF SETELAH PILIH KELAS) */}
-            <div
-              className={`transition-opacity ${
-                step1Done ? 'opacity-100' : 'opacity-60'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <label
-                  htmlFor="student-name-select"
-                  className="block text-sm font-semibold text-slate-800"
-                >
-                  Langkah 2 — Pilih Nama Siswa
-                </label>
-                {step1Done && (
-                  <span className="text-xs font-medium text-blue-700">
-                    Kelas {selectedKelas}: {studentsInSelectedClass.length} siswa
-                  </span>
-                )}
-              </div>
-
-              {students.length > 0 ? (
-                <select
-                  id="student-name-select"
-                  value={selectedStudentId}
-                  disabled={!step1Done}
-                  onChange={(e) => handleSelectStudent(e.target.value)}
-                  className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent cursor-pointer disabled:cursor-not-allowed"
-                >
-                  <option value="">
-                    {step1Done
-                      ? `-- Pilih Nama Lengkap Anda (${studentsInSelectedClass.length} Siswa di ${selectedKelas}) --`
-                      : '-- Pilih Kelas Terlebih Dahulu pada Langkah 1 --'}
-                  </option>
-                  {studentsInSelectedClass.map((st, idx) => {
-                    const statusTag =
-                      st.status_ujian === 'Selesai'
-                        ? ' — [Sudah Selesai]'
-                        : st.status_ujian === 'Diblokir'
-                          ? ' — [Diblokir / Terkunci]'
-                          : st.status_ujian === 'Sedang Ujian'
-                            ? ' — [Sedang Ujian]'
-                            : '';
-                    return (
-                      <option key={st.id} value={String(st.id)}>
-                        {idx + 1}. {st.nama}
-                        {statusTag}
-                      </option>
-                    );
-                  })}
-                </select>
-              ) : (
-                <input
-                  id="student-name-input"
-                  type="text"
-                  value={namaInput}
-                  onChange={(e) => setNamaInput(e.target.value)}
-                  placeholder="Masukkan Nama Lengkap Anda"
-                  className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
-                />
               )}
+            </button>
+          </div>
+        </div>
 
-              {/* Selected Student Confirmation Card */}
-              {selectedStudentObj && (
-                <div className="mt-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div>
-                    <span className="text-slate-500">Peserta Terpilih: </span>
-                    <strong className="text-slate-900">
-                      {selectedStudentObj.nama}
-                    </strong>
-                    <span className="mx-1.5 text-slate-300">·</span>
-                    <span className="text-slate-600">
-                      {selectedStudentObj.kelas}
-                    </span>
-                  </div>
-                  <span
-                    className={`font-semibold ${
-                      selectedStudentObj.status_ujian === 'Diblokir'
-                        ? 'text-red-700'
-                        : selectedStudentObj.status_ujian === 'Selesai'
-                          ? 'text-amber-700'
-                          : 'text-emerald-700'
-                    }`}
-                  >
-                    Status: {selectedStudentObj.status_ujian || 'Belum Mulai'}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* LANGKAH 3: MASUKKAN TOKEN UJIAN (AKTIF SETELAH PILIH NAMA SISWA) */}
-            <div
-              className={`transition-opacity ${
-                step2Done || students.length === 0 ? 'opacity-100' : 'opacity-60'
-              }`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                <label
-                  htmlFor="student-token-input"
-                  className="block text-sm font-semibold text-slate-800 whitespace-nowrap"
-                >
-                  Langkah 3 — Masukkan Token Ujian (6 Karakter)
-                </label>
-                {matchedExamsForSelectedClass.length > 0 && step1Done && (
-                  <span className="text-xs font-medium text-blue-700 whitespace-nowrap">
-                    Ujian: {matchedExamsForSelectedClass[0].judul_ujian}
-                  </span>
-                )}
+        {/* TAB 1: LOGIN RUANG UJIAN SISWA */}
+        {studentPortalTab === 'login' ? (
+          <div className="max-w-xl mx-auto bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6 shadow-xs">
+            <div>
+              <div className="text-xs font-medium text-blue-700">
+                Halaman Login Peserta Ujian CBT · 3 Langkah Verifikasi
               </div>
-              <input
-                ref={tokenInputRef}
-                id="student-token-input"
-                type="text"
-                maxLength={6}
-                disabled={students.length > 0 && !step2Done}
-                value={tokenInput}
-                onChange={(e) => setTokenInput(e.target.value.toUpperCase())}
-                placeholder={
-                  students.length > 0 && !step2Done
-                    ? 'Pilih Kelas & Nama Siswa Terlebih Dahulu'
-                    : 'Masukkan 6 Karakter Token Ujian Anda'
-                }
-                className="w-full px-4 py-2.5 text-base font-mono tracking-widest uppercase bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed"
-              />
+              <h2 className="text-2xl font-bold text-slate-900 mt-1 tracking-tight">
+                Masuk Ruang Ujian Siswa
+              </h2>
+              <p className="text-sm text-slate-600 mt-1.5 leading-relaxed">
+                Pilih <strong>Kelas / Rombel</strong> terlebih dahulu, lalu pilih{' '}
+                <strong>Nama Lengkap Anda</strong> dari daftar kelas, kemudian
+                masukkan <strong>6 karakter Token Ujian</strong>.
+              </p>
             </div>
 
-            {loginError && (
+            {/* 3-Step Visual Progress Indicator */}
+            <div className="grid grid-cols-3 gap-2 pt-1">
               <div
-                role="alert"
-                className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs font-medium text-red-700 flex items-center gap-2"
+                className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                  step1Done
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-blue-50/70 border-blue-200 text-blue-900'
+                }`}
               >
-                <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
-                <span>{loginError}</span>
+                <div className="font-bold flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 shrink-0" />
+                  <span>1. Pilih Kelas</span>
+                </div>
+                <div className="text-[11px] mt-0.5 truncate opacity-80">
+                  {selectedKelas || 'Belum dipilih'}
+                </div>
+              </div>
+
+              <div
+                className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                  step2Done
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : step1Done
+                      ? 'bg-blue-50/70 border-blue-200 text-blue-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-400'
+                }`}
+              >
+                <div className="font-bold flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                  <span>2. Pilih Nama</span>
+                </div>
+                <div className="text-[11px] mt-0.5 truncate opacity-80">
+                  {selectedStudentObj
+                    ? selectedStudentObj.nama
+                    : step1Done
+                      ? `${studentsInSelectedClass.length} siswa tersedia`
+                      : 'Menunggu kelas'}
+                </div>
+              </div>
+
+              <div
+                className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                  step3Done
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : step2Done
+                      ? 'bg-blue-50/70 border-blue-200 text-blue-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-400'
+                }`}
+              >
+                <div className="font-bold flex items-center gap-1.5">
+                  <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                  <span>3. Token Ujian</span>
+                </div>
+                <div className="text-[11px] mt-0.5 truncate opacity-80">
+                  {step3Done
+                    ? 'Token siap diverifikasi'
+                    : step2Done
+                      ? 'Masukkan 6 karakter'
+                      : 'Menunggu nama'}
+                </div>
+              </div>
+            </div>
+
+            {/* Saved Progress Notice if returning student */}
+            {activeSavedProgress && Object.keys(activeSavedProgress.answers || {}).length > 0 && (
+              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-3">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold text-emerald-950">
+                    Progres Ujian Tersimpan Ditemukan!
+                  </div>
+                  <p className="mt-0.5 leading-relaxed text-emerald-800">
+                    Sistem mendeteksi ada{' '}
+                    <strong>{Object.keys(activeSavedProgress.answers).length} jawaban tersimpan</strong>{' '}
+                    dari sesi sebelumnya. Saat Anda klik <em>Mulai Ujian</em>, Anda akan langsung{' '}
+                    <strong>melanjutkan</strong> pengerjaan soal tanpa kehilangan jawaban.
+                  </p>
+                </div>
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={
-                isLoggingIn ||
-                (students.length > 0 && (!step1Done || !step2Done || !step3Done))
-              }
-              className="w-full py-3 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
-            >
-              {isLoggingIn
-                ? 'Memverifikasi Kelas, Nama & Token...'
-                : 'Mulai Ujian Sekarang'}
-            </button>
-          </form>
+            <form onSubmit={handleStartExam} className="space-y-5">
+              {/* LANGKAH 1: PILIH KELAS / ROMBEL */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="student-class-select"
+                    className="block text-sm font-semibold text-slate-800"
+                  >
+                    Langkah 1 — Pilih Kelas / Rombel
+                  </label>
+                  <span className="text-xs text-slate-500">
+                    {classOptions.length} kelas terdaftar
+                  </span>
+                </div>
+                <select
+                  id="student-class-select"
+                  value={selectedKelas}
+                  onChange={(e) => handleSelectKelas(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent cursor-pointer"
+                >
+                  <option value="">-- Pilih Kelas / Rombel Anda --</option>
+                  {classOptions.map((cls) => (
+                    <option key={cls.kelas} value={cls.kelas}>
+                      {cls.kelas} ({cls.studentCount} Siswa)
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <div className="pt-5 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
-            <span>Dukungan Soal: PG Biasa & PG Kompleks</span>
-            <span>Proteksi Anti-Cheat Pindah Tab Aktif</span>
+              {/* LANGKAH 2: PILIH NAMA SISWA (MUNCUL / AKTIF SETELAH PILIH KELAS) */}
+              <div
+                className={`transition-opacity ${
+                  step1Done ? 'opacity-100' : 'opacity-60'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="student-name-select"
+                    className="block text-sm font-semibold text-slate-800"
+                  >
+                    Langkah 2 — Pilih Nama Siswa
+                  </label>
+                  {step1Done && (
+                    <span className="text-xs font-medium text-blue-700">
+                      Kelas {selectedKelas}: {studentsInSelectedClass.length} siswa
+                    </span>
+                  )}
+                </div>
+
+                {students.length > 0 ? (
+                  <select
+                    id="student-name-select"
+                    value={selectedStudentId}
+                    disabled={!step1Done}
+                    onChange={(e) => handleSelectStudent(e.target.value)}
+                    className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <option value="">
+                      {step1Done
+                        ? `-- Pilih Nama Lengkap Anda (${studentsInSelectedClass.length} Siswa di ${selectedKelas}) --`
+                        : '-- Pilih Kelas Terlebih Dahulu pada Langkah 1 --'}
+                    </option>
+                    {studentsInSelectedClass.map((st, idx) => {
+                      const statusTag =
+                        st.status_ujian === 'Selesai'
+                          ? ' — [Sudah Selesai]'
+                          : st.status_ujian === 'Diblokir'
+                            ? ' — [Diblokir / Terkunci]'
+                            : st.status_ujian === 'Sedang Ujian'
+                              ? ' — [Sedang Ujian]'
+                              : '';
+                      return (
+                        <option key={st.id} value={String(st.id)}>
+                          {idx + 1}. {st.nama}
+                          {statusTag}
+                        </option>
+                      );
+                    })}
+                  </select>
+                ) : (
+                  <input
+                    id="student-name-input"
+                    type="text"
+                    value={namaInput}
+                    onChange={(e) => setNamaInput(e.target.value)}
+                    placeholder="Masukkan Nama Lengkap Anda"
+                    className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+                  />
+                )}
+
+                {/* Selected Student Confirmation Card */}
+                {selectedStudentObj && (
+                  <div className="mt-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div>
+                      <span className="text-slate-500">Peserta Terpilih: </span>
+                      <strong className="text-slate-900">
+                        {selectedStudentObj.nama}
+                      </strong>
+                      <span className="mx-1.5 text-slate-300">·</span>
+                      <span className="text-slate-600">
+                        {selectedStudentObj.kelas}
+                      </span>
+                    </div>
+                    <span
+                      className={`font-semibold ${
+                        selectedStudentObj.status_ujian === 'Diblokir'
+                          ? 'text-red-700'
+                          : selectedStudentObj.status_ujian === 'Selesai'
+                            ? 'text-amber-700'
+                            : 'text-emerald-700'
+                      }`}
+                    >
+                      Status: {selectedStudentObj.status_ujian || 'Belum Mulai'}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* LANGKAH 3: MASUKKAN TOKEN UJIAN (AKTIF SETELAH PILIH NAMA SISWA) */}
+              <div
+                className={`transition-opacity ${
+                  step2Done || students.length === 0 ? 'opacity-100' : 'opacity-60'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                  <label
+                    htmlFor="student-token-input"
+                    className="block text-sm font-semibold text-slate-800 whitespace-nowrap"
+                  >
+                    Langkah 3 — Masukkan Token Ujian (6 Karakter)
+                  </label>
+                  {matchedExamsForSelectedClass.length > 0 && step1Done && (
+                    <span className="text-xs font-medium text-blue-700 whitespace-nowrap">
+                      Ujian: {matchedExamsForSelectedClass[0].judul_ujian}
+                    </span>
+                  )}
+                </div>
+                <input
+                  ref={tokenInputRef}
+                  id="student-token-input"
+                  type="text"
+                  maxLength={6}
+                  disabled={students.length > 0 && !step2Done}
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value.toUpperCase())}
+                  placeholder={
+                    students.length > 0 && !step2Done
+                      ? 'Pilih Kelas & Nama Siswa Terlebih Dahulu'
+                      : 'Masukkan 6 Karakter Token Ujian Anda'
+                  }
+                  className="w-full px-4 py-2.5 text-base font-mono tracking-widest uppercase bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed"
+                />
+              </div>
+
+              {loginError && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs font-medium text-red-700 flex items-start gap-2.5"
+                >
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
+                  <div>
+                    <div className="font-bold">Akses Tidak Diizinkan</div>
+                    <div className="mt-0.5">{loginError}</div>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={
+                  isLoggingIn ||
+                  (students.length > 0 && (!step1Done || !step2Done || !step3Done))
+                }
+                className="w-full py-3 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+              >
+                {isLoggingIn
+                  ? 'Memverifikasi Kelas, Nama & Token...'
+                  : activeSavedProgress
+                    ? 'Lanjutkan Ujian (Jawaban Tersimpan)'
+                    : 'Mulai Ujian Sekarang'}
+              </button>
+            </form>
+
+            <div className="pt-5 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
+              <span>Dukungan Soal: PG Biasa & PG Kompleks</span>
+              <span>Proteksi Anti-Cheat & Autosave Aktif</span>
+            </div>
           </div>
-        </div>
+        ) : (
+          /* TAB 2: RIWAYAT HASIL UJIAN SISWA */
+          <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+                  Riwayat Asesmen & Bukti Ujian
+                </h2>
+                <p className="text-xs text-slate-600 mt-1">
+                  Daftar ujian yang telah selesai dikerjakan beserta nilai, rekapan analisis LOTS/HOTS, dan bukti lembar jawaban.
+                </p>
+              </div>
+
+              {/* Class & Name filter for History */}
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={selectedKelas}
+                  onChange={(e) => handleSelectKelas(e.target.value)}
+                  className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer"
+                >
+                  <option value="">Semua Kelas</option>
+                  {classOptions.map((cls) => (
+                    <option key={cls.kelas} value={cls.kelas}>
+                      {cls.kelas}
+                    </option>
+                  ))}
+                </select>
+
+                {selectedKelas && (
+                  <select
+                    value={selectedStudentId}
+                    onChange={(e) => handleSelectStudent(e.target.value)}
+                    className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer max-w-[200px]"
+                  >
+                    <option value="">Semua Siswa di {selectedKelas}</option>
+                    {studentsInSelectedClass.map((st) => (
+                      <option key={st.id} value={String(st.id)}>
+                        {st.nama}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            {/* List of results */}
+            {matchedDbResults.length === 0 && localReceipts.length === 0 ? (
+              <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 rounded-xl space-y-3">
+                <ClipboardList className="w-10 h-10 text-slate-300 mx-auto" />
+                <h3 className="text-sm font-semibold text-slate-700">
+                  Belum Ada Riwayat Ujian Ditemukan
+                </h3>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  {selectedStudentObj
+                    ? `Peserta ${selectedStudentObj.nama} (${selectedStudentObj.kelas}) belum memiliki rekaman ujian yang sudah diselesaikan.`
+                    : 'Pilih Kelas dan Nama Anda pada pilihan di atas untuk melihat riwayat hasil ujian dan mencetak lembar bukti jawaban.'}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Server DB results */}
+                {matchedDbResults.map((res) => {
+                  const receipt = formatReceipt(res, students, exams, questions || []);
+
+                  return (
+                    <div
+                      key={`db-${res.id}`}
+                      className="p-5 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition-all space-y-3 shadow-2xs"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                            Hasil Terverifikasi
+                          </span>
+                          <h4 className="text-base font-bold text-slate-900 mt-1">
+                            {receipt.examJudul}
+                          </h4>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            {receipt.studentNama} · Kelas {receipt.studentKelas}
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <div className="text-2xl font-black text-slate-900 font-mono">
+                            {receipt.skor}
+                          </div>
+                          <span className="text-[10px] font-semibold text-slate-500">
+                            Skor / 100
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
+                          <div className="text-[11px] text-slate-500">Kategori</div>
+                          <div className="font-semibold text-slate-800">
+                            {receipt.kategori}
+                          </div>
+                        </div>
+                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
+                          <div className="text-[11px] text-slate-500">Pelanggaran Tab</div>
+                          <div
+                            className={`font-semibold ${
+                              receipt.pelanggaranTab > 0 ? 'text-amber-700' : 'text-emerald-700'
+                            }`}
+                          >
+                            {receipt.pelanggaranTab > 0 ? `${receipt.pelanggaranTab} kali` : '0 (Aman)'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 flex items-center justify-between border-t border-slate-100 text-xs text-slate-500">
+                        <span>{new Date(receipt.submittedAt).toLocaleDateString('id-ID')}</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedReceipt(receipt)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Lihat Lembar Bukti</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Local Storage Receipts */}
+                {localReceipts.map((rc, idx) => {
+                  const receipt = formatReceipt(rc, students, exams, questions || []);
+
+                  return (
+                    <div
+                      key={`loc-${idx}`}
+                      className="p-5 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition-all space-y-3 shadow-2xs"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                            Tersimpan di Perangkat
+                          </span>
+                          <h4 className="text-base font-bold text-slate-900 mt-1">
+                            {receipt.examJudul}
+                          </h4>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            {receipt.studentNama} · Kelas {receipt.studentKelas} · Token {receipt.tokenUjian}
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <div className="text-2xl font-black text-slate-900 font-mono">
+                            {receipt.skor}
+                          </div>
+                          <span className="text-[10px] font-semibold text-slate-500">
+                            Skor / 100
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
+                          <div className="text-[11px] text-slate-500">Kategori</div>
+                          <div className="font-semibold text-slate-800">{receipt.kategori}</div>
+                        </div>
+                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
+                          <div className="text-[11px] text-slate-500">Pelanggaran Tab</div>
+                          <div
+                            className={`font-semibold ${
+                              receipt.pelanggaranTab > 0 ? 'text-amber-700' : 'text-emerald-700'
+                            }`}
+                          >
+                            {receipt.pelanggaranTab > 0 ? `${receipt.pelanggaranTab} kali` : '0 (Aman)'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 flex items-center justify-between border-t border-slate-100 text-xs text-slate-500">
+                        <span>{new Date(receipt.submittedAt).toLocaleDateString('id-ID')}</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedReceipt(receipt)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Lihat Bukti Resep</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Modal: Selected Exam Receipt / Lembar Bukti Jawaban */}
+        {selectedReceipt && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+          >
+            <div className="bg-white border border-slate-200 rounded-2xl max-w-3xl w-full p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200">
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-wider text-blue-700">
+                    Lembar Bukti & Hasil Asesmen Ujian CBT
+                  </div>
+                  <h3 className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">
+                    {selectedReceipt.examJudul}
+                  </h3>
+                  <div className="text-xs text-slate-600 mt-1">
+                    {selectedReceipt.studentNama} · Kelas {selectedReceipt.studentKelas} · Token {selectedReceipt.tokenUjian}
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0">
+                  <div className="text-3xl font-black font-mono text-blue-700">
+                    {selectedReceipt.skor}
+                  </div>
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    Nilai Akhir
+                  </div>
+                </div>
+              </div>
+
+              {/* Summary Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  <div className="text-slate-500">Kategori</div>
+                  <div className="font-bold text-slate-900 mt-0.5">
+                    {selectedReceipt.kategori || 'Selesai'}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  <div className="text-slate-500">Pelanggaran Tab</div>
+                  <div className="font-bold text-slate-900 mt-0.5">
+                    {selectedReceipt.pelanggaranTab} kali
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  <div className="text-slate-500">Waktu Selesai</div>
+                  <div className="font-bold text-slate-900 mt-0.5">
+                    {new Date(selectedReceipt.submittedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                  <div className="text-slate-500">Status Bukti</div>
+                  <div className="font-bold text-emerald-700 mt-0.5">
+                    Tervalidasi Resmi
+                  </div>
+                </div>
+              </div>
+
+              {/* Question breakdown if available */}
+              {selectedReceipt.breakdown && selectedReceipt.breakdown.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <h4 className="text-sm font-bold text-slate-900">
+                    Daftar Rekap Soal & Jawaban:
+                  </h4>
+                  <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                    {selectedReceipt.breakdown.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className={`p-3.5 rounded-lg border text-xs space-y-2 ${
+                          item.isCorrect
+                            ? 'bg-emerald-50/50 border-emerald-200'
+                            : 'bg-rose-50/50 border-rose-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-900">
+                            Soal #{idx + 1}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              item.isCorrect
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-rose-100 text-rose-800'
+                            }`}
+                          >
+                            {item.isCorrect ? 'Benar' : 'Salah'} ({item.pointsEarned} poin)
+                          </span>
+                        </div>
+                        <div className="text-slate-700">
+                          <MathAndTableRenderer content={item.pertanyaan} />
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 text-[11px]">
+                          <div>
+                            <span className="text-slate-500">Jawaban Siswa: </span>
+                            <strong className="text-slate-900 font-mono">
+                              {item.studentAnswer && item.studentAnswer.length > 0
+                                ? item.studentAnswer.join(', ')
+                                : '(Kosong)'}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500">Kunci Jawaban: </span>
+                            <strong className="text-emerald-700 font-mono">
+                              {item.correctAnswer && item.correctAnswer.length > 0
+                                ? item.correctAnswer.join(', ')
+                                : '-'}
+                            </strong>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-between pt-4 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Cetak / Simpan Bukti (PDF)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedReceipt(null)}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -954,6 +1774,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowActivityLogModal(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+          >
+            <Activity className="w-3.5 h-3.5 text-blue-600" />
+            <span>Catatan Aktivitas ({activityLogs.length})</span>
+          </button>
+
           {!isFullscreen && (
             <button
               type="button"
@@ -997,6 +1826,28 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Resume Progress Notice Banner */}
+      {resumeNotice && (
+        <div
+          role="status"
+          className="bg-emerald-900 text-white rounded-xl px-4 py-3 flex items-center justify-between gap-3 text-xs shadow-xs"
+        >
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-300 shrink-0" />
+            <span>
+              <strong>Status Sesi Ujian:</strong> {resumeNotice}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setResumeNotice(null)}
+            className="px-2.5 py-1 text-[11px] font-semibold bg-white/15 hover:bg-white/25 rounded cursor-pointer shrink-0"
+          >
+            Tutup
+          </button>
+        </div>
+      )}
 
       {/* Security Notice Banner (Right-click, Copy-Paste, Keyboard Shortcut Blocked) */}
       {securityNotice && (
@@ -1283,28 +2134,49 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             </div>
 
             {isStudentBlocked ? (
-              <div className="space-y-3 text-sm text-slate-700 leading-relaxed">
+              <div className="space-y-3.5 text-sm text-slate-700 leading-relaxed">
                 <p>
-                  Peserta <strong>{activeStudent.nama}</strong> ({activeStudent.kelas}
-                  ), sesi ujian Anda telah diubah menjadi{' '}
-                  <strong className="text-red-700">Diblokir</strong> karena
-                  mencapai batas maksimal pindah tab/keluar aplikasi (
+                  Peserta <strong>{activeStudent.nama}</strong> ({activeStudent.kelas}), sesi ujian Anda telah{' '}
+                  <strong className="text-red-700 font-bold">DIBLOKIR SISTEM</strong> karena terdeteksi keluar dari layar ujian atau berpindah tab (
                   <strong className="font-mono">
-                    {tabViolations}/{MAX_TAB_VIOLATIONS} kali
+                    {tabViolations}/{MAX_TAB_VIOLATIONS} pelanggaran
                   </strong>
-                  ) atau dikunci langsung oleh Pengawas.
+                  ).
                 </p>
-                <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 space-y-1">
-                  <div className="font-bold">Cara Membuka Kunci Ujian:</div>
-                  <p>
-                    Silakan lapor kepada <strong>Guru / Pengawas Ujian</strong>.
-                    Pengawas dapat membuka kunci Anda secara langsung melalui menu{' '}
-                    <strong>Dashboard Guru → Database Siswa → Buka Kunci</strong>.
-                    Layar ini akan terbuka otomatis begitu status Anda diaktifkan
-                    kembali.
+
+                <div className="p-3.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-emerald-800">
+                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Jawaban & Sisa Waktu Anda Tersimpan Aman (Autosave)</span>
+                  </div>
+                  <p className="text-emerald-800 leading-relaxed">
+                    Semua jawaban yang telah Anda pilih hingga detik ini tersimpan rapi di sistem. Begitu akun dibuka kembali, Anda dapat langsung <strong>melanjutkan soal berikutnya</strong> tanpa kehilangan data.
                   </p>
                 </div>
-                <div className="pt-2 flex items-center justify-end">
+
+                <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-900 space-y-1.5">
+                  <div className="font-bold text-red-950 flex items-center gap-1.5">
+                    <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>Prosedur Membuka Blokir:</span>
+                  </div>
+                  <p>
+                    Anda <strong>TIDAK DAPAT LOGIN SENDIRI</strong> sampai Guru/Pengawas membuka blokir. Silakan segera lapor kepada Guru Pengawas di ruang kelas.
+                  </p>
+                  <div className="p-2 bg-white/70 rounded border border-red-200 font-mono text-[11px] text-red-800">
+                    Guru membuka via: Dashboard Guru → Database Siswa → Klik [Buka Kunci]
+                  </div>
+                </div>
+
+                <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowActivityLogModal(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg cursor-pointer"
+                  >
+                    <Activity className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Lihat Rekaman Pelanggaran</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -1312,7 +2184,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                       setIsStudentBlocked(false);
                       setShowCheatLockModal(false);
                     }}
-                    className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
                   >
                     Keluar ke Halaman Login
                   </button>
@@ -1390,6 +2262,79 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg cursor-pointer"
               >
                 {isSubmitting ? 'Mengirim Jawaban...' : 'Ya, Kumpulkan Jawaban'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Audit Trail: Activity Log Modal */}
+      {showActivityLogModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+        >
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-lg w-full p-6 space-y-4 max-h-[85vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5 text-blue-600" />
+                <h3 className="text-base font-bold text-slate-900">
+                  Catatan Aktivitas Siswa (Audit Trail)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowActivityLogModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Riwayat kronologis seluruh aktivitas pengerjaan, autosave jawaban, peringatan layar, dan status sesi ujian.
+            </p>
+
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[160px]">
+              {activityLogs.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-400">
+                  Belum ada rekaman aktivitas.
+                </div>
+              ) : (
+                [...activityLogs].reverse().map((log, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-3 rounded-lg border text-xs space-y-1 ${
+                      log.action === 'violation' || log.action === 'blocked'
+                        ? 'bg-rose-50 border-rose-200 text-rose-950'
+                        : log.action === 'resume'
+                          ? 'bg-blue-50 border-blue-200 text-blue-950'
+                          : log.action === 'answer' || log.action === 'submit'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                            : 'bg-slate-50 border-slate-200 text-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span className="font-bold uppercase tracking-wider">
+                        [{log.action.replace('_', ' ')}]
+                      </span>
+                      <span className="text-slate-500">{log.timestamp}</span>
+                    </div>
+                    <p className="leading-relaxed">{log.detail}</p>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
+              <span>Total rekaman: {activityLogs.length} kejadian</span>
+              <button
+                type="button"
+                onClick={() => setShowActivityLogModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+              >
+                Tutup
               </button>
             </div>
           </div>
