@@ -181,11 +181,21 @@ export default function App() {
             e.preventDefault();
             setPortalView('student');
           }}
-          className={`text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-2.5 tracking-tight text-slate-900 whitespace-nowrap shrink-0 ${
             isStudentInExam ? 'cursor-default pointer-events-none' : ''
           }`}
         >
-          EduAssess CBT
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+            SC
+          </div>
+          <div className="flex flex-col text-left">
+            <span className="text-base font-black tracking-tight text-slate-900 leading-none">
+              SocioCBT AI
+            </span>
+            <span className="text-[10px] font-semibold text-indigo-700 tracking-wide uppercase mt-0.5">
+              Asesmen & CBT Sosiologi SMA
+            </span>
+          </div>
         </a>
 
         {/* Zone 2: Separated Student Login & Teacher Login navigation links */}
@@ -305,7 +315,7 @@ export default function App() {
 
       {/* Quiet Footer */}
       <footer className="bg-white border-t border-slate-200 py-4 px-6 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-4">
-        <span>EduAssess CBT — Sistem Ujian Berbasis Komputer Terintegrasi AI</span>
+        <span>SocioCBT AI — Sistem Asesmen & Ujian Berbasis Komputer Khusus Sosiologi SMA</span>
         <span>Sinkronisasi Real-Time Firebase Firestore & PostgreSQL</span>
       </footer>
     </div>

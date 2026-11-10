@@ -472,6 +472,11 @@ export async function saveExamCbt(
     durasi_menit: number;
     target_tingkat: string;
     target_kelas: string;
+    kategori_ujian?: string;
+    status_ujian?: string;
+    target_rombel?: string[];
+    jadwal_mulai?: string;
+    jadwal_selesai?: string;
     acak_soal?: boolean;
     acak_opsi?: boolean;
     kode_paket?: string;
@@ -499,6 +504,11 @@ export async function saveExamCbt(
           durasi_menit: Math.max(5, Number(payload.durasi_menit) || 60),
           target_tingkat: payload.target_tingkat || 'SEMUA',
           target_kelas: payload.target_kelas || 'SEMUA',
+          kategori_ujian: payload.kategori_ujian || 'Penilaian Harian (PH / Kuis)',
+          status_ujian: payload.status_ujian || 'DRAF',
+          target_rombel: Array.isArray(payload.target_rombel) ? payload.target_rombel : [],
+          jadwal_mulai: payload.jadwal_mulai || '',
+          jadwal_selesai: payload.jadwal_selesai || '',
           acak_soal: payload.acak_soal !== undefined ? payload.acak_soal : true,
           acak_opsi: payload.acak_opsi !== undefined ? payload.acak_opsi : true,
           kode_paket: payload.kode_paket?.trim() || 'PAKET-A',
@@ -516,6 +526,11 @@ export async function saveExamCbt(
       authorUid: 'sahidin30@gmail.com',
       updatedAt: nowIso,
     };
+    if (examRecord.kategori_ujian) examDoc.kategori_ujian = examRecord.kategori_ujian.slice(0, 64);
+    if (examRecord.status_ujian) examDoc.status_ujian = examRecord.status_ujian.slice(0, 32);
+    if (Array.isArray(examRecord.target_rombel)) examDoc.target_rombel = examRecord.target_rombel.slice(0, 50);
+    if (examRecord.jadwal_mulai) examDoc.jadwal_mulai = examRecord.jadwal_mulai.slice(0, 64);
+    if (examRecord.jadwal_selesai) examDoc.jadwal_selesai = examRecord.jadwal_selesai.slice(0, 64);
     if (examRecord.acak_soal !== undefined) examDoc.acak_soal = Boolean(examRecord.acak_soal);
     if (examRecord.acak_opsi !== undefined) examDoc.acak_opsi = Boolean(examRecord.acak_opsi);
     if (examRecord.kode_paket) examDoc.kode_paket = examRecord.kode_paket.slice(0, 32);
@@ -524,11 +539,32 @@ export async function saveExamCbt(
 
     await setDoc(doc(db, 'exams', String(examRecord.id)), examDoc);
     await updateFirestorePulse(
-      `Paket ujian disimpan: ${examRecord.judul_ujian} (${examRecord.kode_paket || 'PAKET-A'}${examRecord.acak_soal ? ' · Acak Soal' : ''}${examRecord.acak_opsi ? ' · Acak Opsi' : ''})`
+      `Paket ujian disimpan: ${examRecord.judul_ujian} [${examRecord.status_ujian || 'DRAF'}] (${examRecord.kategori_ujian || 'Ujian'})`
     );
   }
 
   return examRecord;
+}
+
+export async function toggleExamStatusCbt(
+  exam: ExamItem,
+  nextStatus: 'AKTIF' | 'DRAF' | 'SELESAI'
+): Promise<void> {
+  const payload = {
+    judul_ujian: exam.judul_ujian,
+    durasi_menit: exam.durasi_menit,
+    target_tingkat: exam.target_tingkat,
+    target_kelas: exam.target_kelas,
+    kategori_ujian: exam.kategori_ujian,
+    status_ujian: nextStatus,
+    target_rombel: exam.target_rombel,
+    acak_soal: exam.acak_soal,
+    acak_opsi: exam.acak_opsi,
+    kode_paket: exam.kode_paket,
+    mode_multi_paket: exam.mode_multi_paket,
+    jumlah_paket: exam.jumlah_paket,
+  };
+  await saveExamCbt(payload, exam.id);
 }
 
 export async function batchAssignPackageVariantsCbt(
@@ -1295,11 +1331,11 @@ export async function loginStudentExamCbt(
   }
 
   const matchedExams = fsData.exams.filter((ex) =>
-    isExamMatchedForStudentClass(ex, matchedStudent.kelas)
+    isExamMatchedForStudentClass(ex, matchedStudent.kelas, { requireActive: true })
   );
   if (matchedExams.length === 0) {
     throw new Error(
-      `Tidak ditemukan Paket Ujian yang didistribusikan untuk kelas Anda (${matchedStudent.kelas}). Hubungi Guru Pengawas.`
+      `Belum ada sesi ujian Sosiologi berstatus AKTIF yang dijadwalkan untuk kelas Anda (${matchedStudent.kelas}). Paket soal mungkin masih berstatus DRAF atau telah ditutup oleh Guru Sosiologi.`
     );
   }
 

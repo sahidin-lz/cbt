@@ -466,14 +466,14 @@ export async function verifyStudentTokenForExam(
       };
     }
 
-    // Filter exams that match this student's grade level (Tingkat 10/11/12) or specific class
+    // Filter exams that match this student's grade level / target rombel and are active
     const matchedExams = allExams.filter((ex) =>
-      isExamMatchedForStudentClass(ex, student.kelas)
+      isExamMatchedForStudentClass(ex, student.kelas, { requireActive: true })
     );
 
     if (matchedExams.length === 0) {
       return {
-        error: `Tidak ditemukan Paket Ujian yang didistribusikan untuk kelas Anda (${student.kelas}). Hubungi Guru Pengawas.`,
+        error: `Belum ada sesi ujian Sosiologi berstatus AKTIF untuk kelas Anda (${student.kelas}). Paket ujian mungkin masih berstatus DRAF atau telah ditutup oleh Guru Sosiologi.`,
       };
     }
 

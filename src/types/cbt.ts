@@ -4,6 +4,17 @@ export type StudentExamStatus =
   | 'Selesai'
   | 'Diblokir';
 
+export type ExamCategory =
+  | 'Penilaian Harian (PH / Kuis)'
+  | 'Penilaian Tengah Semester (PTS / STS)'
+  | 'Penilaian Akhir Semester (PAS / SAS)'
+  | 'Asesmen Sumatif Akhir Jenjang (ASAJ)'
+  | 'Ujian Susulan & Remedial'
+  | 'Try Out / Simulasi Mandiri HOTS'
+  | string;
+
+export type ExamStatus = 'AKTIF' | 'DRAF' | 'SELESAI';
+
 export interface StudentItem {
   id: number;
   nama: string;
@@ -23,6 +34,11 @@ export interface ExamItem {
   durasi_menit: number;
   target_tingkat: string;
   target_kelas: string;
+  kategori_ujian?: ExamCategory; // Kategori momen ujian Sosiologi
+  status_ujian?: ExamStatus | string; // 'AKTIF' | 'DRAF' | 'SELESAI'
+  target_rombel?: string[]; // Daftar spesifik rombel kelas (misal: ['XII IPS 1', 'XII IPS 2'])
+  jadwal_mulai?: string;
+  jadwal_selesai?: string;
   acak_soal?: boolean; // Acak urutan nomor butir soal per siswa
   acak_opsi?: boolean; // Acak urutan opsi jawaban A-E per siswa
   kode_paket?: string; // Kode paket default (misal 'PAKET-A', 'PAKET-B', 'UTAMA')

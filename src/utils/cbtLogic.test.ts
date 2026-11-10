@@ -20,6 +20,7 @@ import {
   getStudentLoginClasses,
   getStudentsForClass,
   validateStudentCascadingLogin,
+  SOSIOLOGI_EXAM_CATEGORIES,
 } from './cbtLogic.ts';
 
 test('generateExamToken returns 6-character uppercase alphanumeric string', () => {
@@ -126,6 +127,30 @@ test('extractTingkatFromKelas and isExamMatchedForStudentClass handle 3 grade le
   const examSpecific = { target_tingkat: '11', target_kelas: 'XI IPS 2' };
   assert.equal(isExamMatchedForStudentClass(examSpecific, 'XI IPS 2'), true);
   assert.equal(isExamMatchedForStudentClass(examSpecific, 'XI MIPA 1'), false);
+
+  // Status Ujian (Draf vs Aktif)
+  const draftExam = { target_tingkat: '12', target_kelas: 'SEMUA', status_ujian: 'DRAF' };
+  assert.equal(isExamMatchedForStudentClass(draftExam, 'XII IPS 1', { requireActive: true }), false);
+  assert.equal(isExamMatchedForStudentClass(draftExam, 'XII IPS 1'), true);
+
+  const activeExam = { target_tingkat: '12', target_kelas: 'SEMUA', status_ujian: 'AKTIF' };
+  assert.equal(isExamMatchedForStudentClass(activeExam, 'XII IPS 1', { requireActive: true }), true);
+
+  // Target Rombel spesifik
+  const rombelExam = {
+    target_tingkat: '12',
+    target_kelas: 'SEMUA',
+    target_rombel: ['XII IPS 1', 'XII IPS 2'],
+    status_ujian: 'AKTIF',
+  };
+  assert.equal(isExamMatchedForStudentClass(rombelExam, 'XII IPS 1'), true);
+  assert.equal(isExamMatchedForStudentClass(rombelExam, 'XII IPS 2'), true);
+  assert.equal(isExamMatchedForStudentClass(rombelExam, 'XII IPS 3'), false);
+
+  // Sosiologi categories validation
+  assert.equal(SOSIOLOGI_EXAM_CATEGORIES.includes('Penilaian Tengah Semester (PTS / STS)'), true);
+  assert.equal(SOSIOLOGI_EXAM_CATEGORIES.includes('Penilaian Akhir Semester (PAS / SAS)'), true);
+  assert.equal(SOSIOLOGI_EXAM_CATEGORIES.includes('Ujian Susulan & Remedial'), true);
 });
 
 test('parseStudentsCsv parses semicolon-separated CSV, comma-separated CSV, and Excel .xls across 3 grade levels', () => {

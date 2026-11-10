@@ -52,6 +52,30 @@
           "type": "number",
           "description": "Number of package variants (e.g. 2, 3, 4)."
         },
+        "kategori_ujian": {
+          "type": "string",
+          "description": "Category or event type of the Sociology exam (e.g. PTS, PAS, Penilaian Harian).",
+          "maxLength": 64
+        },
+        "status_ujian": {
+          "type": "string",
+          "description": "Lifecycle status of the exam: AKTIF, DRAF, or SELESAI.",
+          "maxLength": 32
+        },
+        "target_rombel": {
+          "type": "array",
+          "description": "Optional list of specific class rombels that can access the exam."
+        },
+        "jadwal_mulai": {
+          "type": "string",
+          "description": "Optional start schedule timestamp.",
+          "maxLength": 64
+        },
+        "jadwal_selesai": {
+          "type": "string",
+          "description": "Optional end schedule timestamp.",
+          "maxLength": 64
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",

@@ -26,6 +26,10 @@ import {
   PanelLeftOpen,
   Eye,
   EyeOff,
+  Play,
+  Pause,
+  Calendar,
+  BookmarkCheck,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -33,6 +37,8 @@ import {
   StudentItem,
   ResultItem,
   AnalisisAI,
+  ExamCategory,
+  ExamStatus,
 } from '../types/cbt';
 import {
   SAMPLE_CSV_TEMPLATE,
@@ -46,6 +52,7 @@ import {
   computeClassAnalytics,
   classifyQuestionCognitiveLevel,
   assignPackageVariantsToStudents,
+  SOSIOLOGI_EXAM_CATEGORIES,
 } from '../utils/cbtLogic';
 import {
   auth,
@@ -57,6 +64,7 @@ import {
   safeApiJson,
   saveExamCbt,
   deleteExamCbt,
+  toggleExamStatusCbt,
   saveStudentCbt,
   uploadStudentsCsvCbt,
   regenerateStudentTokenCbt,
@@ -194,6 +202,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newExamTargetTingkat, setNewExamTargetTingkat] =
     useState<string>('10');
   const [newExamTargetKelas, setNewExamTargetKelas] =
+    useState<string>('SEMUA');
+  const [newExamKategori, setNewExamKategori] =
+    useState<string>('Penilaian Harian (PH / Kuis)');
+  const [newExamStatus, setNewExamStatus] =
+    useState<'AKTIF' | 'DRAF' | 'SELESAI'>('DRAF');
+  const [newExamTargetRombel, setNewExamTargetRombel] =
+    useState<string[]>([]);
+  const [filterExamKategori, setFilterExamKategori] =
+    useState<string>('SEMUA');
+  const [filterExamStatus, setFilterExamStatus] =
     useState<string>('SEMUA');
   const [newExamAcakSoal, setNewExamAcakSoal] = useState<boolean>(true);
   const [newExamAcakOpsi, setNewExamAcakOpsi] = useState<boolean>(true);
@@ -365,14 +383,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return matchTingkat && matchKelas && matchExam;
   });
 
-  const filteredExams =
-    filterExamTingkat === 'SEMUA'
-      ? exams
-      : exams.filter(
-          (e) =>
-            e.target_tingkat === filterExamTingkat ||
-            e.target_tingkat === 'SEMUA'
-        );
+  const filteredExams = exams.filter((e) => {
+    const matchTingkat =
+      filterExamTingkat === 'SEMUA' ||
+      e.target_tingkat === filterExamTingkat ||
+      e.target_tingkat === 'SEMUA';
+    const matchKategori =
+      filterExamKategori === 'SEMUA' ||
+      (e.kategori_ujian || 'Penilaian Harian (PH / Kuis)') === filterExamKategori;
+    const matchStatus =
+      filterExamStatus === 'SEMUA' ||
+      (e.status_ujian || 'DRAF') === filterExamStatus;
+    return matchTingkat && matchKategori && matchStatus;
+  });
 
   const filteredStudents = students.filter((s) => {
     const sTingkat = extractTingkatFromKelas(s.kelas);
@@ -483,6 +506,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       durasi_menit: Number(newExamDuration) || 60,
       target_tingkat: newExamTargetTingkat,
       target_kelas: newExamTargetKelas.trim() || 'SEMUA',
+      kategori_ujian: newExamKategori,
+      status_ujian: newExamStatus,
+      target_rombel: newExamTargetRombel,
       acak_soal: newExamAcakSoal,
       acak_opsi: newExamAcakOpsi,
       kode_paket: newExamKodePaket.trim() || 'PAKET-A',
@@ -493,12 +519,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       const savedExam = await saveExamCbt(payload, editingExamId);
       if (editingExamId) {
-        setExamFeedback('Paket ujian & konfigurasi pengacakan/multi-paket berhasil diperbarui.');
+        setExamFeedback(`Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] (${savedExam.kategori_ujian || 'Ujian'}) berhasil diperbarui.`);
         setEditingExamId(null);
         setNewExamTitle('');
         setNewExamDuration('60');
         setNewExamTargetTingkat('10');
         setNewExamTargetKelas('SEMUA');
+        setNewExamKategori('Penilaian Harian (PH / Kuis)');
+        setNewExamStatus('DRAF');
+        setNewExamTargetRombel([]);
         setNewExamAcakSoal(true);
         setNewExamAcakOpsi(true);
         setNewExamKodePaket('PAKET-A');
@@ -506,11 +535,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setNewExamJumlahPaket(2);
       } else {
         setExamFeedback(
-          `Paket ujian "${savedExam.judul_ujian}" (${savedExam.kode_paket || 'PAKET-A'}) berhasil dibuat dengan ${savedExam.acak_soal ? 'Acak Soal' : 'Soal Urut'} & ${savedExam.acak_opsi ? 'Acak Opsi' : 'Opsi Tetap'}.`
+          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] (${savedExam.kategori_ujian || 'Ujian'}) berhasil dibuat.`
         );
         setSelectedExamId(savedExam.id);
         setNewExamTitle('');
         setNewExamDuration('60');
+        setNewExamKategori('Penilaian Harian (PH / Kuis)');
+        setNewExamStatus('DRAF');
+        setNewExamTargetRombel([]);
         setNewExamAcakSoal(true);
         setNewExamAcakOpsi(true);
         setNewExamKodePaket('PAKET-A');
@@ -520,6 +552,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await onRefreshData();
     } finally {
       setIsSavingExam(false);
+    }
+  };
+
+  const handleToggleExamStatus = async (
+    exam: ExamItem,
+    nextStatus: 'AKTIF' | 'DRAF' | 'SELESAI'
+  ) => {
+    setExamFeedback(null);
+    try {
+      await toggleExamStatusCbt(exam, nextStatus);
+      setExamFeedback(
+        nextStatus === 'AKTIF'
+          ? `Sesi ujian "${exam.judul_ujian}" kini AKTIF! Siswa pada kelas terkait sudah bisa masuk dan mengerjakan ujian.`
+          : nextStatus === 'DRAF'
+            ? `Sesi ujian "${exam.judul_ujian}" kini berstatus DRAF (Tersimpan di Bank Soal, siswa tidak bisa melihat).`
+            : `Sesi ujian "${exam.judul_ujian}" telah DITUTUP (Arsip).`
+      );
+      await onRefreshData();
+    } catch (err: any) {
+      setExamFeedback(err.message || 'Gagal mengubah status ujian.');
     }
   };
 
@@ -1943,16 +1995,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     htmlFor="exam-title-input"
                     className="block text-xs font-semibold text-slate-700 mb-1"
                   >
-                    Judul / Mata Pelajaran Ujian
+                    Judul / Nama Ujian Sosiologi
                   </label>
                   <input
                     id="exam-title-input"
                     type="text"
                     value={newExamTitle}
                     onChange={(e) => setNewExamTitle(e.target.value)}
-                    placeholder="Contoh: Ujian Matematika Kelas X"
+                    placeholder="Contoh: PTS Sosiologi — Kelompok Sosial & Perubahan"
                     className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
+                </div>
+
+                {/* Kategori Momen Ujian Sosiologi */}
+                <div>
+                  <label
+                    htmlFor="exam-kategori-select"
+                    className="block text-xs font-semibold text-slate-700 mb-1"
+                  >
+                    Kategori Momen Ujian Sosiologi
+                  </label>
+                  <select
+                    id="exam-kategori-select"
+                    value={newExamKategori}
+                    onChange={(e) => setNewExamKategori(e.target.value)}
+                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  >
+                    {SOSIOLOGI_EXAM_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Status Siklus Sesi Ujian (Draf vs Aktif) */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                  <label className="block text-xs font-semibold text-slate-800">
+                    Status Sesi Ujian (Kapan Siswa Boleh Masuk?)
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setNewExamStatus('DRAF')}
+                      className={`p-2 rounded-lg border text-left cursor-pointer transition-colors ${
+                        newExamStatus === 'DRAF'
+                          ? 'border-amber-400 bg-amber-50 text-amber-950 font-bold ring-1 ring-amber-400'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>DRAF (Bank Soal)</span>
+                      </div>
+                      <p className="text-[10px] font-normal text-slate-500 mt-1 leading-tight">
+                        Siswa belum bisa melihat atau masuk. Aman untuk persiapan upload soal.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNewExamStatus('AKTIF')}
+                      className={`p-2 rounded-lg border text-left cursor-pointer transition-colors ${
+                        newExamStatus === 'AKTIF'
+                          ? 'border-emerald-500 bg-emerald-50 text-emerald-950 font-bold ring-1 ring-emerald-500'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Play className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>AKTIF (Buka Sesi)</span>
+                      </div>
+                      <p className="text-[10px] font-normal text-slate-500 mt-1 leading-tight">
+                        Sesi langsung terbuka bagi siswa kelas bersangkutan untuk memulai ujian.
+                      </p>
+                    </button>
+                  </div>
                 </div>
 
                 <div>
@@ -1960,50 +2078,85 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     htmlFor="exam-tingkat-select"
                     className="block text-xs font-semibold text-slate-700 mb-1"
                   >
-                    Target Tingkatan Kelas (3 Tingkatan)
+                    Target Tingkatan Kelas Sosiologi
                   </label>
                   <select
                     id="exam-tingkat-select"
                     value={newExamTargetTingkat}
-                    onChange={(e) => setNewExamTargetTingkat(e.target.value)}
+                    onChange={(e) => {
+                      setNewExamTargetTingkat(e.target.value);
+                      setNewExamTargetRombel([]);
+                    }}
                     className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                   >
                     <option value="10">
-                      Tingkat 1 — Kelas X / Kelas 10
+                      Tingkat 1 — Kelas X / Fase E
                     </option>
                     <option value="11">
-                      Tingkat 2 — Kelas XI / Kelas 11
+                      Tingkat 2 — Kelas XI / Fase F
                     </option>
                     <option value="12">
-                      Tingkat 3 — Kelas XII / Kelas 12
+                      Tingkat 3 — Kelas XII / Fase F Lanjutan
                     </option>
                     <option value="SEMUA">
-                      Semua Tingkatan (Kelas X, XI & XII)
+                      Semua Tingkatan (Lintas Kelas)
                     </option>
                   </select>
                 </div>
 
+                {/* Target Rombel Spesifik */}
                 <div>
-                  <label
-                    htmlFor="exam-specific-kelas-input"
-                    className="block text-xs font-semibold text-slate-700 mb-1"
-                  >
-                    Filter Rombel / Kelas Spesifik (Opsional)
-                  </label>
-                  <input
-                    id="exam-specific-kelas-input"
-                    type="text"
-                    value={
-                      newExamTargetKelas === 'SEMUA' ? '' : newExamTargetKelas
-                    }
-                    onChange={(e) =>
-                      setNewExamTargetKelas(
-                        e.target.value.trim() ? e.target.value : 'SEMUA'
-                      )
-                    }
-                    placeholder="Kosongkan untuk seluruh rombel di tingkat ini, atau isi misal: X MIPA 1"
-                    className="w-full px-3.5 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Target Rombel Spesifik (Opsional)
+                    </label>
+                    {newExamTargetRombel.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setNewExamTargetRombel([])}
+                        className="text-[11px] text-blue-600 hover:underline cursor-pointer"
+                      >
+                        Pilih Semua Rombel
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mb-1.5">
+                    {newExamTargetRombel.length === 0
+                      ? 'Berlaku untuk SEMUA rombel pada tingkat ini.'
+                      : `Dibatasi hanya untuk ${newExamTargetRombel.length} rombel terpilih:`}
+                  </p>
+                  {uniqueClasses.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      {uniqueClasses
+                        .filter((kls) => {
+                          if (newExamTargetTingkat === 'SEMUA') return true;
+                          return extractTingkatFromKelas(kls) === newExamTargetTingkat;
+                        })
+                        .map((kls) => {
+                          const isChecked = newExamTargetRombel.includes(kls);
+                          return (
+                            <button
+                              key={kls}
+                              type="button"
+                              onClick={() => {
+                                setNewExamTargetRombel((prev) =>
+                                  isChecked
+                                    ? prev.filter((c) => c !== kls)
+                                    : [...prev, kls]
+                                );
+                              }}
+                              className={`px-2 py-0.5 text-xs rounded-md border font-medium cursor-pointer transition-colors ${
+                                isChecked
+                                  ? 'bg-blue-600 text-white border-blue-600 font-semibold'
+                                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                              }`}
+                            >
+                              {isChecked ? '✓ ' : ''}{kls}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -2129,6 +2282,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setNewExamDuration('60');
                         setNewExamTargetTingkat('10');
                         setNewExamTargetKelas('SEMUA');
+                        setNewExamKategori('Penilaian Harian (PH / Kuis)');
+                        setNewExamStatus('DRAF');
+                        setNewExamTargetRombel([]);
                         setNewExamAcakSoal(true);
                         setNewExamAcakOpsi(true);
                         setNewExamKodePaket('PAKET-A');
@@ -2157,39 +2313,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   Daftar Distribusi Paket Ujian ({filteredExams.length})
                 </h2>
 
-                {/* Segmented Filter per Tingkatan */}
-                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
-                  {(
-                    [
-                      ['SEMUA', 'Semua'],
-                      ['10', 'Tingkat 1 (X)'],
-                      ['11', 'Tingkat 2 (XI)'],
-                      ['12', 'Tingkat 3 (XII)'],
-                    ] as const
-                  ).map(([val, label]) => (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => setFilterExamTingkat(val)}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                        filterExamTingkat === val
-                          ? 'bg-white text-slate-900 shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                {/* Filter Bar: Tingkatan, Kategori, & Status */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Segmented Filter per Tingkatan */}
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                    {(
+                      [
+                        ['SEMUA', 'Semua'],
+                        ['10', 'Tingkat 1 (X)'],
+                        ['11', 'Tingkat 2 (XI)'],
+                        ['12', 'Tingkat 3 (XII)'],
+                      ] as const
+                    ).map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setFilterExamTingkat(val)}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                          filterExamTingkat === val
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Filter Status Ujian */}
+                  <select
+                    value={filterExamStatus}
+                    onChange={(e) => setFilterExamStatus(e.target.value)}
+                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg cursor-pointer"
+                    aria-label="Filter Status Ujian"
+                  >
+                    <option value="SEMUA">Semua Status</option>
+                    <option value="AKTIF">Hanya Sesi Aktif</option>
+                    <option value="DRAF">Hanya Draf (Bank Soal)</option>
+                    <option value="SELESAI">Hanya Selesai</option>
+                  </select>
+
+                  {/* Filter Kategori Momen */}
+                  <select
+                    value={filterExamKategori}
+                    onChange={(e) => setFilterExamKategori(e.target.value)}
+                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg cursor-pointer"
+                    aria-label="Filter Kategori Momen Ujian"
+                  >
+                    <option value="SEMUA">Semua Kategori Momen</option>
+                    {SOSIOLOGI_EXAM_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
               {filteredExams.length === 0 ? (
                 <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
                   <p className="text-sm font-semibold text-slate-700">
-                    Belum Ada Paket Ujian pada Tingkatan Ini
+                    Belum Ada Paket Ujian pada Filter Ini
                   </p>
                   <p className="text-xs text-slate-500 max-w-md mx-auto">
-                    Buat paket ujian untuk Tingkat 1 (Kelas X), Tingkat 2 (Kelas
+                    Buat paket ujian Sosiologi untuk Tingkat 1 (Kelas X), Tingkat 2 (Kelas
                     XI), atau Tingkat 3 (Kelas XII) pada formulir di sebelah kiri.
                   </p>
                 </div>
@@ -2199,10 +2386,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
                         <th className="py-3 px-4">Judul & Kode Paket</th>
-                        <th className="py-3 px-4">Distribusi Tingkatan Kelas</th>
+                        <th className="py-3 px-4">Kategori & Status Sesi</th>
+                        <th className="py-3 px-4">Distribusi Tingkat & Rombel</th>
                         <th className="py-3 px-4 text-right">Durasi</th>
                         <th className="py-3 px-4 text-right">Bank Soal</th>
-                        <th className="py-3 px-4 text-right">Aksi Distribusi</th>
+                        <th className="py-3 px-4 text-right">Aksi Sesi & Distribusi</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 text-sm">
@@ -2210,6 +2398,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         const qCount = questions.filter(
                           (q) => q.exam_id === ex.id
                         ).length;
+                        const isAktif = (ex.status_ujian || 'DRAF') === 'AKTIF';
+                        const isDraf = (ex.status_ujian || 'DRAF') === 'DRAF';
+                        const isSelesai = ex.status_ujian === 'SELESAI';
+
                         return (
                           <tr key={ex.id} className="hover:bg-slate-50/80">
                             <td className="py-3.5 px-4 font-semibold text-slate-900">
@@ -2237,12 +2429,67 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 )}
                               </div>
                             </td>
-                            <td className="py-3.5 px-4 text-xs text-blue-700 font-medium">
-                              {formatDistribusiLabel(
-                                ex.target_tingkat,
-                                ex.target_kelas
-                              )}
+
+                            <td className="py-3.5 px-4 text-xs">
+                              <div>
+                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  {ex.kategori_ujian || 'Penilaian Harian (PH / Kuis)'}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                                {isAktif ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
+                                    AKTIF (Dibuka)
+                                  </span>
+                                ) : isSelesai ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-300">
+                                    SELESAI (Arsip)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                    <Lock className="w-2.5 h-2.5 text-amber-700" />
+                                    DRAF (Bank Soal)
+                                  </span>
+                                )}
+
+                                {isAktif ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleExamStatus(ex, 'DRAF')}
+                                    title="Tutup sesi ujian ini agar siswa tidak bisa masuk (kembalikan ke Draf)"
+                                    className="px-2 py-0.5 text-[10px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded cursor-pointer transition-colors"
+                                  >
+                                    Tutup / Draf
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleExamStatus(ex, 'AKTIF')}
+                                    title="Buka sesi ujian ini sekarang agar siswa bisa memasukkan token dan mengerjakan"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded cursor-pointer shadow-xs transition-colors"
+                                  >
+                                    <Play className="w-2.5 h-2.5 fill-current" />
+                                    Buka Ujian
+                                  </button>
+                                )}
+                              </div>
                             </td>
+
+                            <td className="py-3.5 px-4 text-xs text-slate-700">
+                              <div className="font-semibold text-blue-700">
+                                {formatDistribusiLabel(
+                                  ex.target_tingkat,
+                                  ex.target_kelas
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-500 mt-0.5">
+                                {Array.isArray(ex.target_rombel) && ex.target_rombel.length > 0
+                                  ? `Rombel: ${ex.target_rombel.join(', ')}`
+                                  : 'Semua Rombel Tingkat Ini'}
+                              </div>
+                            </td>
+
                             <td className="py-3.5 px-4 text-right font-mono tabular-nums text-xs text-slate-700">
                               {ex.durasi_menit} Menit
                             </td>
@@ -2261,7 +2508,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   }}
                                   className="px-2.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                                 >
-                                  Isi / Upload Soal
+                                  Kelola Soal
                                 </button>
                                 <button
                                   type="button"
@@ -2274,6 +2521,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     );
                                     setNewExamTargetKelas(
                                       ex.target_kelas || 'SEMUA'
+                                    );
+                                    setNewExamKategori(
+                                      ex.kategori_ujian || 'Penilaian Harian (PH / Kuis)'
+                                    );
+                                    setNewExamStatus(
+                                      (ex.status_ujian as any) || 'DRAF'
+                                    );
+                                    setNewExamTargetRombel(
+                                      Array.isArray(ex.target_rombel) ? ex.target_rombel : []
                                     );
                                     setNewExamAcakSoal(ex.acak_soal !== false);
                                     setNewExamAcakOpsi(ex.acak_opsi !== false);

@@ -80,16 +80,47 @@ export function extractTingkatFromKelas(
   return 'LAINNYA';
 }
 
+export const SOSIOLOGI_EXAM_CATEGORIES = [
+  'Penilaian Harian (PH / Kuis)',
+  'Penilaian Tengah Semester (PTS / STS)',
+  'Penilaian Akhir Semester (PAS / SAS)',
+  'Asesmen Sumatif Akhir Jenjang (ASAJ)',
+  'Ujian Susulan & Remedial',
+  'Try Out / Simulasi Mandiri HOTS',
+] as const;
+
 /**
- * Checks whether an exam distributed to (target_tingkat, target_kelas) applies to a student's class
+ * Checks whether an exam distributed to (target_tingkat, target_kelas, target_rombel) applies to a student's class,
+ * with optional requirement for active exam status (ignoring DRAF or SELESAI).
  */
 export function isExamMatchedForStudentClass(
-  exam: { target_tingkat?: string; target_kelas?: string },
-  studentKelas: string
+  exam: {
+    target_tingkat?: string;
+    target_kelas?: string;
+    target_rombel?: string[];
+    status_ujian?: string;
+  },
+  studentKelas: string,
+  options?: { requireActive?: boolean }
 ): boolean {
-  const cleanTargetKelas = (exam.target_kelas || 'SEMUA').toUpperCase().trim();
+  if (options?.requireActive) {
+    const status = (exam.status_ujian || 'AKTIF').toUpperCase().trim();
+    if (status !== 'AKTIF') {
+      return false;
+    }
+  }
+
   const cleanStudentKelas = (studentKelas || '').toUpperCase().trim();
 
+  // If a specific target_rombel list is specified, student's class must match one of them
+  if (Array.isArray(exam.target_rombel) && exam.target_rombel.length > 0) {
+    const matched = exam.target_rombel.some(
+      (r) => (r || '').toUpperCase().trim() === cleanStudentKelas
+    );
+    if (!matched) return false;
+  }
+
+  const cleanTargetKelas = (exam.target_kelas || 'SEMUA').toUpperCase().trim();
   if (cleanTargetKelas !== 'SEMUA' && cleanTargetKelas !== '') {
     return cleanTargetKelas === cleanStudentKelas;
   }

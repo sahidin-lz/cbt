@@ -334,9 +334,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   );
 
   const matchedExamsForSelectedClass = useMemo(() => {
-    if (!selectedKelas) return exams;
+    if (!selectedKelas) {
+      return exams.filter((ex) => (ex.status_ujian || 'AKTIF') === 'AKTIF');
+    }
     return exams.filter((ex) =>
-      isExamMatchedForStudentClass(ex, selectedKelas)
+      isExamMatchedForStudentClass(ex, selectedKelas, { requireActive: true })
     );
   }, [exams, selectedKelas]);
 
@@ -1540,6 +1542,72 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 )}
               </div>
 
+              {/* PILIHAN SESI UJIAN AKTIF JIKA ADA LEBIH DARI 1 UJIAN / INFO UJIAN TUNGGAL */}
+              {step1Done && (
+                <div className="space-y-2">
+                  {matchedExamsForSelectedClass.length === 0 ? (
+                    <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start gap-2.5">
+                      <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold">Belum Ada Sesi Ujian Sosiologi yang Dibuka</div>
+                        <p className="mt-0.5 leading-relaxed text-amber-800">
+                          Saat ini belum ada sesi ujian berstatus <strong>AKTIF</strong> untuk kelas <strong>{selectedKelas}</strong>. Bank soal mungkin masih berstatus <em>DRAF</em> (sedang disiapkan guru) atau sesi ujian telah ditutup oleh Guru Sosiologi. Silakan tunggu instruksi pengawas.
+                        </p>
+                      </div>
+                    </div>
+                  ) : matchedExamsForSelectedClass.length > 1 ? (
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-semibold text-slate-800">
+                        Pilih Sesi Ujian Sosiologi yang Anda Ikuti:
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {matchedExamsForSelectedClass.map((ex) => {
+                          const isSelected = String(selectedExamId) === String(ex.id);
+                          return (
+                            <button
+                              key={ex.id}
+                              type="button"
+                              onClick={() => setSelectedExamId(String(ex.id))}
+                              className={`p-3 rounded-lg border text-left cursor-pointer transition-all ${
+                                isSelected
+                                  ? 'border-blue-600 bg-blue-50/70 shadow-xs ring-1 ring-blue-500'
+                                  : 'border-slate-200 bg-white hover:border-slate-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                                  {ex.kategori_ujian || 'Ujian Sosiologi'}
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-mono font-medium">
+                                  {ex.durasi_menit} Menit
+                                </span>
+                              </div>
+                              <div className="font-bold text-xs text-slate-900 mt-1 line-clamp-1">
+                                {ex.judul_ujian}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-lg bg-blue-50/60 border border-blue-200 text-xs flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 shrink-0">
+                          {matchedExamsForSelectedClass[0].kategori_ujian || 'Ujian Sosiologi'}
+                        </span>
+                        <span className="font-semibold text-slate-900 line-clamp-1">
+                          {matchedExamsForSelectedClass[0].judul_ujian}
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-mono font-bold text-slate-600 shrink-0">
+                        {matchedExamsForSelectedClass[0].durasi_menit} Menit
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* LANGKAH 3: MASUKKAN TOKEN UJIAN (AKTIF SETELAH PILIH NAMA SISWA) */}
               <div
                 className={`transition-opacity ${
@@ -1553,11 +1621,6 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   >
                     Langkah 3 — Masukkan Token Ujian (6 Karakter)
                   </label>
-                  {matchedExamsForSelectedClass.length > 0 && step1Done && (
-                    <span className="text-xs font-medium text-blue-700 whitespace-nowrap">
-                      Ujian: {matchedExamsForSelectedClass[0].judul_ujian}
-                    </span>
-                  )}
                 </div>
                 <input
                   ref={tokenInputRef}
@@ -1593,7 +1656,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 type="submit"
                 disabled={
                   isLoggingIn ||
-                  (students.length > 0 && (!step1Done || !step2Done || !step3Done))
+                  (students.length > 0 && (!step1Done || !step2Done || !step3Done)) ||
+                  (step1Done && matchedExamsForSelectedClass.length === 0)
                 }
                 className="w-full py-3 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
               >
