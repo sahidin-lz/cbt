@@ -397,8 +397,9 @@ export function normalizeSpreadsheetLines(rawInput: string): {
     .replace(/\u0000/g, '')
     .trim();
 
-  // Support importing HTML-based .xls files directly if the teacher re-uploads the downloaded .xls
-  if (/<table[\s>]/i.test(cleanText) && /<tr[\s>]/i.test(cleanText)) {
+  // Support importing HTML-based .xls files ONLY if the file starts with HTML document tags
+  const isHtmlDocument = /^<(?:!DOCTYPE\s+html|html|table|xml|meta)[\s>]/i.test(cleanText);
+  if (isHtmlDocument && /<table[\s>]/i.test(cleanText) && /<tr[\s>]/i.test(cleanText)) {
     const trMatches = cleanText.match(/<tr[\s\S]*?<\/tr>/gi) || [];
     const extractedLines: string[] = [];
     for (const tr of trMatches) {

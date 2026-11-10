@@ -511,7 +511,8 @@ export async function parseQuestionsFromFile(
   const textContent = decoder.decode(buffer);
 
   // Check if it's an HTML-based table (.xls from older export)
-  if (/<table[\s>]/i.test(textContent) && /<tr[\s>]/i.test(textContent)) {
+  const isHtmlTableDoc = /^<(?:!DOCTYPE\s+html|html|table|xml|meta)[\s>]/i.test(textContent.trimStart());
+  if (isHtmlTableDoc && /<table[\s>]/i.test(textContent) && /<tr[\s>]/i.test(textContent)) {
     const trMatches = textContent.match(/<tr[\s\S]*?<\/tr>/gi) || [];
     const grid: string[][] = [];
     for (const tr of trMatches) {
