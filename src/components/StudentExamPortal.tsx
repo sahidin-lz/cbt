@@ -15,12 +15,8 @@ import {
   Users,
   UserCheck,
   KeyRound,
-  ClipboardList,
   LogIn,
   Activity,
-  FileText,
-  Printer,
-  History,
   Check,
   X,
   Layers,
@@ -97,73 +93,6 @@ export interface LocalExamReceipt {
 
 export const MAX_TAB_VIOLATIONS = 3;
 
-export interface StudentExamReceipt {
-  resultId: number;
-  studentId: number;
-  studentNama: string;
-  studentKelas: string;
-  tokenUjian: string;
-  examId: number;
-  examJudul: string;
-  skor: number;
-  kategori: string;
-  pelanggaranTab: number;
-  submittedAt: string;
-  answeredCount?: number;
-  totalQuestions?: number;
-  rawEarned?: number;
-  rawMax?: number;
-}
-
-function formatReceipt(
-  item: ResultItem | LocalExamReceipt,
-  allStudents: StudentItem[],
-  allExams: ExamItem[],
-  allQuestions: QuestionItem[]
-): StudentExamReceipt {
-  if ('examJudul' in item) {
-    return {
-      resultId: item.resultId,
-      studentId: item.studentId,
-      studentNama: item.studentNama,
-      studentKelas: item.studentKelas,
-      tokenUjian: item.tokenUjian,
-      examId: item.examId,
-      examJudul: item.examJudul,
-      skor: item.skor,
-      kategori: item.kategori,
-      pelanggaranTab: item.pelanggaranTab,
-      submittedAt: item.submittedAt,
-      answeredCount: item.answeredCount,
-      totalQuestions: item.totalQuestions,
-      rawEarned: item.rawEarned,
-      rawMax: item.rawMax,
-    };
-  } else {
-    const st = allStudents.find((s) => s.id === item.student_id);
-    const ex = allExams.find((e) => e.id === item.exam_id);
-    const qList = allQuestions.filter((q) => Number(q.exam_id) === Number(item.exam_id));
-    const answeredCount = Object.keys(item.jawaban_siswa || {}).filter(
-      (k) => item.jawaban_siswa[k] && item.jawaban_siswa[k].length > 0
-    ).length;
-    return {
-      resultId: item.id,
-      studentId: item.student_id,
-      studentNama: st?.nama || `Siswa #${item.student_id}`,
-      studentKelas: st?.kelas || '-',
-      tokenUjian: st?.token_ujian || '-',
-      examId: item.exam_id,
-      examJudul: ex?.judul_ujian || `Ujian CBT #${item.exam_id}`,
-      skor: item.skor_angka,
-      kategori: item.analisis_ai?.kategori_nilai || 'Selesai',
-      pelanggaranTab: item.pelanggaran_tab || 0,
-      submittedAt: item.created_at || new Date().toISOString(),
-      answeredCount,
-      totalQuestions: qList.length > 0 ? qList.length : undefined,
-    };
-  }
-}
-
 const PROGRESS_KEY_PREFIX = 'cbt_progress_token_';
 const HISTORY_KEY_PREFIX = 'cbt_history_student_';
 
@@ -219,16 +148,6 @@ function saveLocalReceipt(receipt: LocalExamReceipt) {
     );
   } catch (e) {
     console.error('Failed to save receipt to localStorage', e);
-  }
-}
-
-function getLocalReceiptsForStudent(studentId: number): LocalExamReceipt[] {
-  try {
-    const key = HISTORY_KEY_PREFIX + String(studentId);
-    const existingRaw = localStorage.getItem(key);
-    return existingRaw ? JSON.parse(existingRaw) : [];
-  } catch {
-    return [];
   }
 }
 
@@ -380,8 +299,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   } | null>(null);
   const [isGeneratingStudentAi, setIsGeneratingStudentAi] = useState(false);
 
-  // Student Portal Navigation & Progress Management State
-  const [studentPortalTab, setStudentPortalTab] = useState<'login' | 'history'>('login');
+  // Student Activity Logs & Recovery State
   const [activityLogs, setActivityLogs] = useState<StudentActivityLog[]>(() => {
     if (initialProgress?.logs && initialProgress.logs.length > 0) {
       return [
@@ -405,7 +323,6 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return null;
   });
   const [showActivityLogModal, setShowActivityLogModal] = useState(false);
-  const [selectedReceipt, setSelectedReceipt] = useState<StudentExamReceipt | null>(null);
 
   // Notify parent (App.tsx) so the global header locks when student is inside active exam
   useEffect(() => {
@@ -1238,30 +1155,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
   }
 
-  // 2. RENDER DEDICATED STUDENT PORTAL (TAB: MASUK UJIAN SISWA & RIWAYAT HASIL UJIAN)
+  // 2. RENDER DEDICATED STUDENT PORTAL (MASUK UJIAN SISWA)
   if (!activeStudent) {
     const step1Done = Boolean(selectedKelas);
     const step2Done = Boolean(selectedKelas && selectedStudentObj);
     const step3Done = Boolean(step2Done && tokenInput.trim().length === 6);
-
-    // Filter results for history tab
-    const historyStudentName = selectedStudentObj ? selectedStudentObj.nama : namaInput.trim();
-    const historyStudentKelas = selectedKelas.trim();
-
-    const matchedDbResults = (results || []).filter((r) => {
-      const st = students.find((s) => s.id === r.student_id);
-      const matchName = historyStudentName
-        ? (st?.nama || '').toLowerCase().trim() === historyStudentName.toLowerCase().trim()
-        : true;
-      const matchKelas = historyStudentKelas
-        ? (st?.kelas || '').toLowerCase().trim() === historyStudentKelas.toLowerCase().trim()
-        : true;
-      return matchName && matchKelas;
-    });
-
-    const localReceipts = selectedStudentObj
-      ? getLocalReceiptsForStudent(selectedStudentObj.id)
-      : [];
 
     // Check if there is saved unsubmitted progress in localStorage for current student
     const activeSavedProgress = step3Done
@@ -1269,54 +1167,23 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       : null;
 
     return (
-      <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 space-y-6">
-        {/* Navigation Tabs for Student Portal */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wider text-blue-700">
-              Portal Asesmen Siswa CBT
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight mt-0.5">
-              Ruang Asesmen & Riwayat Siswa
-            </h1>
+      <div className="max-w-xl mx-auto py-8 px-4 sm:px-6 space-y-6">
+        {/* Header Ruang Siswa */}
+        <div className="text-center pb-1">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider text-blue-700 bg-blue-50 border border-blue-200">
+            <LogIn className="w-3.5 h-3.5" />
+            <span>Portal Masuk Siswa CBT</span>
           </div>
-
-          <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
-            <button
-              type="button"
-              onClick={() => setStudentPortalTab('login')}
-              className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                studentPortalTab === 'login'
-                  ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <LogIn className="w-4 h-4" />
-              <span>Masuk Ruang Ujian</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setStudentPortalTab('history')}
-              className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                studentPortalTab === 'history'
-                  ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <History className="w-4 h-4" />
-              <span>Riwayat Hasil Ujian Saya</span>
-              {(matchedDbResults.length > 0 || localReceipts.length > 0) && (
-                <span className="px-1.5 py-0.5 text-[10px] bg-blue-100 text-blue-800 rounded-full font-bold">
-                  {matchedDbResults.length || localReceipts.length}
-                </span>
-              )}
-            </button>
-          </div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight mt-2">
+            Ruang Asesmen Siswa
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            SocioCBT AI — Sistem Asesmen & Ujian Sosiologi SMA
+          </p>
         </div>
 
-        {/* TAB 1: LOGIN RUANG UJIAN SISWA */}
-        {studentPortalTab === 'login' ? (
-          <div className="max-w-xl mx-auto bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6 shadow-xs">
+        {/* LOGIN RUANG UJIAN SISWA */}
+        <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6 shadow-xs">
             <div>
               <div className="text-xs font-medium text-blue-700">
                 Halaman Login Peserta Ujian CBT · 3 Langkah Verifikasi
@@ -1662,338 +1529,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               <span>Proteksi Anti-Cheat & Autosave Aktif</span>
             </div>
           </div>
-        ) : (
-          /* TAB 2: RIWAYAT HASIL UJIAN SISWA */
-          <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-                  Riwayat Asesmen & Bukti Ujian
-                </h2>
-                <p className="text-xs text-slate-600 mt-1">
-                  Daftar asesmen yang telah selesai dikerjakan beserta perolehan nilai resmi, status integritas, dan bukti verifikasi pengerjaan.
-                </p>
-              </div>
-
-              {/* Class & Name filter for History */}
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={selectedKelas}
-                  onChange={(e) => handleSelectKelas(e.target.value)}
-                  className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer"
-                >
-                  <option value="">Semua Kelas</option>
-                  {classOptions.map((cls) => (
-                    <option key={cls.kelas} value={cls.kelas}>
-                      {cls.kelas}
-                    </option>
-                  ))}
-                </select>
-
-                {selectedKelas && (
-                  <select
-                    value={selectedStudentId}
-                    onChange={(e) => handleSelectStudent(e.target.value)}
-                    className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer max-w-[200px]"
-                  >
-                    <option value="">Semua Siswa di {selectedKelas}</option>
-                    {studentsInSelectedClass.map((st) => (
-                      <option key={st.id} value={String(st.id)}>
-                        {st.nama}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            </div>
-
-            {/* List of results */}
-            {matchedDbResults.length === 0 && localReceipts.length === 0 ? (
-              <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 rounded-xl space-y-3">
-                <ClipboardList className="w-10 h-10 text-slate-300 mx-auto" />
-                <h3 className="text-sm font-semibold text-slate-700">
-                  Belum Ada Riwayat Ujian Ditemukan
-                </h3>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  {selectedStudentObj
-                    ? `Peserta ${selectedStudentObj.nama} (${selectedStudentObj.kelas}) belum memiliki rekaman ujian yang sudah diselesaikan.`
-                    : 'Pilih Kelas dan Nama Anda pada pilihan di atas untuk melihat riwayat hasil ujian dan mencetak lembar bukti jawaban.'}
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Server DB results */}
-                {matchedDbResults.map((res) => {
-                  const receipt = formatReceipt(res, students, exams, questions || []);
-
-                  return (
-                    <div
-                      key={`db-${res.id}`}
-                      className="p-5 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition-all space-y-3 shadow-2xs"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
-                            Hasil Terverifikasi
-                          </span>
-                          <h4 className="text-base font-bold text-slate-900 mt-1">
-                            {receipt.examJudul}
-                          </h4>
-                          <div className="text-xs text-slate-500 mt-0.5">
-                            {receipt.studentNama} · Kelas {receipt.studentKelas}
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0">
-                          <div className="text-2xl font-black text-slate-900 font-mono">
-                            {receipt.skor}
-                          </div>
-                          <span className="text-[10px] font-semibold text-slate-500">
-                            Skor / 100
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
-                          <div className="text-[11px] text-slate-500">Kategori</div>
-                          <div className="font-semibold text-slate-800">
-                            {receipt.kategori}
-                          </div>
-                        </div>
-                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
-                          <div className="text-[11px] text-slate-500">Pelanggaran Tab</div>
-                          <div
-                            className={`font-semibold ${
-                              receipt.pelanggaranTab > 0 ? 'text-amber-700' : 'text-emerald-700'
-                            }`}
-                          >
-                            {receipt.pelanggaranTab > 0 ? `${receipt.pelanggaranTab} kali` : '0 (Aman)'}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 flex items-center justify-between border-t border-slate-100 text-xs text-slate-500">
-                        <span>{new Date(receipt.submittedAt).toLocaleDateString('id-ID')}</span>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedReceipt(receipt)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          <span>Lihat Lembar Bukti</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Local Storage Receipts */}
-                {localReceipts.map((rc, idx) => {
-                  const receipt = formatReceipt(rc, students, exams, questions || []);
-
-                  return (
-                    <div
-                      key={`loc-${idx}`}
-                      className="p-5 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition-all space-y-3 shadow-2xs"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                            Tersimpan di Perangkat
-                          </span>
-                          <h4 className="text-base font-bold text-slate-900 mt-1">
-                            {receipt.examJudul}
-                          </h4>
-                          <div className="text-xs text-slate-500 mt-0.5">
-                            {receipt.studentNama} · Kelas {receipt.studentKelas} · Token {receipt.tokenUjian}
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0">
-                          <div className="text-2xl font-black text-slate-900 font-mono">
-                            {receipt.skor}
-                          </div>
-                          <span className="text-[10px] font-semibold text-slate-500">
-                            Skor / 100
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
-                          <div className="text-[11px] text-slate-500">Kategori</div>
-                          <div className="font-semibold text-slate-800">{receipt.kategori}</div>
-                        </div>
-                        <div className="p-2 rounded bg-slate-50 border border-slate-100">
-                          <div className="text-[11px] text-slate-500">Pelanggaran Tab</div>
-                          <div
-                            className={`font-semibold ${
-                              receipt.pelanggaranTab > 0 ? 'text-amber-700' : 'text-emerald-700'
-                            }`}
-                          >
-                            {receipt.pelanggaranTab > 0 ? `${receipt.pelanggaranTab} kali` : '0 (Aman)'}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 flex items-center justify-between border-t border-slate-100 text-xs text-slate-500">
-                        <span>{new Date(receipt.submittedAt).toLocaleDateString('id-ID')}</span>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedReceipt(receipt)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          <span>Lihat Bukti Resep</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Modal: Selected Exam Receipt / Lembar Bukti Jawaban */}
-        {selectedReceipt && (
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
-          >
-            <div className="bg-white border border-slate-200 rounded-2xl max-w-2xl w-full p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto shadow-2xl">
-              <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200">
-                <div>
-                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-emerald-700">
-                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                    <span>Lembar Bukti & Hasil Asesmen CBT Resmi</span>
-                  </div>
-                  <h3 className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">
-                    {selectedReceipt.examJudul}
-                  </h3>
-                  <div className="text-xs text-slate-600 mt-1">
-                    {selectedReceipt.studentNama} · Kelas {selectedReceipt.studentKelas} · Token {selectedReceipt.tokenUjian}
-                  </div>
-                </div>
-
-                <div className="text-right shrink-0">
-                  <div className="text-3xl sm:text-4xl font-black font-mono text-blue-700">
-                    {selectedReceipt.skor}
-                  </div>
-                  <div className="text-[11px] font-semibold text-slate-500">
-                    Nilai Akhir / 100
-                  </div>
-                </div>
-              </div>
-
-              {/* Summary Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">Kategori Capaian</div>
-                  <div className="font-bold text-slate-900 mt-0.5">
-                    {selectedReceipt.kategori || 'Selesai'}
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">Pelanggaran Tab</div>
-                  <div
-                    className={`font-bold mt-0.5 ${
-                      selectedReceipt.pelanggaranTab > 0
-                        ? 'text-amber-700'
-                        : 'text-emerald-700'
-                    }`}
-                  >
-                    {selectedReceipt.pelanggaranTab > 0
-                      ? `${selectedReceipt.pelanggaranTab} kali`
-                      : '0 (Aman / Tertib)'}
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">Waktu Selesai</div>
-                  <div className="font-bold text-slate-900 mt-0.5">
-                    {new Date(selectedReceipt.submittedAt).toLocaleTimeString('id-ID', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">Status Validasi</div>
-                  <div className="font-bold text-emerald-700 mt-0.5 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Sah Terdaftar</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Rincian Pengerjaan Resmi (Hanya Nilai & Rekapitulasi - Tanpa Detail Benar/Salah) */}
-              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
-                <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-200">
-                  <span className="font-semibold text-slate-700">Status Pengerjaan Butir Soal</span>
-                  <span className="font-mono font-bold text-slate-900">
-                    {selectedReceipt.answeredCount !== undefined
-                      ? `${selectedReceipt.answeredCount} ${
-                          selectedReceipt.totalQuestions
-                            ? `dari ${selectedReceipt.totalQuestions} soal terjawab`
-                            : 'soal terjawab'
-                        }`
-                      : 'Tuntas Terjawab'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-200">
-                  <span className="font-semibold text-slate-700">Nilai Akhir (Skala 100)</span>
-                  <span className="font-mono font-bold text-blue-700 text-sm">
-                    {selectedReceipt.skor} / 100
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-700">Kode Bukti Digital</span>
-                  <span className="font-mono text-[11px] text-slate-500">
-                    SC-CBT-{selectedReceipt.examId}-{selectedReceipt.studentId}-{new Date(selectedReceipt.submittedAt).getTime().toString(36).toUpperCase()}
-                  </span>
-                </div>
-              </div>
-
-              {/* Banner Kerahasiaan Bank Soal & Kunci Jawaban */}
-              <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-950 space-y-1.5">
-                <div className="font-bold flex items-center gap-1.5 text-amber-900">
-                  <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
-                  <span>Kebijakan Kerahasiaan Bank Soal & Integritas Ujian</span>
-                </div>
-                <p className="text-amber-900/90 leading-relaxed text-[11px]">
-                  Rincian benar/salah tiap butir soal serta kunci jawaban tidak ditampilkan kepada peserta didik demi menjamin kerahasiaan bank soal dan keadilan asesmen. Nilai akhir Anda telah terekam dan sah diverifikasi. Pembahasan materi dan bimbingan evaluasi dapat dikonsultasikan langsung bersama Guru Pengawas atau Guru Mata Pelajaran Sosiologi di kelas.
-                </p>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center justify-between pt-4 border-t border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span>Cetak / Simpan Bukti (PDF)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedReceipt(null)}
-                  className="px-5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                >
-                  Tutup
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
+        </div>
+      );
+    }
 
   // 3. RENDER ACTIVE EXAM INTERFACE
   const currentQuestion = examQuestions[currentIndex];
