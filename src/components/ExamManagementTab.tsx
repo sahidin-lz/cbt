@@ -355,30 +355,30 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Banner & Control Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="text-xs font-bold uppercase tracking-wider text-blue-700 flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5" />
+      <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 border border-indigo-800/80 rounded-2xl p-5 shadow-md text-white flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="space-y-1">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-400/15 border border-amber-400/30 text-[11px] font-bold uppercase tracking-wider text-amber-300">
+            <Layers className="w-3.5 h-3.5 text-amber-400" />
             <span>Pusat Kendali Asesmen CBT</span>
           </div>
-          <h2 className="text-xl font-bold text-slate-900 mt-1">
+          <h2 className="text-lg sm:text-xl font-extrabold text-white tracking-tight">
             Manajemen Ujian & Analisis Butir Soal Kelas
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-blue-200/90 leading-relaxed max-w-2xl">
             Pantau siswa yang sedang ujian secara real-time, evaluasi nilai akhir, serta analisis ketuntasan setiap soal yang dijawab benar vs salah per kelas.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           {/* View mode toggle */}
-          <div className="flex items-center p-1 bg-slate-100 rounded-lg border border-slate-200">
+          <div className="flex items-center p-1 bg-slate-950/60 rounded-xl border border-white/15 backdrop-blur-xs">
             <button
               type="button"
               onClick={() => setViewMode('cards')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                 viewMode === 'cards'
-                  ? 'bg-white text-blue-700 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-sm'
+                  : 'text-blue-200 hover:text-white hover:bg-white/5'
               }`}
             >
               <LayoutList className="w-3.5 h-3.5" />
@@ -387,10 +387,10 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             <button
               type="button"
               onClick={() => setViewMode('matrix')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                 viewMode === 'matrix'
-                  ? 'bg-white text-blue-700 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-sm'
+                  : 'text-blue-200 hover:text-white hover:bg-white/5'
               }`}
             >
               <Table className="w-3.5 h-3.5" />
@@ -412,7 +412,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 includeSummaryPage: true,
               })
             }
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-lg transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-xl transition-all cursor-pointer disabled:opacity-50 shadow-sm"
           >
             <Download className="w-3.5 h-3.5" />
             <span>
@@ -426,9 +426,9 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             type="button"
             onClick={handleManualRefresh}
             disabled={isRefreshing}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-white bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-300' : 'text-sky-300'}`} />
             <span>{isRefreshing ? 'Memperbarui...' : 'Segarkan Data'}</span>
           </button>
         </div>
@@ -455,14 +455,16 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       )}
 
       {/* KLIK KELAS: Interactive Class Selector Strip */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+      <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-emerald-50/70 border border-indigo-200/80 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="flex items-center justify-between text-xs">
-          <span className="font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-            <Users className="w-3.5 h-3.5 text-blue-600" />
-            <span>Filter Kelas / Rombel:</span>
+          <span className="font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-2">
+            <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-2xs">
+              <Users className="w-3.5 h-3.5" />
+            </span>
+            <span>Pilih Kelas / Rombel untuk Menganalisis:</span>
           </span>
-          <span className="font-mono tabular-nums text-slate-500">
-            {uniqueClasses.length} Rombel Terdaftar
+          <span className="px-2.5 py-1 rounded-md bg-white/90 border border-indigo-200 font-mono tabular-nums font-bold text-indigo-800 text-[11px]">
+            {uniqueClasses.length} Kelas Terdaftar
           </span>
         </div>
 
@@ -470,18 +472,18 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
           <button
             type="button"
             onClick={() => handleSelectClass('ALL')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
+            className={`px-3.5 py-2.5 rounded-xl text-xs font-bold border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
               selectedClass === 'ALL'
-                ? 'bg-blue-600 border-blue-600 text-white'
-                : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
+                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 border-indigo-600 text-white shadow-sm'
+                : 'bg-white hover:bg-indigo-50/80 border-indigo-200/80 text-slate-700'
             }`}
           >
             <span>Semua Kelas</span>
             <span
-              className={`px-1.5 py-0.5 text-[10px] font-mono tabular-nums rounded font-bold ${
+              className={`px-1.5 py-0.5 text-[10px] font-mono tabular-nums rounded-md font-extrabold ${
                 selectedClass === 'ALL'
                   ? 'bg-white/20 text-white'
-                  : 'bg-slate-200 text-slate-700'
+                  : 'bg-indigo-100 text-indigo-800'
               }`}
             >
               {students.length}
@@ -502,15 +504,15 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 key={cls}
                 type="button"
                 onClick={() => handleSelectClass(cls)}
-                className={`px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
+                className={`px-3.5 py-2.5 rounded-xl text-xs font-bold border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
                   selectedClass === cls
-                    ? 'bg-blue-600 border-blue-600 text-white'
-                    : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 border-indigo-600 text-white shadow-sm'
+                    : 'bg-white hover:bg-indigo-50/80 border-indigo-200/80 text-slate-800'
                 }`}
               >
                 <span>Kelas {cls}</span>
                 <span
-                  className={`px-1.5 py-0.5 text-[10px] font-mono tabular-nums rounded font-bold ${
+                  className={`px-1.5 py-0.5 text-[10px] font-mono tabular-nums rounded-md font-extrabold ${
                     selectedClass === cls
                       ? 'bg-white/20 text-white'
                       : 'bg-slate-100 text-slate-700'
@@ -522,13 +524,13 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 {activeInClass > 0 && (
                   <span
                     title={`${activeInClass} siswa sedang aktif ujian`}
-                    className="h-2 w-2 rounded-full bg-emerald-500 shrink-0"
+                    className="h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-emerald-200 shrink-0"
                   />
                 )}
                 {blockedInClass > 0 && (
                   <span
                     title={`${blockedInClass} siswa diblokir`}
-                    className="h-2 w-2 rounded-full bg-red-500 shrink-0"
+                    className="h-2 w-2 rounded-full bg-rose-500 ring-2 ring-rose-200 shrink-0"
                   />
                 )}
               </button>

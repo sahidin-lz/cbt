@@ -1776,39 +1776,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 space-y-6">
-      {/* Institutional Console Header & Dedicated Navigation Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-        {/* Top Row: Identity & System Actions */}
-        <div className="px-6 py-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200">
-          <div>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span className="font-semibold text-slate-700 uppercase tracking-wider">
-                Konsol Administrasi &amp; Pengawas CBT
+      {/* Executive Colorful Institutional Console Header & Dedicated Navigation Bar */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+        {/* Top Row: Royal Blue & Indigo Hero Identity Banner + System Actions */}
+        <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white px-6 py-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-indigo-800">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="px-2.5 py-0.5 rounded-md bg-amber-400/20 border border-amber-300/40 text-amber-300 font-bold uppercase tracking-wider">
+                Konsol Guru &amp; Pengawas CBT
               </span>
-              <span className="text-slate-300">·</span>
-              <span>
+              <span className="text-indigo-300">·</span>
+              <span className="text-blue-100">
                 Pengawas Aktif:{' '}
-                <strong className="text-slate-800 font-semibold">
+                <strong className="text-white font-bold">
                   {teacherProfile.name}
                 </strong>{' '}
-                <span className="text-slate-400">({teacherProfile.email})</span>
+                <span className="text-blue-200/80">({teacherProfile.email})</span>
               </span>
             </div>
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 mt-1 tracking-tight">
-              Manajemen Asesmen Sosiologi, Distribusi Paket &amp; Evaluasi Kognitif
+            <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
+              Pusat Kendali Distribusi Ujian, Database Siswa &amp; Evaluasi Sosiologi
             </h1>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             {onManualFirebaseSync && (
               <button
                 type="button"
                 onClick={onManualFirebaseSync}
                 disabled={isSyncingFirebase}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200/90 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-white/15 hover:bg-white/25 border border-white/25 disabled:opacity-50 rounded-xl transition-all whitespace-nowrap shrink-0 cursor-pointer backdrop-blur-xs"
               >
                 <RefreshCw
-                  className={`w-3.5 h-3.5 text-blue-600 ${
+                  className={`w-3.5 h-3.5 text-emerald-300 ${
                     isSyncingFirebase ? 'animate-spin' : ''
                   }`}
                 />
@@ -1827,39 +1827,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   localStorage.removeItem('cbt_teacher_active_tab');
                 } catch {}
               }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:text-red-700 bg-white hover:bg-red-50/50 border border-slate-300 hover:border-red-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 border border-rose-400/40 rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>Keluar Sesi</span>
+              <span>Keluar Guru</span>
             </button>
           </div>
         </div>
 
-        {/* Second Row: Dedicated Full-Width Navigation Menu Bar */}
-        <div className="bg-slate-50/70 px-6 border-b border-slate-200">
+        {/* Second Row: Dedicated Full-Width Colorful 5-Tab Navigation Menu Bar */}
+        <div className="bg-gradient-to-r from-slate-100 via-blue-50/50 to-indigo-50/50 p-3 border-b border-slate-200">
           <div
             role="tablist"
             aria-label="Menu Utama Konsol Guru"
-            className="flex items-center gap-1 overflow-x-auto -mb-px"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5"
           >
             <button
               type="button"
               role="tab"
               aria-selected={activeTab === 'ujian'}
               onClick={() => setActiveTab('ujian')}
-              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'ujian'
-                  ? 'border-blue-600 text-blue-700 bg-white'
-                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-700 shadow-xs'
+                  : 'bg-white hover:bg-blue-50/70 text-slate-700 border-slate-200/90 hover:border-blue-300'
               }`}
             >
-              <ClipboardList className="w-4 h-4 shrink-0" />
-              <span>Distribusi &amp; Jadwal Ujian</span>
+              <span className="flex items-center gap-2 truncate">
+                <ClipboardList
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'ujian' ? 'text-amber-300' : 'text-blue-600'
+                  }`}
+                />
+                <span className="truncate">Distribusi Ujian</span>
+              </span>
               <span
-                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
                   activeTab === 'ujian'
-                    ? 'bg-blue-50 text-blue-700 font-bold'
-                    : 'bg-slate-200/70 text-slate-600'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-blue-50 text-blue-700 border border-blue-200/60'
                 }`}
               >
                 {exams.length}
@@ -1871,19 +1877,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               role="tab"
               aria-selected={activeTab === 'manajemen'}
               onClick={() => setActiveTab('manajemen')}
-              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'manajemen'
-                  ? 'border-blue-600 text-blue-700 bg-white'
-                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white border-indigo-700 shadow-xs'
+                  : 'bg-white hover:bg-indigo-50/70 text-slate-700 border-slate-200/90 hover:border-indigo-300'
               }`}
             >
-              <Layers className="w-4 h-4 shrink-0" />
-              <span>Pengawasan &amp; Analisis Kelas</span>
-              {activeStudentsCount > 0 && (
-                <span className="px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold rounded bg-emerald-100 text-emerald-800">
-                  {activeStudentsCount} Aktif
-                </span>
-              )}
+              <span className="flex items-center gap-2 truncate">
+                <Layers
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'manajemen' ? 'text-emerald-300' : 'text-indigo-600'
+                  }`}
+                />
+                <span className="truncate">Manajemen Ujian</span>
+              </span>
+              <span
+                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
+                  activeTab === 'manajemen'
+                    ? 'bg-white/20 text-white'
+                    : activeStudentsCount > 0
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      : 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
+                }`}
+              >
+                {activeStudentsCount > 0 ? `${activeStudentsCount} Aktif` : 'Kelas'}
+              </span>
             </button>
 
             <button
@@ -1891,19 +1909,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               role="tab"
               aria-selected={activeTab === 'siswa'}
               onClick={() => setActiveTab('siswa')}
-              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'siswa'
-                  ? 'border-blue-600 text-blue-700 bg-white'
-                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-700 shadow-xs'
+                  : 'bg-white hover:bg-emerald-50/70 text-slate-700 border-slate-200/90 hover:border-emerald-300'
               }`}
             >
-              <Users className="w-4 h-4 shrink-0" />
-              <span>Database &amp; Token Siswa</span>
+              <span className="flex items-center gap-2 truncate">
+                <Users
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'siswa' ? 'text-amber-200' : 'text-emerald-600'
+                  }`}
+                />
+                <span className="truncate">Database Siswa</span>
+              </span>
               <span
-                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
                   activeTab === 'siswa'
-                    ? 'bg-blue-50 text-blue-700 font-bold'
-                    : 'bg-slate-200/70 text-slate-600'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200/60'
                 }`}
               >
                 {students.length}
@@ -1918,19 +1942,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 setActiveTab('soal');
                 setIsBankSoalDetailOpen(false);
               }}
-              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'soal'
-                  ? 'border-blue-600 text-blue-700 bg-white'
-                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-600 shadow-xs'
+                  : 'bg-white hover:bg-amber-50/70 text-slate-700 border-slate-200/90 hover:border-amber-300'
               }`}
             >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
-              <span>Bank Soal Sosiologi</span>
+              <span className="flex items-center gap-2 truncate">
+                <FileSpreadsheet
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'soal' ? 'text-white' : 'text-amber-600'
+                  }`}
+                />
+                <span className="truncate">Bank Soal</span>
+              </span>
               <span
-                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
                   activeTab === 'soal'
-                    ? 'bg-blue-50 text-blue-700 font-bold'
-                    : 'bg-slate-200/70 text-slate-600'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-amber-50 text-amber-800 border border-amber-200/60'
                 }`}
               >
                 {questions.length}
@@ -1942,19 +1972,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               role="tab"
               aria-selected={activeTab === 'laporan'}
               onClick={() => setActiveTab('laporan')}
-              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'laporan'
-                  ? 'border-blue-600 text-blue-700 bg-white'
-                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-700 shadow-xs'
+                  : 'bg-white hover:bg-purple-50/70 text-slate-700 border-slate-200/90 hover:border-purple-300'
               }`}
             >
-              <Sparkles className="w-4 h-4 shrink-0 text-amber-500" />
-              <span>Hasil &amp; Evaluasi Capaian</span>
+              <span className="flex items-center gap-2 truncate">
+                <Sparkles
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'laporan' ? 'text-amber-300' : 'text-purple-600'
+                  }`}
+                />
+                <span className="truncate">Hasil &amp; Evaluasi</span>
+              </span>
               <span
-                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
                   activeTab === 'laporan'
-                    ? 'bg-blue-50 text-blue-700 font-bold'
-                    : 'bg-slate-200/70 text-slate-600'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-purple-50 text-purple-800 border border-purple-200/60'
                 }`}
               >
                 {results.length}
@@ -1963,68 +1999,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Third Row: Clean 4-Metric Institutional Summary Strip */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-200 bg-white">
-          <div className="px-6 py-3.5">
-            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-              Paket Ujian Terdaftar
+        {/* Third Row: Colorful 4-Metric Institutional Summary Cards */}
+        <div className="p-4 bg-white grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-blue-50 via-blue-50/60 to-indigo-50/40 border border-blue-200/80">
+            <div className="text-[11px] font-bold text-blue-800 uppercase tracking-wider">
+              Paket Ujian Aktif
             </div>
-            <div className="text-lg font-bold font-mono tabular-nums text-slate-900 mt-0.5">
+            <div className="text-xl font-extrabold font-mono tabular-nums text-blue-950 mt-0.5">
               {exams.length}{' '}
-              <span className="text-xs font-normal font-sans text-slate-500">
+              <span className="text-xs font-medium font-sans text-blue-700">
                 paket ujian
               </span>
             </div>
           </div>
-          <div className="px-6 py-3.5">
-            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-              Sebaran Peserta per Tingkat
+
+          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-violet-50 via-purple-50/60 to-indigo-50/40 border border-violet-200/80">
+            <div className="text-[11px] font-bold text-violet-800 uppercase tracking-wider">
+              Sebaran Siswa 3 Tingkatan
             </div>
-            <div className="text-xs font-bold font-mono tabular-nums text-slate-900 mt-1.5">
-              Kelas X: {countTingkat10} <span className="text-slate-300">·</span> XI:{' '}
-              {countTingkat11} <span className="text-slate-300">·</span> XII:{' '}
+            <div className="text-xs font-extrabold font-mono tabular-nums text-violet-950 mt-1.5">
+              Kelas X: {countTingkat10} <span className="text-violet-400">·</span> XI:{' '}
+              {countTingkat11} <span className="text-violet-400">·</span> XII:{' '}
               {countTingkat12}
             </div>
           </div>
-          <div className="px-6 py-3.5">
-            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-              Kapasitas Bank Soal
+
+          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-amber-50 via-orange-50/50 to-yellow-50/40 border border-amber-200/80">
+            <div className="text-[11px] font-bold text-amber-900 uppercase tracking-wider">
+              Total Butir Soal
             </div>
-            <div className="text-lg font-bold font-mono tabular-nums text-blue-700 mt-0.5">
+            <div className="text-xl font-extrabold font-mono tabular-nums text-amber-950 mt-0.5">
               {questions.length}{' '}
-              <span className="text-xs font-normal font-sans text-slate-500">
+              <span className="text-xs font-medium font-sans text-amber-800">
                 butir soal
               </span>
             </div>
           </div>
-          <div className="px-6 py-3.5">
-            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-              Lembar Jawaban Masuk
+
+          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-emerald-50 via-teal-50/60 to-cyan-50/40 border border-emerald-200/80">
+            <div className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
+              Hasil Ujian Masuk
             </div>
-            <div className="text-lg font-bold font-mono tabular-nums text-emerald-700 mt-0.5">
+            <div className="text-xl font-extrabold font-mono tabular-nums text-emerald-950 mt-0.5">
               {results.length}{' '}
-              <span className="text-xs font-normal font-sans text-slate-500">
-                hasil terekam
+              <span className="text-xs font-medium font-sans text-emerald-700">
+                peserta selesai
               </span>
             </div>
           </div>
         </div>
 
         {/* Quiet Footer Status Bar inside Console Header */}
-        <div className="px-6 py-2.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+        <div className="px-6 py-2.5 bg-gradient-to-r from-emerald-50/80 via-slate-50 to-blue-50/70 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-emerald-700">
-              Sinkronisasi Database Aktif
+            <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider">
+              Live Sync Aktif
             </span>
-            <span>·</span>
-            <span>
+            <span className="font-medium text-slate-700">
               {syncPulse?.lastEvent ||
                 'Perubahan jadwal, peserta, bank soal, dan hasil tersimpan otomatis'}
             </span>
           </div>
           {syncPulse?.lastSyncedAt && (
-            <span className="font-mono tabular-nums text-slate-500">
-              Pembaruan: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
+            <span className="font-mono tabular-nums font-semibold text-indigo-800">
+              Update Terakhir: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
             </span>
           )}
         </div>
