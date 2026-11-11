@@ -22,6 +22,7 @@ import {
   Layers,
   Shuffle,
   ShieldCheck,
+  Download,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem, AnalisisAI } from '../types/cbt';
 import {
@@ -40,6 +41,7 @@ import {
   calculateExamScore,
   prepareStudentExamQuestions,
 } from '../utils/cbtLogic';
+import { downloadSingleStudentResultPdf } from '../utils/cbtPdfGenerator';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 
 export interface StudentActivityLog {
@@ -1015,141 +1017,167 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   if (activeStudent && submittedSummary) {
     return (
       <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6">
-        <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
-            <div>
-              <p className="text-xs font-medium text-emerald-700">
-                Ujian Telah Diselesaikan · Token {activeStudent.token_ujian}
-              </p>
-              <h1 className="text-2xl font-bold text-slate-900 mt-1">
-                Hasil Ujian: {activeStudent.nama}
-              </h1>
-              <p className="text-sm text-slate-600 mt-0.5">
-                Kelas {activeStudent.kelas} · {activeExam?.judul_ujian}
-              </p>
-            </div>
-            <div className="text-left sm:text-right">
-              <div className="text-xs text-slate-500">Skor Akhir CBT</div>
-              <div className="text-4xl font-bold font-mono tabular-nums text-blue-700">
-                {submittedSummary.skor}
-                <span className="text-lg text-slate-400 font-normal">/100</span>
-              </div>
-              <div className="text-xs text-slate-600 mt-1">
-                {submittedSummary.kategori} · Poin Mentah {submittedSummary.rawEarned}/
-                {submittedSummary.rawMax}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4">
-            <div className="text-sm text-slate-700">
-              <span>Soal Dijawab: </span>
-              <strong className="font-mono tabular-nums">
-                {Object.keys(answers).filter((k) => answers[k]?.length > 0).length} /{' '}
-                {examQuestions.length}
-              </strong>
-              <span className="mx-2 text-slate-300">·</span>
-              <span>Log Pindah Tab (Anti-Cheat): </span>
-              <strong className="font-mono tabular-nums text-amber-700">
-                {tabViolations} kali
-              </strong>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              {/* Hanya muncul jika belum ada hasil AI DAN siswa mendapatkan poin > 0 */}
-              {!submittedSummary.aiResult && submittedSummary.rawEarned > 0 && (
-                <button
-                  type="button"
-                  onClick={handleRequestInstantAiEvaluation}
-                  disabled={isGeneratingStudentAi}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  {isGeneratingStudentAi
-                    ? 'Menganalisis Kognitif (Gemini AI)...'
-                    : 'Generate AI Analysis Sekarang'}
-                </button>
-              )}
-
-              {!submittedSummary.aiResult && submittedSummary.rawEarned === 0 && (
-                <div className="px-4 py-2 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg">
-                  Skor 0: Analisis AI tidak tersedia untuk ujian kosong.
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveStudent(null);
-                  setSubmittedSummary(null);
-                  setNamaInput('');
-                  setTokenInput('');
-                }}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Kembali ke Login Siswa
-              </button>
-            </div>
-          </div>
-
-          {submittedSummary.aiResult && (
-            <div className="mt-6 border border-slate-200 rounded-xl p-6 bg-slate-50/60 space-y-5">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-                <div className="flex items-center gap-2">
-                  <Award className="w-5 h-5 text-blue-600" />
-                  <h2 className="text-base font-bold text-slate-900">
-                    Hasil Evaluasi AI Evaluator (LOTS vs HOTS)
-                  </h2>
-                </div>
-              </div>
-
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+          {/* Colorful Top Celebration Strip */}
+          <div className="h-2 w-full bg-gradient-to-r from-emerald-500 via-blue-600 to-indigo-600" />
+          <div className="p-6 sm:p-8">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
               <div>
-                <h3 className="text-xs font-semibold text-slate-500">
-                  Evaluasi Kognitif HOTS
-                </h3>
-                <p className="text-sm text-slate-800 mt-1 leading-relaxed">
-                  {submittedSummary.aiResult.evaluasi_hots}
+                <p className="text-xs font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Ujian Selesai Dikerjakan · Token {activeStudent.token_ujian}</span>
+                </p>
+                <h1 className="text-2xl font-extrabold text-slate-900 mt-1">
+                  Hasil Ujian: {activeStudent.nama}
+                </h1>
+                <p className="text-sm text-slate-600 mt-0.5">
+                  Kelas {activeStudent.kelas} · {activeExam?.judul_ujian}
                 </p>
               </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-white border border-slate-200 rounded-lg p-4">
-                  <h4 className="text-xs font-semibold text-emerald-700">
-                    Kekuatan Kompetensi
-                  </h4>
-                  <ul className="mt-2 space-y-1.5 text-sm text-slate-700 list-disc list-inside">
-                    {submittedSummary.aiResult.analisis_kompetensi.kekuatan.map(
-                      (item, i) => (
-                        <li key={i}>{item}</li>
-                      )
-                    )}
-                  </ul>
+              <div className="text-left sm:text-right bg-gradient-to-br from-blue-50 via-indigo-50/70 to-emerald-50/60 border border-blue-200/80 rounded-xl px-5 py-3.5">
+                <div className="text-xs font-semibold text-indigo-800">Nilai Akhir CBT Sosiologi</div>
+                <div className="text-4xl font-extrabold font-mono tabular-nums text-blue-700 mt-0.5">
+                  {submittedSummary.skor}
+                  <span className="text-lg text-slate-400 font-normal">/100</span>
                 </div>
-                <div className="bg-white border border-slate-200 rounded-lg p-4">
-                  <h4 className="text-xs font-semibold text-amber-700">
-                    Area Penguatan (Kelemahan)
-                  </h4>
-                  <ul className="mt-2 space-y-1.5 text-sm text-slate-700 list-disc list-inside">
-                    {submittedSummary.aiResult.analisis_kompetensi.kelemahan.map(
-                      (item, i) => (
-                        <li key={i}>{item}</li>
-                      )
-                    )}
-                  </ul>
+                <div className="text-xs font-medium text-emerald-800 mt-0.5">
+                  Predikat: {submittedSummary.kategori}
                 </div>
-              </div>
-
-              <div className="bg-white border border-slate-200 rounded-lg p-4">
-                <h4 className="text-xs font-semibold text-blue-700">
-                  3 Rekomendasi Belajar Terarah
-                </h4>
-                <ol className="mt-2 space-y-1.5 text-sm text-slate-700 list-decimal list-inside">
-                  {submittedSummary.aiResult.rekomendasi_belajar.map((rec, i) => (
-                    <li key={i}>{rec}</li>
-                  ))}
-                </ol>
               </div>
             </div>
-          )}
+
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <div className="text-sm text-slate-700">
+                <span>Soal Dijawab: </span>
+                <strong className="font-mono tabular-nums text-blue-700">
+                  {Object.keys(answers).filter((k) => answers[k]?.length > 0).length} /{' '}
+                  {examQuestions.length}
+                </strong>
+                <span className="mx-2 text-slate-300">·</span>
+                <span>Catatan Pindah Tab: </span>
+                <strong className="font-mono tabular-nums text-amber-700">
+                  {tabViolations} kali
+                </strong>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadSingleStudentResultPdf({
+                      student: activeStudent,
+                      exam: activeExam,
+                      score: submittedSummary.skor,
+                      kategori: submittedSummary.kategori,
+                      answeredCount: Object.keys(answers).filter(
+                        (k) => answers[k]?.length > 0
+                      ).length,
+                      totalQuestions: examQuestions.length,
+                      tabViolations,
+                      aiAnalysis: submittedSummary.aiResult,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Kartu Hasil Nilai (.PDF)</span>
+                </button>
+
+                {/* Hanya muncul jika belum ada hasil evaluasi DAN siswa mendapatkan poin > 0 */}
+                {!submittedSummary.aiResult && submittedSummary.rawEarned > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleRequestInstantAiEvaluation}
+                    disabled={isGeneratingStudentAi}
+                    className="px-4 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                  >
+                    {isGeneratingStudentAi
+                      ? 'Menyusun Evaluasi Capaian Sosiologi...'
+                      : 'Lihat Evaluasi Capaian & Rekomendasi Belajar'}
+                  </button>
+                )}
+
+                {!submittedSummary.aiResult && submittedSummary.rawEarned === 0 && (
+                  <div className="px-4 py-2 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg">
+                    Skor 0: Evaluasi capaian tidak tersedia untuk lembar jawaban kosong.
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveStudent(null);
+                    setSubmittedSummary(null);
+                    setNamaInput('');
+                    setTokenInput('');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Kembali ke Halaman Login
+                </button>
+              </div>
+            </div>
+
+            {submittedSummary.aiResult && (
+              <div className="mt-6 border border-indigo-200/80 rounded-xl p-6 bg-gradient-to-br from-blue-50/40 via-white to-emerald-50/30 space-y-5">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Award className="w-5 h-5 text-indigo-600" />
+                    <h2 className="text-base font-bold text-slate-900">
+                      Evaluasi Kompetensi Sosiologi (LOTS &amp; HOTS)
+                    </h2>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-700">
+                    Analisis Penalaran Kognitif Sosiologi
+                  </h3>
+                  <p className="text-sm text-slate-800 mt-1.5 leading-relaxed">
+                    {submittedSummary.aiResult.evaluasi_hots}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-4">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-800">
+                      Kekuatan Kompetensi Materi
+                    </h4>
+                    <ul className="mt-2 space-y-1.5 text-sm text-slate-700 list-disc list-inside">
+                      {submittedSummary.aiResult.analisis_kompetensi.kekuatan.map(
+                        (item, i) => (
+                          <li key={i}>{item}</li>
+                        )
+                      )}
+                    </ul>
+                  </div>
+                  <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-4">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-amber-800">
+                      Materi yang Perlu Diperkuat
+                    </h4>
+                    <ul className="mt-2 space-y-1.5 text-sm text-slate-700 list-disc list-inside">
+                      {submittedSummary.aiResult.analisis_kompetensi.kelemahan.map(
+                        (item, i) => (
+                          <li key={i}>{item}</li>
+                        )
+                      )}
+                    </ul>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-blue-800">
+                    3 Panduan &amp; Rekomendasi Belajar Sosiologi
+                  </h4>
+                  <ol className="mt-2 space-y-1.5 text-sm text-slate-700 list-decimal list-inside">
+                    {submittedSummary.aiResult.rekomendasi_belajar.map((rec, i) => (
+                      <li key={i}>{rec}</li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -1167,96 +1195,110 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       : null;
 
     return (
-      <div className="max-w-xl mx-auto py-8 px-4 sm:px-6 space-y-6">
-        {/* Header Ruang Siswa */}
-        <div className="text-center pb-1">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider text-blue-700 bg-blue-50 border border-blue-200">
-            <LogIn className="w-3.5 h-3.5" />
-            <span>Portal Masuk Siswa CBT</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight mt-2">
-            Ruang Asesmen Siswa
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            SocioCBT AI — Sistem Asesmen & Ujian Sosiologi SMA
-          </p>
-        </div>
-
-        {/* LOGIN RUANG UJIAN SISWA */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6 shadow-xs">
-            <div>
-              <div className="text-xs font-medium text-blue-700">
-                Halaman Login Peserta Ujian CBT · 3 Langkah Verifikasi
+      <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 space-y-5">
+        {/* Vibrant & Inspiring Institutional Student Login Card */}
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+          {/* Colorful Educational Illustration Banner */}
+          <div className="relative bg-gradient-to-r from-blue-700 via-indigo-700 to-emerald-600 overflow-hidden">
+            <img
+              src="/assets/cbt-sosiologi-banner.jpg"
+              alt="Ilustrasi Belajar & Asesmen CBT Sosiologi SMA"
+              className="w-full h-44 sm:h-52 object-cover object-center opacity-95"
+            />
+            <div className=" inset-0 bg-gradient-to-t from-slate-950/85 via-slate-900/35 to-transparent flex flex-col justify-end p-5 sm:p-6 absolute">
+              <div className="flex items-center justify-between gap-2 text-xs text-amber-300 font-bold uppercase tracking-wider">
+                <span className="flex items-center gap-1.5">
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Portal Peserta CBT Sosiologi SMA</span>
+                </span>
+                <span className="font-mono text-white/90 bg-white/15 backdrop-blur-xs px-2.5 py-0.5 rounded-md">
+                  3 Langkah Mudah
+                </span>
               </div>
-              <h2 className="text-2xl font-bold text-slate-900 mt-1 tracking-tight">
-                Masuk Ruang Ujian Siswa
-              </h2>
-              <p className="text-sm text-slate-600 mt-1.5 leading-relaxed">
-                Pilih <strong>Kelas / Rombel</strong> terlebih dahulu, lalu pilih{' '}
-                <strong>Nama Lengkap Anda</strong> dari daftar kelas, kemudian
-                masukkan <strong>6 karakter Token Ujian</strong>.
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mt-1">
+                Selamat Datang di Ruang Ujian Sosiologi
+              </h1>
+              <p className="text-xs text-slate-100 mt-1 leading-relaxed max-w-xl">
+                Siapkan fokus terbaikmu! Pilih <strong>Kelas</strong>, pilih <strong>Nama Lengkap</strong>, lalu masukkan <strong>Token Ujian</strong> untuk memulai asesmen.
               </p>
             </div>
+          </div>
 
-            {/* 3-Step Visual Progress Indicator */}
-            <div className="grid grid-cols-3 gap-2 pt-1">
+          <div className="p-6 sm:p-8 space-y-6">
+            {/* Colorful 3-Step Horizontal Verification Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div
-                className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                className={`p-3.5 rounded-xl border text-xs transition-all ${
                   step1Done
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                    : 'bg-blue-50/70 border-blue-200 text-blue-900'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950 shadow-2xs'
+                    : 'bg-blue-50/80 border-blue-200 text-blue-950'
                 }`}
               >
-                <div className="font-bold flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 shrink-0" />
-                  <span>1. Pilih Kelas</span>
+                <div className="font-bold flex items-center justify-between gap-1.5">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-mono font-bold text-white ${step1Done ? 'bg-emerald-600' : 'bg-blue-600'}`}>
+                      1
+                    </span>
+                    <span>Pilih Kelas</span>
+                  </span>
+                  {step1Done && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
                 </div>
-                <div className="text-[11px] mt-0.5 truncate opacity-80">
-                  {selectedKelas || 'Belum dipilih'}
+                <div className="text-[11px] mt-1.5 font-semibold truncate text-slate-700">
+                  {selectedKelas ? `Kelas ${selectedKelas}` : 'Pilih rombel Anda'}
                 </div>
               </div>
 
               <div
-                className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                className={`p-3.5 rounded-xl border text-xs transition-all ${
                   step2Done
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950 shadow-2xs'
                     : step1Done
-                      ? 'bg-blue-50/70 border-blue-200 text-blue-900'
+                      ? 'bg-violet-50/80 border-violet-200 text-violet-950'
                       : 'bg-slate-50 border-slate-200 text-slate-400'
                 }`}
               >
-                <div className="font-bold flex items-center gap-1.5">
-                  <UserCheck className="w-3.5 h-3.5 shrink-0" />
-                  <span>2. Pilih Nama</span>
+                <div className="font-bold flex items-center justify-between gap-1.5">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-mono font-bold text-white ${step2Done ? 'bg-emerald-600' : step1Done ? 'bg-violet-600' : 'bg-slate-400'}`}>
+                      2
+                    </span>
+                    <span>Nama Peserta</span>
+                  </span>
+                  {step2Done && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
                 </div>
-                <div className="text-[11px] mt-0.5 truncate opacity-80">
+                <div className="text-[11px] mt-1.5 font-semibold truncate opacity-90">
                   {selectedStudentObj
                     ? selectedStudentObj.nama
                     : step1Done
-                      ? `${studentsInSelectedClass.length} siswa tersedia`
+                      ? `${studentsInSelectedClass.length} siswa terdaftar`
                       : 'Menunggu kelas'}
                 </div>
               </div>
 
               <div
-                className={`p-2.5 rounded-lg border text-xs transition-colors ${
+                className={`p-3.5 rounded-xl border text-xs transition-all ${
                   step3Done
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950 shadow-2xs'
                     : step2Done
-                      ? 'bg-blue-50/70 border-blue-200 text-blue-900'
+                      ? 'bg-amber-50/90 border-amber-300 text-amber-950'
                       : 'bg-slate-50 border-slate-200 text-slate-400'
                 }`}
               >
-                <div className="font-bold flex items-center gap-1.5">
-                  <KeyRound className="w-3.5 h-3.5 shrink-0" />
-                  <span>3. Token Ujian</span>
+                <div className="font-bold flex items-center justify-between gap-1.5">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-mono font-bold text-white ${step3Done ? 'bg-emerald-600' : step2Done ? 'bg-amber-600' : 'bg-slate-400'}`}>
+                      3
+                    </span>
+                    <span>Token Ujian</span>
+                  </span>
+                  {step3Done && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
                 </div>
-                <div className="text-[11px] mt-0.5 truncate opacity-80">
+                <div className="text-[11px] mt-1.5 font-semibold truncate opacity-90">
                   {step3Done
                     ? 'Token siap diverifikasi'
                     : step2Done
                       ? 'Masukkan 6 karakter'
-                      : 'Menunggu nama'}
+                      : 'Menunggu peserta'}
                 </div>
               </div>
             </div>
@@ -1514,7 +1556,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   (students.length > 0 && (!step1Done || !step2Done || !step3Done)) ||
                   (step1Done && matchedExamsForSelectedClass.length === 0)
                 }
-                className="w-full py-3 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+                className="w-full py-3.5 px-5 text-sm font-bold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-700 hover:via-indigo-700 hover:to-emerald-700 disabled:opacity-50 rounded-xl transition-all cursor-pointer disabled:cursor-not-allowed shadow-xs"
               >
                 {isLoggingIn
                   ? 'Memverifikasi Kelas, Nama & Token...'
@@ -1525,13 +1567,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             </form>
 
             <div className="pt-5 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
-              <span>Dukungan Soal: PG Biasa & PG Kompleks</span>
-              <span>Proteksi Anti-Cheat & Autosave Aktif</span>
+              <span>Dukungan Soal: PG Biasa &amp; PG Kompleks</span>
+              <span>Proteksi Anti-Cheat &amp; Autosave Aktif</span>
             </div>
           </div>
         </div>
-      );
-    }
+      </div>
+    );
+  }
 
   // 3. RENDER ACTIVE EXAM INTERFACE
   const currentQuestion = examQuestions[currentIndex];
@@ -1545,104 +1588,98 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 space-y-4 select-none">
-      {/* Top Exam Status Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      {/* Clean Institutional Exam Status Header */}
+      <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-2xs">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
             <span>
-              Peserta: <strong className="text-slate-800">{activeStudent.nama}</strong>
+              Peserta: <strong className="text-slate-900 font-semibold">{activeStudent.nama}</strong>
             </span>
-            <span>·</span>
+            <span className="text-slate-300">·</span>
             <span>Kelas {activeStudent.kelas}</span>
-            <span>·</span>
+            <span className="text-slate-300">·</span>
             <span>
-              Token{' '}
-              <span className="font-mono font-semibold text-blue-700">
+              Token:{' '}
+              <span className="font-mono tabular-nums font-semibold text-blue-700">
                 {activeStudent.token_ujian}
               </span>
             </span>
-            <span>·</span>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200">
-              <Layers className="w-3 h-3 text-blue-600 shrink-0" />
-              <span>Kode Soal: {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}</span>
+            <span className="text-slate-300">·</span>
+            <span className="font-mono font-semibold text-slate-700">
+              {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
             </span>
             {activeExam?.acak_soal !== false && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200">
-                <Shuffle className="w-3 h-3 text-emerald-600 shrink-0" />
-                <span>Acak Soal</span>
-              </span>
+              <>
+                <span className="text-slate-300">·</span>
+                <span className="text-slate-600">Urutan Diacak</span>
+              </>
             )}
-            {activeExam?.acak_opsi !== false && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-violet-50 text-violet-800 border border-violet-200">
-                <span>Acak Opsi A-E</span>
-              </span>
-            )}
-            <span>·</span>
+            <span className="text-slate-300">·</span>
             <span>
               Status:{' '}
-              <span
+              <strong
                 className={`font-semibold ${
                   isStudentBlocked ? 'text-red-700' : 'text-emerald-700'
                 }`}
               >
                 {isStudentBlocked ? 'Diblokir' : activeStudent.status_ujian}
-              </span>
+              </strong>
             </span>
           </div>
-          <h1 className="text-lg font-bold text-slate-900 mt-1">
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
             {activeExam?.judul_ujian}
           </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={() => setShowActivityLogModal(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Activity className="w-3.5 h-3.5 text-blue-600" />
-            <span>Catatan Aktivitas ({activityLogs.length})</span>
+            <span>Log Sesi ({activityLogs.length})</span>
           </button>
 
           {!isFullscreen && (
             <button
               type="button"
               onClick={requestExamFullscreen}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Maximize2 className="w-3.5 h-3.5" />
-              Mode Layar Penuh
+              <span>Layar Penuh</span>
             </button>
           )}
 
           <div
-            className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
+            className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border whitespace-nowrap shrink-0 ${
               tabViolations > 0
                 ? 'bg-amber-50 border-amber-300 text-amber-900'
                 : 'bg-slate-50 border-slate-200 text-slate-600'
             }`}
           >
             <ShieldAlert
-              className={`w-4 h-4 ${
+              className={`w-3.5 h-3.5 shrink-0 ${
                 tabViolations > 0 ? 'text-amber-600' : 'text-slate-400'
               }`}
             />
             <span>
-              Proteksi Integritas:{' '}
+              Pengawasan:{' '}
               <strong className="font-mono tabular-nums text-slate-900">
-                {tabViolations > 0 ? `${tabViolations} Pelanggaran` : 'Ketat & Aman'}
+                {tabViolations > 0 ? `${tabViolations}/${MAX_TAB_VIOLATIONS} Peringatan` : 'Aktif'}
               </strong>
             </span>
           </div>
 
           <div
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg border font-mono tabular-nums text-base font-bold ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg border font-mono tabular-nums text-base font-bold whitespace-nowrap shrink-0 ${
               remainingSeconds < 300
                 ? 'bg-red-50 border-red-300 text-red-700'
                 : 'bg-slate-900 border-slate-900 text-white'
             }`}
           >
-            <Clock className="w-4 h-4" />
+            <Clock className="w-4 h-4 shrink-0" />
             <span aria-label="Sisa Waktu Ujian">{formatTimer(remainingSeconds)}</span>
           </div>
         </div>
@@ -1730,126 +1767,158 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       {currentQuestion ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Question Stage */}
-          <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-200">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-bold font-mono text-blue-700">
-                  SOAL NO. {currentIndex + 1} / {examQuestions.length}
-                </span>
-                <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-mono text-xs font-bold">
-                  {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
-                </span>
-                <span className="text-slate-300">·</span>
-                <span className="text-xs font-medium text-slate-600">
-                  {isKompleks
-                    ? 'Pilihan Ganda Kompleks (Pilih >1 Jawaban Benar · Bobot Maks 3 Poin)'
-                    : 'Pilihan Ganda Biasa (1 Jawaban Benar · Bobot 2 Poin)'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>Autosave Aktif · Tersimpan Otomatis ✓</span>
-                </div>
-                <span className="text-xs font-mono text-slate-500">
-                  ID: {currentQuestion.data_opsi?.id_soal_csv || `Q-${currentQuestion.id}`}
-                </span>
-              </div>
+          <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+            {/* Colorful Live Progress Strip */}
+            <div className="bg-slate-100 h-2 w-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-blue-600 via-indigo-500 to-emerald-500 transition-all duration-300"
+                style={{
+                  width: `${
+                    examQuestions.length > 0
+                      ? Math.max(5, Math.round((answeredCount / examQuestions.length) * 100))
+                      : 0
+                  }%`,
+                }}
+              />
             </div>
 
-            {currentQuestion.data_opsi?.wacana && (
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-1.5">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                  <BookOpen className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Wacana / Stimulus Soal</span>
+            <div className="p-6 sm:p-8 space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-200">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-bold font-mono tabular-nums shadow-2xs">
+                    SOAL NO. {currentIndex + 1} / {examQuestions.length}
+                  </span>
+                  <span className="text-slate-300">·</span>
+                  <span className="font-mono text-xs font-bold text-indigo-700">
+                    {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
+                  </span>
+                  <span className="text-slate-300">·</span>
+                  <span className="text-xs font-semibold text-slate-600">
+                    {isKompleks
+                      ? 'PG Kompleks (Pilih >1 Jawaban · Bobot Maks 3)'
+                      : 'PG Biasa (Pilih 1 Jawaban · Bobot 2)'}
+                  </span>
                 </div>
-                <div className="text-sm text-slate-700 leading-relaxed">
-                  <MathAndTableRenderer content={currentQuestion.data_opsi.wacana} />
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Tersimpan Otomatis</span>
+                  </span>
+                  <span className="text-slate-300">·</span>
+                  <span className="font-mono tabular-nums">
+                    {currentQuestion.data_opsi?.id_soal_csv || `Q-${currentQuestion.id}`}
+                  </span>
                 </div>
               </div>
-            )}
 
-            <div className="text-base sm:text-lg font-semibold text-slate-900 leading-relaxed">
-              <MathAndTableRenderer content={currentQuestion.teks_soal} />
-            </div>
-
-            <div className="space-y-3 pt-1">
-              {(['A', 'B', 'C', 'D', 'E'] as const).map((optKey) => {
-                const optText = currentQuestion.data_opsi?.opsi?.[optKey];
-                if (!optText) return null;
-                const isSelected = selectedOptions.includes(optKey);
-
-                return (
-                  <label
-                    key={optKey}
-                    className={`flex items-start gap-3.5 p-4 rounded-xl border transition-colors cursor-pointer select-none ${
-                      isSelected
-                        ? 'bg-blue-50/70 border-blue-600 text-slate-900'
-                        : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
-                    }`}
-                  >
-                    <input
-                      type={isKompleks ? 'checkbox' : 'radio'}
-                      name={`question-${currentQuestion.id}`}
-                      value={optKey}
-                      checked={isSelected}
-                      disabled={isStudentBlocked}
-                      onChange={() =>
-                        handleSelectOption(
-                          currentQuestion.id,
-                          optKey,
-                          currentQuestion.tipe_soal
-                        )
-                      }
-                      className="mt-1 h-4 w-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                    />
-                    <div className="flex-1 text-sm leading-relaxed">
-                      <span className="font-mono font-bold text-slate-900 mr-2">
-                        {optKey}.
-                      </span>
-                      <MathAndTableRenderer content={optText} inline />
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-
-            <div className="pt-6 border-t border-slate-200 flex items-center justify-between gap-4">
-              <button
-                type="button"
-                onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
-                disabled={currentIndex === 0 || isStudentBlocked}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Soal Sebelumnya
-              </button>
-
-              {currentIndex < examQuestions.length - 1 ? (
-                <button
-                  type="button"
-                  disabled={isStudentBlocked}
-                  onClick={() =>
-                    setCurrentIndex((prev) =>
-                      Math.min(examQuestions.length - 1, prev + 1)
-                    )
-                  }
-                  className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  Soal Selanjutnya
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={isStudentBlocked}
-                  onClick={() => setConfirmSubmitModal(true)}
-                  className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Send className="w-4 h-4" />
-                  Selesaikan & Kumpulkan Ujian
-                </button>
+              {currentQuestion.data_opsi?.wacana && (
+                <div className="bg-gradient-to-br from-indigo-50/60 via-blue-50/40 to-amber-50/30 border border-indigo-200/80 rounded-xl p-4 sm:p-5 space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-indigo-800">
+                    <BookOpen className="w-4 h-4 text-indigo-600" />
+                    <span>Wacana &amp; Stimulus Sosiologi</span>
+                  </div>
+                  <div className="text-sm text-slate-800 leading-relaxed">
+                    <MathAndTableRenderer content={currentQuestion.data_opsi.wacana} />
+                  </div>
+                </div>
               )}
+
+              <div className="text-base sm:text-lg font-semibold text-slate-900 leading-relaxed">
+                <MathAndTableRenderer content={currentQuestion.teks_soal} />
+              </div>
+
+              <div className="space-y-3 pt-1">
+                {(['A', 'B', 'C', 'D', 'E'] as const).map((optKey) => {
+                  const optText = currentQuestion.data_opsi?.opsi?.[optKey];
+                  if (!optText) return null;
+                  const isSelected = selectedOptions.includes(optKey);
+
+                  const badgeColors: Record<string, string> = {
+                    A: 'bg-blue-100 text-blue-800 border-blue-300',
+                    B: 'bg-indigo-100 text-indigo-800 border-indigo-300',
+                    C: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                    D: 'bg-amber-100 text-amber-800 border-amber-300',
+                    E: 'bg-violet-100 text-violet-800 border-violet-300',
+                  };
+
+                  return (
+                    <label
+                      key={optKey}
+                      className={`flex items-start gap-3.5 p-4 rounded-xl border-2 transition-all cursor-pointer select-none ${
+                        isSelected
+                          ? 'bg-blue-50/90 border-blue-600 text-slate-900 shadow-2xs'
+                          : 'bg-white border-slate-200 hover:border-blue-300 hover:bg-slate-50/80 text-slate-800'
+                      }`}
+                    >
+                      <input
+                        type={isKompleks ? 'checkbox' : 'radio'}
+                        name={`question-${currentQuestion.id}`}
+                        value={optKey}
+                        checked={isSelected}
+                        disabled={isStudentBlocked}
+                        onChange={() =>
+                          handleSelectOption(
+                            currentQuestion.id,
+                            optKey,
+                            currentQuestion.tipe_soal
+                          )
+                        }
+                        className="sr-only"
+                      />
+                      <span
+                        className={`w-7 h-7 rounded-lg font-mono text-xs font-extrabold flex items-center justify-center shrink-0 border transition-colors ${
+                          isSelected
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : badgeColors[optKey] || 'bg-slate-100 text-slate-700 border-slate-300'
+                        }`}
+                      >
+                        {optKey}
+                      </span>
+                      <div className="flex-1 text-sm leading-relaxed pt-0.5">
+                        <MathAndTableRenderer content={optText} inline />
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="pt-6 border-t border-slate-200 flex items-center justify-between gap-4">
+                <button
+                  type="button"
+                  onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
+                  disabled={currentIndex === 0 || isStudentBlocked}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Soal Sebelumnya
+                </button>
+
+                {currentIndex < examQuestions.length - 1 ? (
+                  <button
+                    type="button"
+                    disabled={isStudentBlocked}
+                    onClick={() =>
+                      setCurrentIndex((prev) =>
+                        Math.min(examQuestions.length - 1, prev + 1)
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                  >
+                    Soal Selanjutnya
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isStudentBlocked}
+                    onClick={() => setConfirmSubmitModal(true)}
+                    className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                  >
+                    <Send className="w-4 h-4" />
+                    Selesaikan &amp; Kumpulkan Ujian
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 

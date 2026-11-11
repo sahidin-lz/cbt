@@ -167,10 +167,13 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className="min-h-screen flex flex-col bg-slate-50/90 text-slate-900">
+      {/* Vibrant Educational Multi-Color Top Strip */}
+      <div className="h-1.5 w-full bg-gradient-to-r from-blue-600 via-indigo-600 via-emerald-500 to-amber-500" />
+
       {/* Top Bar Contract: Zone 1 Brand Wordmark — Zone 2 Separated Student/Teacher Portal Links — Zone 3 Primary Portal Switch */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between gap-8">
-        {/* Zone 1: Single text element wordmark */}
+      <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between gap-8 shadow-2xs sticky top-0 z-30">
+        {/* Zone 1: Brand Identity (Single-line clean institutional lockup) */}
         <a
           href="#top"
           onClick={(e) => {
@@ -181,87 +184,83 @@ export default function App() {
             e.preventDefault();
             setPortalView('student');
           }}
-          className={`flex items-center gap-2.5 tracking-tight text-slate-900 whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-3 tracking-tight text-slate-900 whitespace-nowrap shrink-0 ${
             isStudentInExam ? 'cursor-default pointer-events-none' : ''
           }`}
         >
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-            SC
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-600 via-indigo-600 to-emerald-600 text-white flex items-center justify-center font-bold text-xs font-mono tracking-wider shadow-xs">
+            CBT
           </div>
-          <div className="flex flex-col text-left">
-            <span className="text-base font-black tracking-tight text-slate-900 leading-none">
-              SocioCBT AI
+          <div className="flex items-center gap-2.5">
+            <span className="text-base font-extrabold tracking-tight text-slate-900">
+              CBT Sosiologi
             </span>
-            <span className="text-[10px] font-semibold text-indigo-700 tracking-wide uppercase mt-0.5">
-              Asesmen & CBT Sosiologi SMA
+            <span className="hidden md:inline-block text-slate-300">|</span>
+            <span className="hidden md:inline-block text-xs font-medium text-indigo-700">
+              Sistem Ujian &amp; Asesmen Sosiologi SMA
             </span>
           </div>
         </a>
 
-        {/* Zone 2: Separated Student Login & Teacher Login navigation links */}
+        {/* Zone 2: Primary Portal Navigation (Clean Segmented Switcher or Exam Lock Status) */}
         {isStudentInExam ? (
-          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-amber-50 border border-amber-300 text-xs font-semibold text-amber-900 shadow-xs">
-            <Lock className="w-4 h-4 text-amber-700 shrink-0" />
-            <span>Sesi Ujian Siswa Sedang Berlangsung — Navigasi Terkunci (Anti-Curang)</span>
+          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-amber-50 border border-amber-300 text-xs font-semibold text-amber-900">
+            <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+            <span className="whitespace-nowrap">Sesi Ujian Berlangsung — Navigasi Terkunci</span>
           </div>
         ) : (
           <nav
             aria-label="Navigasi Portal"
-            className="flex items-center gap-6 text-sm font-medium text-slate-600"
+            className="flex items-center p-1 bg-slate-100 border border-slate-200/80 rounded-lg"
           >
             <button
               type="button"
               onClick={() => setPortalView('student')}
-              className={`hover:text-slate-900 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                 portalView === 'student'
-                  ? 'text-blue-600 font-semibold underline underline-offset-8'
-                  : ''
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Login Ujian Siswa
+              Ruang Ujian Siswa
             </button>
             <button
               type="button"
               onClick={() => setPortalView('teacher')}
-              className={`hover:text-slate-900 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                 portalView === 'teacher'
-                  ? 'text-blue-600 font-semibold underline underline-offset-8'
-                  : ''
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Portal Guru / Admin
+              Portal Guru &amp; Pengawas
             </button>
           </nav>
         )}
 
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center shrink-0">
+        {/* Zone 3: Contextual Action */}
+        <div className="flex items-center gap-3 shrink-0">
           {isStudentInExam ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-amber-700 font-medium hidden sm:inline">
-                Mode Anti-Curang Aktif
-              </span>
-              <button
-                type="button"
-                disabled
-                className="px-3.5 py-2 text-xs font-semibold text-slate-400 bg-slate-100 border border-slate-200 rounded-lg cursor-not-allowed flex items-center gap-1.5 opacity-80"
-                title="Dilarang beralih ke Portal Guru selama sesi ujian aktif berlangsung"
-              >
-                <Lock className="w-3.5 h-3.5 text-slate-400" />
-                Portal Guru Dikunci
-              </button>
-            </div>
+            <button
+              type="button"
+              disabled
+              className="px-3.5 py-1.5 text-xs font-semibold text-slate-400 bg-slate-100 border border-slate-200 rounded-lg cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              title="Dilarang beralih ke Portal Guru selama sesi ujian aktif berlangsung"
+            >
+              <Lock className="w-3.5 h-3.5 text-slate-400" />
+              <span>Mode Ujian Terkunci</span>
+            </button>
           ) : (
             <button
               type="button"
               onClick={() =>
                 setPortalView(portalView === 'student' ? 'teacher' : 'student')
               }
-              className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-3.5 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               {portalView === 'student'
                 ? 'Masuk Halaman Guru'
-                : 'Masuk Halaman Siswa'}
+                : 'Layar Ujian Siswa'}
             </button>
           )}
         </div>
@@ -315,8 +314,8 @@ export default function App() {
 
       {/* Quiet Footer */}
       <footer className="bg-white border-t border-slate-200 py-4 px-6 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-4">
-        <span>SocioCBT AI — Sistem Asesmen & Ujian Berbasis Komputer Khusus Sosiologi SMA</span>
-        <span>Sinkronisasi Real-Time Firebase Firestore & PostgreSQL</span>
+        <span>CBT Sosiologi — Sistem Asesmen &amp; Ujian Berbasis Komputer Sosiologi SMA</span>
+        <span>Sinkronisasi Database Real-Time Aktif</span>
       </footer>
     </div>
   );

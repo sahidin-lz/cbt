@@ -19,9 +19,11 @@ import {
   RefreshCw,
   HelpCircle,
   Shuffle,
+  Download,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
 import { classifyQuestionCognitiveLevel, isExamMatchedForStudentClass } from '../utils/cbtLogic';
+import { downloadStudentTokenCardsPdf } from '../utils/cbtPdfGenerator';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 
 interface ExamManagementTabProps {
@@ -398,6 +400,30 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
 
           <button
             type="button"
+            disabled={classStudents.length === 0}
+            onClick={() =>
+              downloadStudentTokenCardsPdf(classStudents, {
+                kelasLabel:
+                  selectedClass === 'ALL'
+                    ? 'Semua Kelas'
+                    : `Kelas ${selectedClass}`,
+                exams,
+                results,
+                includeSummaryPage: true,
+              })
+            }
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-lg transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>
+              {selectedClass === 'ALL'
+                ? 'Kartu Token & Nilai (.PDF)'
+                : `Kartu & Nilai Kelas ${selectedClass} (.PDF)`}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleManualRefresh}
             disabled={isRefreshing}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
@@ -429,28 +455,30 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       )}
 
       {/* KLIK KELAS: Interactive Class Selector Strip */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
         <div className="flex items-center justify-between text-xs">
           <span className="font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
             <Users className="w-3.5 h-3.5 text-blue-600" />
-            <span>Pilih Kelas / Rombel untuk Menganalisis:</span>
+            <span>Filter Kelas / Rombel:</span>
           </span>
-          <span className="text-slate-500">{uniqueClasses.length} Kelas Terdaftar</span>
+          <span className="font-mono tabular-nums text-slate-500">
+            {uniqueClasses.length} Rombel Terdaftar
+          </span>
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5">
           <button
             type="button"
             onClick={() => handleSelectClass('ALL')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-semibold border transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
               selectedClass === 'ALL'
-                ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
+                ? 'bg-blue-600 border-blue-600 text-white'
                 : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
             }`}
           >
             <span>Semua Kelas</span>
             <span
-              className={`px-1.5 py-0.5 text-[10px] rounded-full font-bold ${
+              className={`px-1.5 py-0.5 text-[10px] font-mono tabular-nums rounded font-bold ${
                 selectedClass === 'ALL'
                   ? 'bg-white/20 text-white'
                   : 'bg-slate-200 text-slate-700'
@@ -474,15 +502,15 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 key={cls}
                 type="button"
                 onClick={() => handleSelectClass(cls)}
-                className={`px-3.5 py-2 rounded-lg text-xs font-semibold border transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 ${
+                className={`px-3.5 py-2 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
                   selectedClass === cls
-                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs ring-2 ring-blue-600/20'
+                    ? 'bg-blue-600 border-blue-600 text-white'
                     : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
                 }`}
               >
                 <span>Kelas {cls}</span>
                 <span
-                  className={`px-1.5 py-0.5 text-[10px] rounded-full font-bold ${
+                  className={`px-1.5 py-0.5 text-[10px] font-mono tabular-nums rounded font-bold ${
                     selectedClass === cls
                       ? 'bg-white/20 text-white'
                       : 'bg-slate-100 text-slate-700'
@@ -491,21 +519,17 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                   {countInClass}
                 </span>
 
-                {/* Live indicators */}
                 {activeInClass > 0 && (
                   <span
                     title={`${activeInClass} siswa sedang aktif ujian`}
-                    className="flex h-2 w-2 relative"
-                  >
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
+                    className="h-2 w-2 rounded-full bg-emerald-500 shrink-0"
+                  />
                 )}
                 {blockedInClass > 0 && (
                   <span
                     title={`${blockedInClass} siswa diblokir`}
-                    className="h-2 w-2 rounded-full bg-red-500"
-                  ></span>
+                    className="h-2 w-2 rounded-full bg-red-500 shrink-0"
+                  />
                 )}
               </button>
             );
@@ -517,7 +541,9 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
           <div className="text-[11px] font-medium text-slate-500">Total Siswa</div>
-          <div className="text-2xl font-bold text-slate-900 mt-1">{kpiStats.total}</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
+            {kpiStats.total}
+          </div>
           <div className="text-[10px] text-slate-400 mt-0.5">
             {selectedClass === 'ALL' ? 'Seluruh Kelas' : `Kelas ${selectedClass}`}
           </div>
@@ -525,10 +551,10 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
 
         <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-2xs bg-emerald-50/20">
           <div className="text-[11px] font-medium text-emerald-800 flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span className="h-2 w-2 rounded-full bg-emerald-600"></span>
             <span>Sedang Ujian</span>
           </div>
-          <div className="text-2xl font-bold text-emerald-700 mt-1">
+          <div className="text-2xl font-bold font-mono tabular-nums text-emerald-700 mt-1">
             {kpiStats.sedangUjian}
           </div>
           <div className="text-[10px] text-emerald-600 mt-0.5">Siswa Aktif di Layar</div>
@@ -539,7 +565,9 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
             <span>Selesai Ujian</span>
           </div>
-          <div className="text-2xl font-bold text-blue-700 mt-1">{kpiStats.selesai}</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-blue-700 mt-1">
+            {kpiStats.selesai}
+          </div>
           <div className="text-[10px] text-blue-600 mt-0.5">Jawaban Terkirim</div>
         </div>
 
@@ -548,13 +576,15 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
             <span>Diblokir</span>
           </div>
-          <div className="text-2xl font-bold text-rose-700 mt-1">{kpiStats.diblokir}</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-rose-700 mt-1">
+            {kpiStats.diblokir}
+          </div>
           <div className="text-[10px] text-rose-600 mt-0.5">Pindah Tab / Keluar</div>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
           <div className="text-[11px] font-medium text-slate-500">Rata-Rata Nilai</div>
-          <div className="text-2xl font-bold font-mono text-slate-900 mt-1">
+          <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
             {kpiStats.avgScore !== null ? kpiStats.avgScore : '-'}
           </div>
           <div className="text-[10px] text-slate-400 mt-0.5">
@@ -564,7 +594,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
 
         <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
           <div className="text-[11px] font-medium text-slate-500">Rentang Skor</div>
-          <div className="text-lg font-bold font-mono text-slate-800 mt-1.5">
+          <div className="text-lg font-bold font-mono tabular-nums text-slate-800 mt-1.5">
             {kpiStats.highestScore !== null
               ? `${kpiStats.highestScore} / ${kpiStats.lowestScore}`
               : '- / -'}

@@ -55,6 +55,10 @@ import {
   SOSIOLOGI_EXAM_CATEGORIES,
 } from '../utils/cbtLogic';
 import {
+  downloadStudentTokenCardsPdf,
+  downloadSingleStudentResultPdf,
+} from '../utils/cbtPdfGenerator';
+import {
   auth,
   googleAuthProvider,
   CbtSyncPulseData,
@@ -1681,19 +1685,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // ============================================================================
   if (!isAuthenticated) {
     return (
-      <div className="max-w-lg mx-auto py-12 px-4 sm:px-6">
-        <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
-          <div>
-            <div className="flex items-center gap-2 text-blue-700 text-xs font-semibold">
-              <Lock className="w-4 h-4" />
-              <span>Halaman Login Guru / Administrator CBT</span>
+      <div className="max-w-md mx-auto py-12 px-4 sm:px-6">
+        <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6 shadow-2xs">
+          <div className="border-b border-slate-100 pb-4">
+            <div className="flex items-center gap-2 text-slate-600 text-xs font-semibold uppercase tracking-wider">
+              <Lock className="w-3.5 h-3.5 text-blue-600" />
+              <span>Otorisasi Pengawas &amp; Guru CBT</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1.5 tracking-tight">
-              Masuk Dashboard Guru
+            <h1 className="text-2xl font-bold text-slate-900 mt-1.5 tracking-tight">
+              Portal Manajemen Ujian
             </h1>
-            <p className="text-sm text-slate-600 mt-2 leading-relaxed">
-              Kelola distribusi ujian 3 tingkatan kelas, upload massal siswa,
-              bank soal CSV, serta laporan evaluasi AI.
+            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+              Masuk untuk mengelola jadwal ujian, distribusi paket soal, pemantauan peserta, serta analisis evaluasi kognitif.
             </p>
           </div>
 
@@ -1701,34 +1704,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div>
               <label
                 htmlFor="teacher-username-input"
-                className="block text-sm font-semibold text-slate-800 mb-1.5"
+                className="block text-xs font-semibold text-slate-700 mb-1.5"
               >
-                Email Guru
+                Email Pengawas / Guru
               </label>
               <input
                 id="teacher-username-input"
                 type="email"
                 value={teacherUsername}
                 onChange={(e) => setTeacherUsername(e.target.value)}
-                placeholder="Masukkan Email Guru Terdaftar"
-                className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                placeholder="nama@sekolah.sch.id"
+                className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
               />
             </div>
 
             <div>
               <label
                 htmlFor="teacher-password-input"
-                className="block text-sm font-semibold text-slate-800 mb-1.5"
+                className="block text-xs font-semibold text-slate-700 mb-1.5"
               >
-                PIN Akses Guru
+                PIN Otorisasi (6 Digit)
               </label>
               <input
                 id="teacher-password-input"
                 type="password"
                 value={teacherPassword}
                 onChange={(e) => setTeacherPassword(e.target.value)}
-                placeholder="Masukkan 6 Digit PIN Guru"
-                className="w-full px-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                placeholder="••••••"
+                className="w-full px-3.5 py-2.5 text-sm font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
               />
             </div>
 
@@ -1743,20 +1746,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button
               type="submit"
-              className="w-full py-3 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
+              className="w-full py-2.5 px-5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
             >
-              Masuk ke Dashboard Guru
+              Masuk ke Konsol Guru
             </button>
           </form>
 
-          <div className="relative py-1 text-center border-t border-slate-200 pt-4">
+          <div className="pt-4 border-t border-slate-100">
             <button
               type="button"
               onClick={handleGoogleTeacherSignIn}
-              className="w-full py-2.5 px-4 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-2.5 px-4 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 hover:bg-slate-100 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
-              <LogIn className="w-4 h-4 text-blue-600" />
-              Masuk dengan Akun Google Sekolah
+              <LogIn className="w-3.5 h-3.5 text-blue-600" />
+              <span>Masuk dengan Akun Google Institusi</span>
             </button>
           </div>
         </div>
@@ -1767,124 +1770,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // ============================================================================
   // AUTHENTICATED TEACHER DASHBOARD
   // ============================================================================
+  const activeStudentsCount = students.filter(
+    (s) => s.status_ujian === 'Sedang Ujian'
+  ).length;
+
   return (
-    <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 space-y-6">
-      {/* Top Admin Header & Navigation Tabs */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+    <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 space-y-6">
+      {/* Institutional Console Header & Dedicated Navigation Bar */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+        {/* Top Row: Identity & System Actions */}
+        <div className="px-6 py-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200">
           <div>
-            <div className="text-xs text-slate-500">
-              Dashboard Guru CBT · Pengawas Aktif:{' '}
-              <strong className="text-slate-800">{teacherProfile.name}</strong> (
-              {teacherProfile.email})
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span className="font-semibold text-slate-700 uppercase tracking-wider">
+                Konsol Administrasi &amp; Pengawas CBT
+              </span>
+              <span className="text-slate-300">·</span>
+              <span>
+                Pengawas Aktif:{' '}
+                <strong className="text-slate-800 font-semibold">
+                  {teacherProfile.name}
+                </strong>{' '}
+                <span className="text-slate-400">({teacherProfile.email})</span>
+              </span>
             </div>
-            <h1 className="text-2xl font-bold text-slate-900 mt-1">
-              Distribusi Ujian 3 Tingkatan Kelas, Database Siswa & Evaluasi AI
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 mt-1 tracking-tight">
+              Manajemen Asesmen Sosiologi, Distribusi Paket &amp; Evaluasi Kognitif
             </h1>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <div
-              role="tablist"
-              aria-label="Menu Dashboard Guru"
-              className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200 overflow-x-auto"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'ujian'}
-                onClick={() => setActiveTab('ujian')}
-                className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeTab === 'ujian'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <ClipboardList className="w-3.5 h-3.5 text-blue-600" />
-                Distribusi Ujian ({exams.length})
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'manajemen'}
-                onClick={() => setActiveTab('manajemen')}
-                className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeTab === 'manajemen'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5 text-blue-600" />
-                <span>Manajemen Ujian</span>
-                {students.some((s) => s.status_ujian === 'Sedang Ujian') && (
-                  <span className="flex h-2 w-2 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                )}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'siswa'}
-                onClick={() => setActiveTab('siswa')}
-                className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeTab === 'siswa'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Users className="w-3.5 h-3.5 text-blue-600" />
-                Database Siswa ({students.length})
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'soal'}
-                onClick={() => {
-                  setActiveTab('soal');
-                  setIsBankSoalDetailOpen(false);
-                }}
-                className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeTab === 'soal'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />
-                Bank Soal ({questions.length})
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'laporan'}
-                onClick={() => setActiveTab('laporan')}
-                className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
-                  activeTab === 'laporan'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                Hasil & Analisis AI ({results.length})
-              </button>
-            </div>
-
+          <div className="flex items-center gap-2.5 shrink-0">
             {onManualFirebaseSync && (
               <button
                 type="button"
                 onClick={onManualFirebaseSync}
                 disabled={isSyncingFirebase}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200/90 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <RefreshCw
-                  className={`w-3.5 h-3.5 ${
+                  className={`w-3.5 h-3.5 text-blue-600 ${
                     isSyncingFirebase ? 'animate-spin' : ''
                   }`}
                 />
-                {isSyncingFirebase
-                  ? 'Menyinkronkan Firebase...'
-                  : 'Sinkronkan Firebase'}
+                <span>
+                  {isSyncingFirebase ? 'Menyinkronkan...' : 'Sinkronkan Data'}
+                </span>
               </button>
             )}
 
@@ -1897,63 +1827,204 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   localStorage.removeItem('cbt_teacher_active_tab');
                 } catch {}
               }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 hover:text-slate-900 bg-white border border-slate-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:text-red-700 bg-white hover:bg-red-50/50 border border-slate-300 hover:border-red-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
-              Keluar Guru
+              <span>Keluar Sesi</span>
             </button>
           </div>
         </div>
 
-        {/* Clean 4-Metric Summary Strip with 3-Grade Level Breakdown */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t border-slate-200">
-          <div>
-            <div className="text-xs text-slate-500">Paket Ujian Aktif</div>
-            <div className="text-xl font-bold font-mono tabular-nums text-slate-900 mt-0.5">
+        {/* Second Row: Dedicated Full-Width Navigation Menu Bar */}
+        <div className="bg-slate-50/70 px-6 border-b border-slate-200">
+          <div
+            role="tablist"
+            aria-label="Menu Utama Konsol Guru"
+            className="flex items-center gap-1 overflow-x-auto -mb-px"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'ujian'}
+              onClick={() => setActiveTab('ujian')}
+              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'ujian'
+                  ? 'border-blue-600 text-blue-700 bg-white'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+              }`}
+            >
+              <ClipboardList className="w-4 h-4 shrink-0" />
+              <span>Distribusi &amp; Jadwal Ujian</span>
+              <span
+                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                  activeTab === 'ujian'
+                    ? 'bg-blue-50 text-blue-700 font-bold'
+                    : 'bg-slate-200/70 text-slate-600'
+                }`}
+              >
+                {exams.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'manajemen'}
+              onClick={() => setActiveTab('manajemen')}
+              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'manajemen'
+                  ? 'border-blue-600 text-blue-700 bg-white'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+              }`}
+            >
+              <Layers className="w-4 h-4 shrink-0" />
+              <span>Pengawasan &amp; Analisis Kelas</span>
+              {activeStudentsCount > 0 && (
+                <span className="px-1.5 py-0.5 text-[11px] font-mono tabular-nums font-bold rounded bg-emerald-100 text-emerald-800">
+                  {activeStudentsCount} Aktif
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'siswa'}
+              onClick={() => setActiveTab('siswa')}
+              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'siswa'
+                  ? 'border-blue-600 text-blue-700 bg-white'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              <span>Database &amp; Token Siswa</span>
+              <span
+                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                  activeTab === 'siswa'
+                    ? 'bg-blue-50 text-blue-700 font-bold'
+                    : 'bg-slate-200/70 text-slate-600'
+                }`}
+              >
+                {students.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'soal'}
+              onClick={() => {
+                setActiveTab('soal');
+                setIsBankSoalDetailOpen(false);
+              }}
+              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'soal'
+                  ? 'border-blue-600 text-blue-700 bg-white'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4 shrink-0" />
+              <span>Bank Soal Sosiologi</span>
+              <span
+                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                  activeTab === 'soal'
+                    ? 'bg-blue-50 text-blue-700 font-bold'
+                    : 'bg-slate-200/70 text-slate-600'
+                }`}
+              >
+                {questions.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'laporan'}
+              onClick={() => setActiveTab('laporan')}
+              className={`px-4 py-3.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'laporan'
+                  ? 'border-blue-600 text-blue-700 bg-white'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 shrink-0 text-amber-500" />
+              <span>Hasil &amp; Evaluasi Capaian</span>
+              <span
+                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded ${
+                  activeTab === 'laporan'
+                    ? 'bg-blue-50 text-blue-700 font-bold'
+                    : 'bg-slate-200/70 text-slate-600'
+                }`}
+              >
+                {results.length}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Third Row: Clean 4-Metric Institutional Summary Strip */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-200 bg-white">
+          <div className="px-6 py-3.5">
+            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+              Paket Ujian Terdaftar
+            </div>
+            <div className="text-lg font-bold font-mono tabular-nums text-slate-900 mt-0.5">
               {exams.length}{' '}
-              <span className="text-xs font-normal text-slate-500">paket</span>
+              <span className="text-xs font-normal font-sans text-slate-500">
+                paket ujian
+              </span>
             </div>
           </div>
-          <div>
-            <div className="text-xs text-slate-500">
-              Sebaran Siswa 3 Tingkatan
+          <div className="px-6 py-3.5">
+            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+              Sebaran Peserta per Tingkat
             </div>
-            <div className="text-sm font-bold font-mono tabular-nums text-slate-900 mt-1">
-              Kelas X: {countTingkat10} · XI: {countTingkat11} · XII:{' '}
+            <div className="text-xs font-bold font-mono tabular-nums text-slate-900 mt-1.5">
+              Kelas X: {countTingkat10} <span className="text-slate-300">·</span> XI:{' '}
+              {countTingkat11} <span className="text-slate-300">·</span> XII:{' '}
               {countTingkat12}
             </div>
           </div>
-          <div>
-            <div className="text-xs text-slate-500">Total Butir Soal</div>
-            <div className="text-xl font-bold font-mono tabular-nums text-blue-700 mt-0.5">
+          <div className="px-6 py-3.5">
+            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+              Kapasitas Bank Soal
+            </div>
+            <div className="text-lg font-bold font-mono tabular-nums text-blue-700 mt-0.5">
               {questions.length}{' '}
-              <span className="text-xs font-normal text-slate-500">soal</span>
+              <span className="text-xs font-normal font-sans text-slate-500">
+                butir soal
+              </span>
             </div>
           </div>
-          <div>
-            <div className="text-xs text-slate-500">Hasil Ujian Masuk</div>
-            <div className="text-xl font-bold font-mono tabular-nums text-emerald-700 mt-0.5">
+          <div className="px-6 py-3.5">
+            <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+              Lembar Jawaban Masuk
+            </div>
+            <div className="text-lg font-bold font-mono tabular-nums text-emerald-700 mt-0.5">
               {results.length}{' '}
-              <span className="text-xs font-normal text-slate-500">peserta</span>
+              <span className="text-xs font-normal font-sans text-slate-500">
+                hasil terekam
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Real-Time Firebase Firestore Sync Status Bar */}
-        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+        {/* Quiet Footer Status Bar inside Console Header */}
+        <div className="px-6 py-2.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-emerald-700">
-              Firebase Firestore Real-Time Sync Aktif:
+              Sinkronisasi Database Aktif
             </span>
+            <span>·</span>
             <span>
               {syncPulse?.lastEvent ||
-                'Siap menyinkronkan perubahan ujian, siswa, soal & hasil secara otomatis'}
+                'Perubahan jadwal, peserta, bank soal, dan hasil tersimpan otomatis'}
             </span>
           </div>
           {syncPulse?.lastSyncedAt && (
-            <span className="font-mono text-slate-500">
-              Update Terakhir:{' '}
-              {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
+            <span className="font-mono tabular-nums text-slate-500">
+              Pembaruan: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
             </span>
           )}
         </div>
@@ -2724,6 +2795,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </button>
                               <button
                                 type="button"
+                                onClick={() => {
+                                  const clsStudents = students.filter(
+                                    (s) =>
+                                      s.kelas.trim().toLowerCase() ===
+                                      clsItem.kelas.trim().toLowerCase()
+                                  );
+                                  downloadStudentTokenCardsPdf(clsStudents, {
+                                    kelasLabel: `Kelas ${clsItem.kelas}`,
+                                    exams,
+                                    results,
+                                    includeSummaryPage: true,
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded cursor-pointer"
+                              >
+                                <Download className="w-3 h-3" />
+                                Kartu Token &amp; Nilai (.PDF)
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() =>
                                   handleDownloadClassStudentsExcel(
                                     clsItem.kelas
@@ -2781,6 +2872,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={filteredStudents.length === 0}
+                  onClick={() =>
+                    downloadStudentTokenCardsPdf(filteredStudents, {
+                      kelasLabel:
+                        filterKelas !== 'SEMUA'
+                          ? `Kelas ${filterKelas}`
+                          : 'Semua Kelas',
+                      exams,
+                      results,
+                      includeSummaryPage: true,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all cursor-pointer shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>
+                    {filterKelas !== 'SEMUA'
+                      ? `Download Kartu Token & Nilai Kelas ${filterKelas} (.PDF)`
+                      : 'Download Kartu Token & Nilai (.PDF)'}
+                  </span>
+                </button>
                 {filterKelas !== 'SEMUA' && (
                   <button
                     type="button"
@@ -2800,7 +2914,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Download Semua Siswa & Token (.xls)
+                  Download Semua Siswa &amp; Token (.xls)
                 </button>
                 <button
                   type="button"
@@ -3352,6 +3466,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </td>
                             <td className="py-3 px-3.5 text-right">
                               <div className="inline-flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    downloadStudentTokenCardsPdf([st], {
+                                      kelasLabel: `Kelas ${st.kelas} - ${st.nama}`,
+                                      exams,
+                                      results,
+                                      includeSummaryPage: false,
+                                    })
+                                  }
+                                  title={`Download Kartu Token & Nilai PDF untuk ${st.nama}`}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  <span>Kartu PDF</span>
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -4544,6 +4674,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
+                  onClick={() =>
+                    downloadStudentTokenCardsPdf(students, {
+                      kelasLabel: 'Semua Kelas',
+                      exams,
+                      results,
+                      includeSummaryPage: true,
+                    })
+                  }
+                  disabled={students.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all cursor-pointer shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Rekap &amp; Kartu Nilai (.PDF)</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleExportResultsExcel('all')}
                   disabled={students.length === 0 && results.length === 0}
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
@@ -4622,7 +4768,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
                 <div className="text-xs text-slate-500">
-                  Cakupan Evaluasi AI LOTS vs HOTS
+                  Cakupan Evaluasi LOTS vs HOTS
                 </div>
                 <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
                   {classAnalyticsData.overall.analyzedCount}
@@ -4640,8 +4786,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="text-[11px] font-semibold text-blue-700 hover:text-blue-800 underline disabled:opacity-50 cursor-pointer"
                   >
                     {isAnalyzingBatchClass
-                      ? 'Sedang Menganalisis AI...'
-                      : 'Analisis AI Semua Peserta Sekaligus'}
+                      ? 'Sedang Menyusun Evaluasi...'
+                      : 'Evaluasi Capaian Semua Peserta Sekaligus'}
                   </button>
                 </div>
               </div>
@@ -4756,6 +4902,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </button>
                                 <button
                                   type="button"
+                                  disabled={cls.totalStudents === 0}
+                                  onClick={() => {
+                                    const clsStudents = students.filter(
+                                      (s) =>
+                                        s.kelas.trim().toLowerCase() ===
+                                        cls.kelas.trim().toLowerCase()
+                                    );
+                                    downloadStudentTokenCardsPdf(clsStudents, {
+                                      kelasLabel: `Kelas ${cls.kelas}`,
+                                      exams,
+                                      results,
+                                      includeSummaryPage: true,
+                                    });
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded cursor-pointer"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Kartu &amp; Nilai (.PDF)
+                                </button>
+                                <button
+                                  type="button"
                                   disabled={
                                     cls.totalStudents === 0 &&
                                     clsResults.length === 0
@@ -4798,7 +4965,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-blue-800 bg-blue-100/80 hover:bg-blue-200 disabled:opacity-40 rounded cursor-pointer"
                                 >
                                   <Sparkles className="w-3 h-3" />
-                                  Analisis AI Kelas
+                                  Evaluasi Kelas
                                 </button>
                               </div>
                             </td>
@@ -4817,7 +4984,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-slate-200">
               <div>
                 <h2 className="text-base font-bold text-slate-900">
-                  Daftar Nilai & Evaluasi AI Peserta (
+                  Daftar Nilai &amp; Evaluasi Capaian Peserta (
                   {filterResultKelas === 'SEMUA'
                     ? 'Semua Kelas'
                     : `Kelas ${filterResultKelas}`}{' '}
@@ -4941,8 +5108,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <th className="py-3 px-4">Paket Ujian</th>
                       <th className="py-3 px-4 text-right">Skor Akhir</th>
                       <th className="py-3 px-4">Log Anti-Cheat</th>
-                      <th className="py-3 px-4">Status Analisis AI</th>
-                      <th className="py-3 px-4 text-right">Aksi Evaluasi AI</th>
+                      <th className="py-3 px-4">Status Evaluasi</th>
+                      <th className="py-3 px-4 text-right">Aksi Evaluasi Kognitif</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-sm">
@@ -4998,12 +5165,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </span>
                             ) : (
                               <span className="text-slate-500">
-                                Belum Dianalisis AI
+                                Belum Dievaluasi
                               </span>
                             )}
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             <div className="inline-flex items-center justify-end gap-2">
+                              {st && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    downloadSingleStudentResultPdf({
+                                      student: st,
+                                      exam: ex || null,
+                                      score: resItem.skor_angka,
+                                      kategori:
+                                        resItem.analisis_ai?.kategori_nilai ||
+                                        (resItem.skor_angka >= 85
+                                          ? 'Sangat Baik (A)'
+                                          : resItem.skor_angka >= 70
+                                            ? 'Baik (B)'
+                                            : resItem.skor_angka >= 55
+                                              ? 'Cukup (C)'
+                                              : 'Perlu Penguatan (D)'),
+                                      answeredCount: resItem.jawaban_siswa
+                                        ? Object.keys(resItem.jawaban_siswa).filter(
+                                            (k) =>
+                                              resItem.jawaban_siswa?.[k]?.length > 0
+                                          ).length
+                                        : undefined,
+                                      tabViolations: resItem.pelanggaran_tab,
+                                      aiAnalysis: resItem.analisis_ai,
+                                      submittedAt: resItem.created_at
+                                        ? new Date(
+                                            resItem.created_at
+                                          ).toLocaleDateString('id-ID', {
+                                            day: '2-digit',
+                                            month: 'long',
+                                            year: 'numeric',
+                                          })
+                                        : undefined,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                  <span>PDF Nilai</span>
+                                </button>
+                              )}
                               {hasAi && resItem.analisis_ai && (
                                 <button
                                   type="button"
@@ -5016,7 +5225,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   }
                                   className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                                 >
-                                  Lihat Hasil AI
+                                  Lihat Evaluasi
                                 </button>
                               )}
                               {resItem.skor_angka > 0 ? (
@@ -5030,14 +5239,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 >
                                   <Sparkles className="w-3.5 h-3.5" />
                                   {isBusy
-                                    ? 'Menganalisis...'
+                                    ? 'Menyusun...'
                                     : hasAi
-                                      ? 'Re-Generate AI Analysis'
-                                      : 'Generate AI Analysis'}
+                                      ? 'Perbarui Evaluasi'
+                                      : 'Proses Evaluasi'}
                                 </button>
                               ) : (
                                 <span className="px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md whitespace-nowrap">
-                                  Skor 0: Analisis AI Nonaktif
+                                  Skor 0: Evaluasi Nonaktif
                                 </span>
                               )}
                             </div>
@@ -5053,7 +5262,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* Modal Detail Analisis AI */}
+      {/* Modal Detail Evaluasi Capaian Kognitif */}
       {selectedAiModal && (
         <div
           role="dialog"
@@ -5064,7 +5273,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200">
               <div>
                 <div className="text-xs font-semibold text-blue-700">
-                  Laporan Evaluasi Kognitif Gemini AI · LOTS vs HOTS
+                  Laporan Evaluasi Kognitif Sosiologi · LOTS vs HOTS
                 </div>
                 <h3 className="text-xl font-bold text-slate-900 mt-1">
                   {selectedAiModal.analysis.nama_siswa} (
@@ -5121,7 +5330,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div className="p-4 rounded-lg bg-blue-50/50 border border-blue-200">
                 <h5 className="text-xs font-bold text-blue-800">
-                  3 Rekomendasi Belajar Personalisasi
+                  3 Rekomendasi Belajar Terarah
                 </h5>
                 <ol className="mt-2 space-y-1.5 text-xs text-slate-800 list-decimal list-inside">
                   {selectedAiModal.analysis.rekomendasi_belajar.map(
@@ -5139,7 +5348,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => setSelectedAiModal(null)}
                 className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
               >
-                Tutup Laporan AI
+                Tutup Laporan Evaluasi
               </button>
             </div>
           </div>
