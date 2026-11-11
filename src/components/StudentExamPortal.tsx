@@ -25,6 +25,7 @@ import {
   X,
   Layers,
   Shuffle,
+  ShieldCheck,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem, AnalisisAI } from '../types/cbt';
 import {
@@ -108,13 +109,10 @@ export interface StudentExamReceipt {
   kategori: string;
   pelanggaranTab: number;
   submittedAt: string;
-  breakdown: Array<{
-    pertanyaan: string;
-    studentAnswer: string[];
-    correctAnswer: string[];
-    isCorrect: boolean;
-    pointsEarned: number;
-  }>;
+  answeredCount?: number;
+  totalQuestions?: number;
+  rawEarned?: number;
+  rawMax?: number;
 }
 
 function formatReceipt(
@@ -124,21 +122,6 @@ function formatReceipt(
   allQuestions: QuestionItem[]
 ): StudentExamReceipt {
   if ('examJudul' in item) {
-    const qList = allQuestions.filter((q) => Number(q.exam_id) === Number(item.examId));
-    const breakdown = qList.map((q) => {
-      const studentAns = item.jawabanSiswa[String(q.id)] || [];
-      const correctAns = q.kunci_jawaban || [];
-      const isCorrect =
-        studentAns.length === correctAns.length &&
-        studentAns.every((ans) => correctAns.includes(ans));
-      return {
-        pertanyaan: q.teks_soal,
-        studentAnswer: studentAns,
-        correctAnswer: correctAns,
-        isCorrect,
-        pointsEarned: isCorrect ? q.bobot : 0,
-      };
-    });
     return {
       resultId: item.resultId,
       studentId: item.studentId,
@@ -151,26 +134,18 @@ function formatReceipt(
       kategori: item.kategori,
       pelanggaranTab: item.pelanggaranTab,
       submittedAt: item.submittedAt,
-      breakdown,
+      answeredCount: item.answeredCount,
+      totalQuestions: item.totalQuestions,
+      rawEarned: item.rawEarned,
+      rawMax: item.rawMax,
     };
   } else {
     const st = allStudents.find((s) => s.id === item.student_id);
     const ex = allExams.find((e) => e.id === item.exam_id);
     const qList = allQuestions.filter((q) => Number(q.exam_id) === Number(item.exam_id));
-    const breakdown = qList.map((q) => {
-      const studentAns = item.jawaban_siswa?.[String(q.id)] || [];
-      const correctAns = q.kunci_jawaban || [];
-      const isCorrect =
-        studentAns.length === correctAns.length &&
-        studentAns.every((ans) => correctAns.includes(ans));
-      return {
-        pertanyaan: q.teks_soal,
-        studentAnswer: studentAns,
-        correctAnswer: correctAns,
-        isCorrect,
-        pointsEarned: isCorrect ? q.bobot : 0,
-      };
-    });
+    const answeredCount = Object.keys(item.jawaban_siswa || {}).filter(
+      (k) => item.jawaban_siswa[k] && item.jawaban_siswa[k].length > 0
+    ).length;
     return {
       resultId: item.id,
       studentId: item.student_id,
@@ -183,7 +158,8 @@ function formatReceipt(
       kategori: item.analisis_ai?.kategori_nilai || 'Selesai',
       pelanggaranTab: item.pelanggaran_tab || 0,
       submittedAt: item.created_at || new Date().toISOString(),
-      breakdown,
+      answeredCount,
+      totalQuestions: qList.length > 0 ? qList.length : undefined,
     };
   }
 }
@@ -708,9 +684,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     (reason = 'Terdeteksi berpindah tab browser atau keluar dari jendela ujian') => {
       if (!activeStudent || submittedSummary || isStudentBlocked) return;
 
-      // Debounce rapid blur+visibilitychange events within 800ms
+      // Debounce rapid blur+visibilitychange events within 500ms
       const now = Date.now();
-      if (now - lastViolationTimestampRef.current < 800) return;
+      if (now - lastViolationTimestampRef.current < 500) return;
       lastViolationTimestampRef.current = now;
 
       const timeStr = new Date().toLocaleTimeString('id-ID');
@@ -747,7 +723,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         lastSavedAt: new Date().toISOString(),
       });
 
-      // Instantly block the student as requested
+      // Instantly block the student strictly as requested
       setIsStudentBlocked(true);
       setShowCheatLockModal(true);
 
@@ -795,12 +771,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     ]
   );
 
-  // Strict Anti-Cheat: Detect window blur, visibilitychange, fullscreen change, right-click, selection, drag, copy/paste, and shortcuts
+  // Strict Anti-Cheat: Detect window blur, visibilitychange, fullscreen change, right-click, selection, drag, copy/paste, shortcuts, and active focus polling
   useEffect(() => {
     if (!activeStudent || submittedSummary) return;
 
     const handleBlur = () => {
-      triggerViolation('Terdeteksi keluar dari fokus jendela ujian (Alt+Tab / Pindah Aplikasi)');
+      triggerViolation('Terdeteksi keluar dari fokus jendela ujian (Alt+Tab / Pindah Aplikasi / Layar Ganda)');
     };
 
     const handleVisibilityChange = () => {
@@ -819,7 +795,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
-      setSecurityNotice('Klik kanan dinonaktifkan selama ujian berlangsung.');
+      setSecurityNotice('Klik kanan dinonaktifkan demi integritas keamanan ujian.');
     };
 
     const handleClipboard = (e: ClipboardEvent) => {
@@ -843,13 +819,17 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
       const blockedCombo =
         e.key === 'F12' ||
+        e.key === 'F5' ||
+        e.key === 'F11' ||
         e.key === 'PrintScreen' ||
+        e.key === 'Escape' ||
         (isCtrlOrCmd &&
           e.shiftKey &&
-          ['I', 'J', 'C', 'K'].includes(key)) ||
+          ['I', 'J', 'C', 'K', 'M', 'S'].includes(key)) ||
         (isCtrlOrCmd &&
-          ['U', 'P', 'S', 'C', 'V', 'X', 'T', 'N', 'W', 'A'].includes(key)) ||
-        (e.altKey && key === 'TAB');
+          ['U', 'P', 'S', 'C', 'V', 'X', 'T', 'N', 'W', 'A', 'R', 'F', 'H', 'J', 'O'].includes(key)) ||
+        (e.altKey && key === 'TAB') ||
+        (e.altKey && ['ARROWLEFT', 'ARROWRIGHT', 'D', 'HOME', 'F4'].includes(key));
 
       if (blockedCombo) {
         e.preventDefault();
@@ -859,6 +839,13 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         );
       }
     };
+
+    // Sensitive Active Polling: Check window focus & visibility every 1000ms
+    const focusCheckInterval = setInterval(() => {
+      if (!isStudentBlocked && (!document.hasFocus() || document.visibilityState === 'hidden')) {
+        triggerViolation('Terdeteksi kehilangan fokus jendela ujian (Aplikasi eksternal / Taskbar / Layar ganda)');
+      }
+    }, 1000);
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       // Synchronously flush all answers to localStorage before any refresh/tab close
@@ -901,6 +888,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
+      clearInterval(focusCheckInterval);
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -1683,7 +1671,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   Riwayat Asesmen & Bukti Ujian
                 </h2>
                 <p className="text-xs text-slate-600 mt-1">
-                  Daftar ujian yang telah selesai dikerjakan beserta nilai, rekapan analisis LOTS/HOTS, dan bukti lembar jawaban.
+                  Daftar asesmen yang telah selesai dikerjakan beserta perolehan nilai resmi, status integritas, dan bukti verifikasi pengerjaan.
                 </p>
               </div>
 
@@ -1875,11 +1863,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             aria-modal="true"
             className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
           >
-            <div className="bg-white border border-slate-200 rounded-2xl max-w-3xl w-full p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto">
+            <div className="bg-white border border-slate-200 rounded-2xl max-w-2xl w-full p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto shadow-2xl">
               <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200">
                 <div>
-                  <div className="text-xs font-bold uppercase tracking-wider text-blue-700">
-                    Lembar Bukti & Hasil Asesmen Ujian CBT
+                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-emerald-700">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    <span>Lembar Bukti & Hasil Asesmen CBT Resmi</span>
                   </div>
                   <h3 className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">
                     {selectedReceipt.examJudul}
@@ -1890,11 +1879,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 </div>
 
                 <div className="text-right shrink-0">
-                  <div className="text-3xl font-black font-mono text-blue-700">
+                  <div className="text-3xl sm:text-4xl font-black font-mono text-blue-700">
                     {selectedReceipt.skor}
                   </div>
                   <div className="text-[11px] font-semibold text-slate-500">
-                    Nilai Akhir
+                    Nilai Akhir / 100
                   </div>
                 </div>
               </div>
@@ -1902,87 +1891,83 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               {/* Summary Cards */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">Kategori</div>
+                  <div className="text-slate-500">Kategori Capaian</div>
                   <div className="font-bold text-slate-900 mt-0.5">
                     {selectedReceipt.kategori || 'Selesai'}
                   </div>
                 </div>
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                   <div className="text-slate-500">Pelanggaran Tab</div>
-                  <div className="font-bold text-slate-900 mt-0.5">
-                    {selectedReceipt.pelanggaranTab} kali
+                  <div
+                    className={`font-bold mt-0.5 ${
+                      selectedReceipt.pelanggaranTab > 0
+                        ? 'text-amber-700'
+                        : 'text-emerald-700'
+                    }`}
+                  >
+                    {selectedReceipt.pelanggaranTab > 0
+                      ? `${selectedReceipt.pelanggaranTab} kali`
+                      : '0 (Aman / Tertib)'}
                   </div>
                 </div>
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                   <div className="text-slate-500">Waktu Selesai</div>
                   <div className="font-bold text-slate-900 mt-0.5">
-                    {new Date(selectedReceipt.submittedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(selectedReceipt.submittedAt).toLocaleTimeString('id-ID', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                   </div>
                 </div>
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">Status Bukti</div>
-                  <div className="font-bold text-emerald-700 mt-0.5">
-                    Tervalidasi Resmi
+                  <div className="text-slate-500">Status Validasi</div>
+                  <div className="font-bold text-emerald-700 mt-0.5 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Sah Terdaftar</span>
                   </div>
                 </div>
               </div>
 
-              {/* Question breakdown if available */}
-              {selectedReceipt.breakdown && selectedReceipt.breakdown.length > 0 && (
-                <div className="space-y-3 pt-2">
-                  <h4 className="text-sm font-bold text-slate-900">
-                    Daftar Rekap Soal & Jawaban:
-                  </h4>
-                  <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
-                    {selectedReceipt.breakdown.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className={`p-3.5 rounded-lg border text-xs space-y-2 ${
-                          item.isCorrect
-                            ? 'bg-emerald-50/50 border-emerald-200'
-                            : 'bg-rose-50/50 border-rose-200'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-bold text-slate-900">
-                            Soal #{idx + 1}
-                          </span>
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              item.isCorrect
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-rose-100 text-rose-800'
-                            }`}
-                          >
-                            {item.isCorrect ? 'Benar' : 'Salah'} ({item.pointsEarned} poin)
-                          </span>
-                        </div>
-                        <div className="text-slate-700">
-                          <MathAndTableRenderer content={item.pertanyaan} />
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 text-[11px]">
-                          <div>
-                            <span className="text-slate-500">Jawaban Siswa: </span>
-                            <strong className="text-slate-900 font-mono">
-                              {item.studentAnswer && item.studentAnswer.length > 0
-                                ? item.studentAnswer.join(', ')
-                                : '(Kosong)'}
-                            </strong>
-                          </div>
-                          <div>
-                            <span className="text-slate-500">Kunci Jawaban: </span>
-                            <strong className="text-emerald-700 font-mono">
-                              {item.correctAnswer && item.correctAnswer.length > 0
-                                ? item.correctAnswer.join(', ')
-                                : '-'}
-                            </strong>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+              {/* Rincian Pengerjaan Resmi (Hanya Nilai & Rekapitulasi - Tanpa Detail Benar/Salah) */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+                <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-200">
+                  <span className="font-semibold text-slate-700">Status Pengerjaan Butir Soal</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    {selectedReceipt.answeredCount !== undefined
+                      ? `${selectedReceipt.answeredCount} ${
+                          selectedReceipt.totalQuestions
+                            ? `dari ${selectedReceipt.totalQuestions} soal terjawab`
+                            : 'soal terjawab'
+                        }`
+                      : 'Tuntas Terjawab'}
+                  </span>
                 </div>
-              )}
+
+                <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-200">
+                  <span className="font-semibold text-slate-700">Nilai Akhir (Skala 100)</span>
+                  <span className="font-mono font-bold text-blue-700 text-sm">
+                    {selectedReceipt.skor} / 100
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Kode Bukti Digital</span>
+                  <span className="font-mono text-[11px] text-slate-500">
+                    SC-CBT-{selectedReceipt.examId}-{selectedReceipt.studentId}-{new Date(selectedReceipt.submittedAt).getTime().toString(36).toUpperCase()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Banner Kerahasiaan Bank Soal & Kunci Jawaban */}
+              <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-950 space-y-1.5">
+                <div className="font-bold flex items-center gap-1.5 text-amber-900">
+                  <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>Kebijakan Kerahasiaan Bank Soal & Integritas Ujian</span>
+                </div>
+                <p className="text-amber-900/90 leading-relaxed text-[11px]">
+                  Rincian benar/salah tiap butir soal serta kunci jawaban tidak ditampilkan kepada peserta didik demi menjamin kerahasiaan bank soal dan keadilan asesmen. Nilai akhir Anda telah terekam dan sah diverifikasi. Pembahasan materi dan bimbingan evaluasi dapat dikonsultasikan langsung bersama Guru Pengawas atau Guru Mata Pelajaran Sosiologi di kelas.
+                </p>
+              </div>
 
               {/* Action Buttons */}
               <div className="flex items-center justify-between pt-4 border-t border-slate-200">
@@ -2105,9 +2090,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               }`}
             />
             <span>
-              Anti-Cheat Tab:{' '}
+              Proteksi Integritas:{' '}
               <strong className="font-mono tabular-nums text-slate-900">
-                {tabViolations} / {MAX_TAB_VIOLATIONS}
+                {tabViolations > 0 ? `${tabViolations} Pelanggaran` : 'Ketat & Aman'}
               </strong>
             </span>
           </div>
@@ -2450,9 +2435,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               <div className="space-y-3.5 text-sm text-slate-700 leading-relaxed">
                 <p>
                   Peserta <strong>{activeStudent.nama}</strong> ({activeStudent.kelas}), sesi ujian Anda telah{' '}
-                  <strong className="text-red-700 font-bold">DIBLOKIR SISTEM</strong> karena terdeteksi keluar dari layar ujian atau berpindah tab (
-                  <strong className="font-mono">
-                    {tabViolations}/{MAX_TAB_VIOLATIONS} pelanggaran
+                  <strong className="text-red-700 font-bold">DIBLOKIR SISTEM</strong> demi menjaga integritas CBT karena terdeteksi keluar dari layar ujian atau berpindah tab (
+                  <strong className="font-mono text-red-700 font-bold">
+                    {tabViolations} kali pelanggaran tercatat
                   </strong>
                   ).
                 </p>
