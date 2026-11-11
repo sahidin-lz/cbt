@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Lock } from 'lucide-react';
 import { StudentExamPortal } from './components/StudentExamPortal';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -16,8 +16,10 @@ import {
   loadUnifiedDashboardData,
   subscribeRealtimeFirestoreCollections,
   pushSnapshotToFirestoreClient,
+  persistRecalculatedResultsToFirestore,
   safeApiJson,
 } from './lib/cbtFirestoreService';
+import { recalculateHistoricalResults } from './utils/cbtLogic';
 
 type PortalView = 'student' | 'teacher';
 
@@ -154,17 +156,39 @@ export default function App() {
     };
   }, [fetchDashboardData]);
 
-  // Ensure only questions and results belonging to active exams & students are counted
-  const activeExamIds = new Set(exams.map((e) => Number(e.id)));
-  const activeStudentIds = new Set(students.map((s) => Number(s.id)));
-  const activeQuestions = questions.filter((q) =>
-    activeExamIds.has(Number(q.exam_id))
-  );
-  const activeResults = results.filter(
-    (r) =>
-      activeExamIds.has(Number(r.exam_id)) &&
-      activeStudentIds.has(Number(r.student_id))
-  );
+  // Ensure only questions and results belonging to active exams & students are counted,
+  // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula
+  const activeQuestions = useMemo(() => {
+    const activeExamIds = new Set(exams.map((e) => Number(e.id)));
+    return questions.filter((q) => activeExamIds.has(Number(q.exam_id)));
+  }, [exams, questions]);
+
+  const recalculatedBundle = useMemo(() => {
+    const activeExamIds = new Set(exams.map((e) => Number(e.id)));
+    const activeStudentIds = new Set(students.map((s) => Number(s.id)));
+    const rawValidResults = results.filter(
+      (r) =>
+        activeExamIds.has(Number(r.exam_id)) &&
+        activeStudentIds.has(Number(r.student_id))
+    );
+    return recalculateHistoricalResults({
+      results: rawValidResults,
+      students,
+      exams,
+      questions: activeQuestions,
+    });
+  }, [results, students, exams, activeQuestions]);
+
+  const activeResults = recalculatedBundle.results;
+
+  // Automatically persist any upgraded historical student scores to Firestore
+  useEffect(() => {
+    if (recalculatedBundle.changedResults.length > 0) {
+      persistRecalculatedResultsToFirestore(
+        recalculatedBundle.changedResults
+      ).catch(() => {});
+    }
+  }, [recalculatedBundle.changedResults]);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-100/70 text-slate-900">

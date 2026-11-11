@@ -16,6 +16,7 @@ import {
   isExamMatchedForStudentClass,
   calculateExamScore,
   resolveProportionalStudentExamPackage,
+  recalculateHistoricalResults,
 } from '../utils/cbtLogic.ts';
 
 export async function getOrCreateAdminUser(uid: string, email: string, name?: string) {
@@ -68,20 +69,54 @@ export async function getDashboardData() {
       await db.delete(results).where(inArray(results.id, orphanedResultIds));
     }
 
+    const validQuestions = allQuestions.filter((q) =>
+      validExamIds.has(Number(q.exam_id))
+    );
+    const validResults = allResults.filter(
+      (r) =>
+        validExamIds.has(Number(r.exam_id)) &&
+        validStudentIds.has(Number(r.student_id))
+    );
+
+    // Automatically recalculate any historical results from previous days with the new Humane formula
+    const recalc = recalculateHistoricalResults({
+      results: validResults as any,
+      students: allStudents as any,
+      exams: allExams as any,
+      questions: validQuestions as any,
+    });
+
+    if (recalc.changedResults.length > 0) {
+      for (const updatedItem of recalc.changedResults) {
+        await db
+          .update(results)
+          .set({
+            skor_angka: updatedItem.skor_angka,
+            jawaban_siswa: updatedItem.jawaban_siswa,
+            analisis_ai: updatedItem.analisis_ai || null,
+          })
+          .where(eq(results.id, updatedItem.id));
+      }
+    }
+
     return {
       exams: allExams,
       students: allStudents,
-      questions: allQuestions.filter((q) => validExamIds.has(Number(q.exam_id))),
-      results: allResults.filter(
-        (r) =>
-          validExamIds.has(Number(r.exam_id)) &&
-          validStudentIds.has(Number(r.student_id))
-      ),
+      questions: validQuestions,
+      results: recalc.results,
     };
   } catch (error) {
     console.error('Database query failed in getDashboardData:', error);
     throw new Error('Gagal mengambil data dashboard dari database.', { cause: error });
   }
+}
+
+export async function recalculateAllDatabaseResults() {
+  const data = await getDashboardData();
+  return {
+    updatedCount: data.results.length,
+    results: data.results,
+  };
 }
 
 export async function createOrReplaceQuestionsFromCsv(

@@ -37,6 +37,7 @@ import {
   resolveProportionalStudentExamPackage,
   mapStudentAnswersToCanonicalKeys,
   resolveSyncedStudentAnswersForExam,
+  recalculateHistoricalResults,
   ExamScoreSummary,
 } from '../utils/cbtLogic';
 
@@ -193,11 +194,23 @@ export async function fetchAllFromFirestore(): Promise<{
         validStudentIds.has(Number(r.student_id))
     );
 
+    // Automatically recalculate historical student results using the new Humane & Anti-Guessing formula
+    const recalc = recalculateHistoricalResults({
+      results: validResults,
+      students,
+      exams,
+      questions: validQuestions,
+    });
+
+    if (recalc.changedResults.length > 0 && db) {
+      persistRecalculatedResultsToFirestore(recalc.changedResults).catch(() => {});
+    }
+
     return {
       exams,
       students,
       questions: validQuestions,
-      results: validResults,
+      results: recalc.results,
     };
   } catch (err) {
     try {
@@ -207,6 +220,79 @@ export async function fetchAllFromFirestore(): Promise<{
     }
     return null;
   }
+}
+
+export async function persistRecalculatedResultsToFirestore(
+  changedResults: ResultItem[]
+): Promise<number> {
+  if (!db || changedResults.length === 0) return 0;
+  const nowIso = new Date().toISOString();
+  let persisted = 0;
+
+  // Commit in batches of up to 400 documents
+  const chunkSize = 400;
+  for (let i = 0; i < changedResults.length; i += chunkSize) {
+    const slice = changedResults.slice(i, i + chunkSize);
+    const batch = writeBatch(db);
+    for (const r of slice) {
+      const resultDoc: Record<string, any> = {
+        id: Number(r.id),
+        student_id: Number(r.student_id),
+        exam_id: Number(r.exam_id),
+        skor_angka: Number(r.skor_angka) || 0,
+        jawaban_siswa: r.jawaban_siswa || {},
+        analisis_ai: r.analisis_ai || null,
+        pelanggaran_tab: Number(r.pelanggaran_tab) || 0,
+        created_at: r.created_at || nowIso,
+        authorUid: 'sahidin30@gmail.com',
+        updatedAt: nowIso,
+      };
+      if (r.kode_soal) {
+        resultDoc.kode_soal = String(r.kode_soal).slice(0, 64);
+      }
+      batch.set(doc(db, 'results', String(r.id)), resultDoc);
+      persisted++;
+    }
+    await batch.commit();
+  }
+
+  return persisted;
+}
+
+export async function recalculateAndSyncAllResultsCbt(params: {
+  exams: ExamItem[];
+  students: StudentItem[];
+  questions: QuestionItem[];
+  results: ResultItem[];
+}): Promise<{
+  updatedCount: number;
+  totalResults: number;
+  results: ResultItem[];
+}> {
+  const recalc = recalculateHistoricalResults({
+    results: params.results,
+    students: params.students,
+    exams: params.exams,
+    questions: params.questions,
+  });
+
+  await safeApiJson('/api/results/recalculate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (recalc.changedResults.length > 0 && db) {
+    await persistRecalculatedResultsToFirestore(recalc.changedResults);
+    await updateFirestorePulse(
+      `Formula Nilai Humanis diterapkan: ${recalc.updatedCount} nilai siswa diperbarui otomatis`
+    );
+  }
+
+  return {
+    updatedCount: recalc.updatedCount,
+    totalResults: recalc.results.length,
+    results: recalc.results,
+  };
 }
 
 export async function pushSnapshotToFirestoreClient(
@@ -1537,10 +1623,10 @@ export async function generateAiAnalysisCbt(payload: {
   );
   const preScore = calculateExamScore(payload.questions, syncedAnswers || {});
 
-  // Lock authoritative final score: never let AI evaluation alter a recorded >0 score
+  // Lock authoritative final score using the Humane formula (upgrading historical score if higher, never lowering)
   const lockedScore =
     payload.existingResult && typeof payload.existingResult.skor_angka === 'number' && payload.existingResult.skor_angka > 0
-      ? payload.existingResult.skor_angka
+      ? Math.max(payload.existingResult.skor_angka, preScore.normalizedScore)
       : preScore.normalizedScore;
 
   let lockedKategori: ExamScoreSummary['kategoriNilai'] = 'Perlu Bimbingan (D)';

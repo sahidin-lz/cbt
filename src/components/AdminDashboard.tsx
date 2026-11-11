@@ -30,6 +30,7 @@ import {
   Pause,
   Calendar,
   BookmarkCheck,
+  BarChart3,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -85,6 +86,7 @@ import {
   clearExamQuestionsCbt,
   copyQuestionsToExamCbt,
   generateAiAnalysisCbt,
+  recalculateAndSyncAllResultsCbt,
 } from '../lib/cbtFirestoreService';
 import {
   parseQuestionsFromFile,
@@ -93,6 +95,7 @@ import {
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 import { ClassPerformanceLotsHotsChart } from './ClassPerformanceLotsHotsChart';
 import { ExamManagementTab } from './ExamManagementTab';
+import { AnBusoAnalysisTab } from './AnBusoAnalysisTab';
 
 interface AdminDashboardProps {
   exams: ExamItem[];
@@ -152,13 +155,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Core Teacher Dashboard Modules (Persisted on reload)
   const [activeTab, setActiveTab] = useState<
-    'ujian' | 'manajemen' | 'siswa' | 'soal' | 'laporan'
+    'ujian' | 'manajemen' | 'siswa' | 'soal' | 'laporan' | 'anbuso'
   >(() => {
     try {
       const saved = localStorage.getItem('cbt_teacher_active_tab');
       if (
         saved &&
-        ['ujian', 'manajemen', 'siswa', 'soal', 'laporan'].includes(saved)
+        ['ujian', 'manajemen', 'siswa', 'soal', 'laporan', 'anbuso'].includes(
+          saved
+        )
       ) {
         return saved as any;
       }
@@ -173,6 +178,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [activeTab]);
 
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
+  const [isRecalculatingScores, setIsRecalculatingScores] = useState(false);
+  const [recalcFeedback, setRecalcFeedback] = useState<string | null>(null);
+
+  const handleRecalculateAllScores = async () => {
+    setIsRecalculatingScores(true);
+    setRecalcFeedback(null);
+    try {
+      const outcome = await recalculateAndSyncAllResultsCbt({
+        results,
+        questions,
+        students,
+        exams,
+      });
+      await onRefreshData();
+      setRecalcFeedback(
+        outcome.updatedCount > 0
+          ? `Berhasil memperbarui & menyinkronkan ${outcome.updatedCount} dari ${outcome.totalResults} nilai peserta ujian sebelumnya dengan Formula Humanis PG Kompleks.`
+          : `Seluruh ${outcome.totalResults} nilai peserta ujian (termasuk ujian hari sebelumnya) sudah tersinkronisasi optimal dengan Formula Humanis PG Kompleks.`
+      );
+    } catch (err: any) {
+      setRecalcFeedback(err?.message || 'Gagal menghitung ulang nilai siswa.');
+    } finally {
+      setIsRecalculatingScores(false);
+    }
+  };
   const [isBankSoalDetailOpen, setIsBankSoalDetailOpen] = useState(false);
   const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [bankSoalDeleteModal, setBankSoalDeleteModal] = useState<{
@@ -1846,12 +1876,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Second Row: Dedicated Full-Width Colorful 5-Tab Navigation Menu Bar */}
+        {/* Second Row: Dedicated Full-Width Colorful 6-Tab Navigation Menu Bar */}
         <div className="bg-gradient-to-r from-slate-100 via-blue-50/50 to-indigo-50/50 p-3 border-b border-slate-200">
           <div
             role="tablist"
             aria-label="Menu Utama Konsol Guru"
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5"
           >
             <button
               type="button"
@@ -2005,6 +2035,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 }`}
               >
                 {results.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'anbuso'}
+              onClick={() => setActiveTab('anbuso')}
+              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
+                activeTab === 'anbuso'
+                  ? 'bg-gradient-to-r from-cyan-600 to-blue-700 text-white border-cyan-700 shadow-xs'
+                  : 'bg-white hover:bg-cyan-50/70 text-slate-700 border-slate-200/90 hover:border-cyan-300'
+              }`}
+            >
+              <span className="flex items-center gap-2 truncate">
+                <BarChart3
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'anbuso' ? 'text-amber-300' : 'text-cyan-600'
+                  }`}
+                />
+                <span className="truncate">Analisis Butir (AnBuso)</span>
+              </span>
+              <span
+                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
+                  activeTab === 'anbuso'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-cyan-50 text-cyan-800 border border-cyan-200/60'
+                }`}
+              >
+                AnBuso
               </span>
             </button>
           </div>
@@ -4766,7 +4826,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <Download className="w-3.5 h-3.5" />
                   Download Rekap Analisis Kelas (.xls)
                 </button>
+                <button
+                  type="button"
+                  onClick={handleRecalculateAllScores}
+                  disabled={isRecalculatingScores || results.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${
+                      isRecalculatingScores ? 'animate-spin' : ''
+                    }`}
+                  />
+                  <span>
+                    {isRecalculatingScores
+                      ? 'Menyinkronkan Nilai...'
+                      : 'Sinkronkan Nilai Formula Humanis'}
+                  </span>
+                </button>
               </div>
+            </div>
+
+            {/* Info Banner Formula Penilaian Humanis & Anti-Ngarang */}
+            <div className="p-3.5 rounded-xl bg-gradient-to-r from-indigo-50/90 via-blue-50/80 to-emerald-50/80 border border-indigo-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider bg-indigo-600 text-white">
+                    Formula Penilaian Humanis &amp; Adil Aktif
+                  </span>
+                  <span className="text-xs font-bold text-slate-900">
+                    Apresiasi Poin Parsial PG Kompleks &amp; Proteksi Anti-Menebak
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  Setiap jawaban benar pada soal <strong>PG Kompleks (Multi-Jawaban)</strong> tetap mendapatkan poin proporsional meskipun terdapat sebagian opsi yang terlewat atau meleset wajar, namun tetap memberikan <strong>0 poin</strong> jika siswa mencentang semua opsi (asal tebak). Nilai peserta dari ujian hari sebelumnya otomatis diperbarui secara adil.
+                </p>
+              </div>
+              {recalcFeedback && (
+                <div className="px-3 py-1.5 rounded-lg bg-emerald-100/90 border border-emerald-300 text-emerald-900 text-xs font-semibold shrink-0">
+                  {recalcFeedback}
+                </div>
+              )}
             </div>
 
             {/* 4 Kartu Ringkasan Statistik Keseluruhan */}
@@ -5309,6 +5408,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* TAB 6: ANALISIS BUTIR SOAL (ANBUSO) & PEMETAAN REMEDIAL PERSONAL       */}
+      {/* ===================================================================== */}
+      {activeTab === 'anbuso' && (
+        <AnBusoAnalysisTab
+          exams={exams}
+          questions={questions}
+          students={students}
+          results={results}
+          teacherName={teacherProfile.name}
+        />
       )}
 
       {/* Modal Detail Evaluasi Capaian Kognitif */}

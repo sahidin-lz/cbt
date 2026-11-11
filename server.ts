@@ -27,6 +27,7 @@ import {
   submitStudentExamResult,
   saveAiAnalysisToResult,
   getOrCreateAdminUser,
+  recalculateAllDatabaseResults,
 } from './src/db/cbtRepository.ts';
 import {
   parseQuestionsCsv,
@@ -65,7 +66,7 @@ const getGenAiClient = () => {
 };
 
 const SYSTEM_PROMPT_EVALUATOR = `Anda adalah AI Evaluator CBT. Tugas Anda:
-1. Hitung skor siswa. (PG Biasa: 2 Poin, PG Kompleks Benar Semua: 3 Poin, Benar Sebagian: 1-2 Poin, Salah: 0 Poin).
+1. Hitung skor siswa secara humanis dan adil (PG Biasa: 2 Poin; PG Kompleks Benar Semua: 3 Poin, Benar Sebagian mendapatkan poin proporsional dari setiap jawaban benar yang dipilih dengan koreksi ringan anti-tebak, Asal centang semua opsi / Salah semua: 0 Poin).
 2. Analisis kekuatan dan kelemahan kognitif siswa (LOTS vs HOTS).
 3. Berikan 3 poin rekomendasi belajar.
 Keluarkan output HANYA dalam format JSON valid dengan struktur: { nama_siswa, skor_akhir, kategori_nilai, analisis_kompetensi: { kekuatan, kelemahan }, evaluasi_hots, rekomendasi_belajar }.`;
@@ -557,6 +558,19 @@ app.post('/api/exam/submit', async (req, res) => {
     res.json(outcome);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal mengirim jawaban ujian.' });
+  }
+});
+
+// POST /api/results/recalculate - Recalculate all existing student exam results using the Humane PG Kompleks formula
+app.post('/api/results/recalculate', async (_req, res) => {
+  try {
+    const outcome = await recalculateAllDatabaseResults();
+    await broadcastFirestoreSync(
+      `Skor hasil ujian siswa dihitung ulang dengan Formula Nilai Humanis`
+    );
+    res.json(outcome);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal menghitung ulang nilai siswa.' });
   }
 });
 

@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
 import {
+  calculateExamScore,
   classifyQuestionCognitiveLevel,
   isExamMatchedForStudentClass,
   resolveSyncedStudentAnswersForExam,
@@ -286,14 +287,17 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             }
           });
 
-          // Check correctness
-          const isCorrect =
-            studentAns.length === correctKeys.length &&
-            studentAns.every((ans) => correctKeys.includes(ans));
+          // Check correctness (including humane partial points on PG Kompleks)
+          const qEval = calculateExamScore([q], { [qIdStr]: studentAns }).breakdown[0];
+          const hasEarnedPoints = qEval && qEval.earnedPoints > 0;
 
-          if (isCorrect) {
+          if (hasEarnedPoints) {
             correctCount++;
-            correctStudentNames.push(student.nama);
+            correctStudentNames.push(
+              qEval.status === 'Benar Sebagian'
+                ? `${student.nama} (+${qEval.earnedPoints}p)`
+                : student.nama
+            );
           } else {
             incorrectCount++;
             incorrectStudentDetails.push({
@@ -1313,21 +1317,27 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                           );
                         }
 
-                        const isCorrect =
-                          studentAns.length === correctKeys.length &&
-                          studentAns.every((ans) => correctKeys.includes(ans));
+                        const qEval = calculateExamScore([q], { [qIdStr]: studentAns }).breakdown[0];
+                        const isFullCorrect = qEval?.status === 'Benar Penuh';
+                        const isPartialCorrect = qEval?.status === 'Benar Sebagian';
 
                         return (
                           <td
                             key={q.id}
-                            title={`Jawaban Siswa: [${studentAns.join(', ')}] | Kunci: [${correctKeys.join(', ')}]`}
+                            title={`Jawaban Siswa: [${studentAns.join(', ')}] | Kunci: [${correctKeys.join(', ')}] | Poin: +${qEval?.earnedPoints ?? 0}/${qEval?.maxPoints ?? 2} (${qEval?.status || 'Salah'})`}
                             className={`py-2 px-2 border-r border-slate-200 text-center font-bold text-xs ${
-                              isCorrect
+                              isFullCorrect
                                 ? 'bg-emerald-50/70 text-emerald-700'
+                                : isPartialCorrect
+                                ? 'bg-amber-50/80 text-amber-800'
                                 : 'bg-rose-50/70 text-rose-700'
                             }`}
                           >
-                            {isCorrect ? '✓' : `✗ ${studentAns.join('')}`}
+                            {isFullCorrect
+                              ? '✓'
+                              : isPartialCorrect
+                              ? `◐ +${qEval.earnedPoints}`
+                              : `✗ ${studentAns.join('')}`}
                           </td>
                         );
                       })}
@@ -1525,16 +1535,18 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                       const qIdStr = String(q.id);
                       const correctKeys = q.kunci_jawaban || [];
                       const studentAns = modalSyncedAnswers[qIdStr] || [];
-                      const isCorrect =
-                        studentAns.length === correctKeys.length &&
-                        studentAns.every((ans) => correctKeys.includes(ans));
+                      const qEval = calculateExamScore([q], { [qIdStr]: studentAns }).breakdown[0];
+                      const isFullCorrect = qEval?.status === 'Benar Penuh';
+                      const isPartialCorrect = qEval?.status === 'Benar Sebagian';
 
                       return (
                         <div
                           key={q.id}
                           className={`p-3 rounded-lg border text-xs space-y-1.5 ${
-                            isCorrect
+                            isFullCorrect
                               ? 'bg-emerald-50/50 border-emerald-200'
+                              : isPartialCorrect
+                              ? 'bg-amber-50/60 border-amber-200'
                               : 'bg-rose-50/50 border-rose-200'
                           }`}
                         >
@@ -1544,12 +1556,18 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                             </span>
                             <span
                               className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                isCorrect
+                                isFullCorrect
                                   ? 'bg-emerald-100 text-emerald-800'
+                                  : isPartialCorrect
+                                  ? 'bg-amber-100 text-amber-800'
                                   : 'bg-rose-100 text-rose-800'
                               }`}
                             >
-                              {isCorrect ? 'Benar (+poin)' : 'Salah (0 poin)'}
+                              {isFullCorrect
+                                ? `Benar Penuh (+${qEval?.earnedPoints}/${qEval?.maxPoints} poin)`
+                                : isPartialCorrect
+                                ? `Benar Sebagian (+${qEval?.earnedPoints}/${qEval?.maxPoints} poin)`
+                                : `Salah (0/${qEval?.maxPoints ?? 2} poin)`}
                             </span>
                           </div>
 

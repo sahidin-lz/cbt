@@ -582,4 +582,216 @@ test('prepareStudentExamQuestions and shuffleQuestionOptions randomize order whi
   assert.equal(assigned[3].kode_soal, 'PAKET-B');
 });
 
+test('Humane PG Kompleks formula awards fair partial points for every correct answer while blocking blind guessing and upgrading historical results', async () => {
+  const { calculateExamScore, recalculateHistoricalResults } = await import('./cbtLogic.ts');
+
+  const pgk2Keys = {
+    id: 101,
+    exam_id: 1,
+    tipe_soal: 'Kompleks',
+    kunci_jawaban: ['A', 'C'],
+    bobot: 3,
+  };
+  const pgk3Keys = {
+    id: 102,
+    exam_id: 1,
+    tipe_soal: 'Kompleks',
+    kunci_jawaban: ['A', 'C', 'E'],
+    bobot: 3,
+  };
+
+  // 1. Choosing 1 right + 1 wrong on a 2-key PGK (previously 0 pts!) now earns humane partial points (1.2 pts)
+  const score1Right1Wrong = calculateExamScore([pgk2Keys], {
+    '101': ['A', 'B'],
+  });
+  assert.ok(score1Right1Wrong.rawEarned > 0, '1 right + 1 wrong should earn positive partial points');
+  assert.equal(score1Right1Wrong.rawEarned, 1.2);
+  assert.equal(score1Right1Wrong.breakdown[0].status, 'Benar Sebagian');
+
+  // 2. Choosing 1 right + 0 wrong on a 2-key PGK earns 1.5 pts (50% of 3)
+  const score1Right0Wrong = calculateExamScore([pgk2Keys], {
+    '101': ['A'],
+  });
+  assert.equal(score1Right0Wrong.rawEarned, 1.5);
+  assert.equal(score1Right0Wrong.breakdown[0].status, 'Benar Sebagian');
+
+  // 3. Choosing 1 right + 2 wrong on a 3-key PGK (previously 0 pts!) now earns humane partial points (0.84 pts)
+  const score1Right2WrongOn3Key = calculateExamScore([pgk3Keys], {
+    '102': ['A', 'B', 'D'],
+  });
+  assert.ok(score1Right2WrongOn3Key.rawEarned > 0, '1 right + 2 wrong on 3-key PGK should earn positive points');
+  assert.equal(score1Right2WrongOn3Key.rawEarned, 0.84);
+  assert.equal(score1Right2WrongOn3Key.breakdown[0].status, 'Benar Sebagian');
+
+  // 4. Anti-Guessing protection: checking all 5 options (A, B, C, D, E) or 4 options with only 1 right gets 0 points
+  const blindAll5 = calculateExamScore([pgk3Keys], {
+    '102': ['A', 'B', 'C', 'D', 'E'],
+  });
+  assert.equal(blindAll5.rawEarned, 0);
+  assert.equal(blindAll5.breakdown[0].status, 'Salah');
+
+  const blind4With1Right = calculateExamScore([pgk2Keys], {
+    '101': ['A', 'B', 'D', 'E'],
+  });
+  assert.equal(blind4With1Right.rawEarned, 0);
+  assert.equal(blind4With1Right.breakdown[0].status, 'Salah');
+
+  // 5. Retroactive recalculation upgrades historical student results from previous days
+  const historicalResults = [
+    {
+      id: 501,
+      student_id: 1,
+      exam_id: 1,
+      skor_angka: 0, // Under old strict rule, 1 right + 1 wrong on pgk2Keys gave 0
+      jawaban_siswa: { '101': ['A', 'B'] },
+      analisis_ai: {
+        skor_akhir: 0,
+        kategori_nilai: 'Perlu Bimbingan (D)',
+        ringkasan_evaluasi: 'Evaluasi lama',
+        kekuatan_utama: '-',
+        kelemahan_utama: '-',
+        rekomendasi_belajar: ['Pelajari kembali'],
+      },
+    },
+  ];
+  const recalc = recalculateHistoricalResults({
+    results: historicalResults as any,
+    questions: [pgk2Keys] as any,
+    students: [{ id: 1, nama: 'Siswa Kemarin', kelas: '10 ASIAH', token_ujian: 'TOK123' }] as any,
+    exams: [{ id: 1, judul_ujian: 'UH Sosiologi', durasi_menit: 60 }] as any,
+  });
+
+  assert.equal(recalc.updatedCount, 1);
+  assert.equal(recalc.results[0].skor_angka, 40); // 1.2 / 3 = 40%
+  assert.equal(recalc.results[0].analisis_ai?.skor_akhir, 40);
+});
+
+test('computeAnBusoAnalysis computes difficulty index (P), discrimination index (D), distractor effectiveness, reliability Alpha, and personal remedial mapping', async () => {
+  const { computeAnBusoAnalysis, generateAnBusoExcelReport } = await import(
+    './cbtAnBusoLogic.ts'
+  );
+
+  const questions = [
+    {
+      id: 1,
+      exam_id: 1,
+      teks_soal: 'Siapa tokoh pencetus konsep tindakan sosial dalam sosiologi?',
+      tipe_soal: 'PG',
+      data_opsi: {
+        id_soal_csv: 'SOS-01',
+        opsi: {
+          A: 'Max Weber',
+          B: 'Emile Durkheim',
+          C: 'Karl Marx',
+          D: 'Auguste Comte',
+          E: 'Georg Simmel',
+        },
+      },
+      kunci_jawaban: ['A'],
+      bobot: 2,
+    },
+    {
+      id: 2,
+      exam_id: 1,
+      teks_soal: 'Pilih contoh interaksi sosial asosiatif di masyarakat!',
+      tipe_soal: 'Kompleks',
+      data_opsi: {
+        id_soal_csv: 'SOS-02',
+        opsi: {
+          A: 'Gotong royong warga',
+          B: 'Koalisi partai',
+          C: 'Tawuran pelajar',
+          D: 'Akulturasi budaya',
+          E: 'Fitnah sosial',
+        },
+      },
+      kunci_jawaban: ['A', 'B', 'D'],
+      bobot: 3,
+    },
+  ];
+
+  const students = [
+    { id: 1, nama: 'Siswa Unggul 1', kelas: '10 ASIAH', token_ujian: 'T00001' },
+    { id: 2, nama: 'Siswa Unggul 2', kelas: '10 ASIAH', token_ujian: 'T00002' },
+    { id: 3, nama: 'Siswa Bawah 1', kelas: '10 ASIAH', token_ujian: 'T00003' },
+    { id: 4, nama: 'Siswa Bawah 2', kelas: '10 ASIAH', token_ujian: 'T00004' },
+  ];
+
+  const results = [
+    {
+      id: 101,
+      student_id: 1,
+      exam_id: 1,
+      skor_angka: 100,
+      jawaban_siswa: { '1': ['A'], '2': ['A', 'B', 'D'] },
+      pelanggaran_tab: 0,
+    },
+    {
+      id: 102,
+      student_id: 2,
+      exam_id: 1,
+      skor_angka: 100,
+      jawaban_siswa: { '1': ['A'], '2': ['A', 'B', 'D'] },
+      pelanggaran_tab: 0,
+    },
+    {
+      id: 103,
+      student_id: 3,
+      exam_id: 1,
+      skor_angka: 40,
+      jawaban_siswa: { '1': ['B'], '2': ['A', 'B'] },
+      pelanggaran_tab: 0,
+    },
+    {
+      id: 104,
+      student_id: 4,
+      exam_id: 1,
+      skor_angka: 0,
+      jawaban_siswa: { '1': ['C'], '2': ['C', 'E'] },
+      pelanggaran_tab: 0,
+    },
+  ];
+
+  const report = computeAnBusoAnalysis({
+    identity: {
+      namaSekolah: 'SMA Uji Coba',
+      mataPelajaran: 'Sosiologi',
+      kelasRombel: '10 ASIAH',
+      namaTes: 'Penilaian Harian 1',
+      semesterTahunAjaran: 'Ganjil 2025/2026',
+      namaPendidik: 'Sahidin',
+      nipPendidik: '-',
+      tanggalUjian: '11 Nov 2026',
+      kkm: 70,
+    },
+    questions: questions as any,
+    students: students as any,
+    results: results as any,
+  });
+
+  assert.equal(report.summary.totalRespondents, 4);
+  assert.equal(report.summary.totalQuestions, 2);
+  assert.equal(report.summary.upperGroupSize, 2);
+  assert.equal(report.summary.lowerGroupSize, 2);
+
+  // Item 1: 2 upper correct (1.0), 2 lower wrong (0.0) => P = 0.50 (Sedang), D = 1.00 (Sangat Baik)
+  const item1 = report.items[0];
+  assert.equal(item1.difficultyIndex, 0.5);
+  assert.equal(item1.difficultyCategory, 'Sedang');
+  assert.equal(item1.discriminationIndex, 1);
+  assert.equal(item1.discriminationCategory, 'Sangat Baik');
+  assert.equal(item1.itemDecision, 'Disimpan di Bank Soal');
+
+  // Personal remedial check: Siswa Bawah 2 failed both items 1 and 2
+  const bottomStudent = report.studentRemedial.find((s) => s.studentId === 4)!;
+  assert.equal(bottomStudent.isPassedKkm, false);
+  assert.deepEqual(bottomStudent.failedNumbers, [1, 2]);
+
+  // Verify Excel export generates valid HTML spreadsheet table
+  const xls = generateAnBusoExcelReport(report);
+  assert.ok(xls.includes('PEMETAAN REMEDIAL PERSONAL SISWA PER BUTIR SOAL'));
+});
+
+
+
 

@@ -200,12 +200,62 @@ export function resolveQuestionAnswerKeys(
 }
 
 /**
- * Calculates deterministic CBT score according to the specification:
- * - PG Biasa: 2 Poin (or custom bobot) if exact match, 0 if wrong.
- * - PG Kompleks:
- *    - Benar Semua: 3 Poin (or custom bobot)
- *    - Benar Sebagian: 1 - 2 Poin
- *    - Salah: 0 Poin
+ * Legacy score calculator used strictly to detect whether a historical result
+ * from previous days was saved with shuffled display letters vs canonical letters.
+ */
+export function calculateLegacyExamScore(
+  questionsList: ScoredQuestionItem[],
+  studentAnswers: Record<string, string[]>
+): number {
+  let rawEarned = 0;
+  let rawMax = 0;
+
+  for (const q of questionsList) {
+    const qId = String(q.id);
+    const correctKeys = normalizeAnswerKeys(q.kunci_jawaban);
+    const chosenKeys = normalizeAnswerKeys(studentAnswers[qId] || []);
+    const isKompleks =
+      q.tipe_soal.toLowerCase().includes('kompleks') ||
+      correctKeys.length > 1;
+    const defaultMax = isKompleks ? 3 : 2;
+    const maxPoints = q.bobot && q.bobot > 0 ? q.bobot : defaultMax;
+    rawMax += maxPoints;
+
+    if (chosenKeys.length === 0 || correctKeys.length === 0) continue;
+
+    if (!isKompleks) {
+      if (chosenKeys.length === 1 && chosenKeys[0] === correctKeys[0]) {
+        rawEarned += maxPoints;
+      }
+    } else {
+      const matchedCount = chosenKeys.filter((k) => correctKeys.includes(k)).length;
+      const wrongCount = chosenKeys.filter((k) => !correctKeys.includes(k)).length;
+      if (matchedCount === correctKeys.length && wrongCount === 0) {
+        rawEarned += maxPoints;
+      } else if (matchedCount > 0 && matchedCount > wrongCount) {
+        const netRatio = (matchedCount - wrongCount) / correctKeys.length;
+        const partialPoints = netRatio >= 0.6 ? Math.min(2, maxPoints - 1) : 1;
+        rawEarned += Math.max(1, partialPoints);
+      }
+    }
+  }
+
+  return rawMax > 0 ? Math.round((rawEarned / rawMax) * 100) : 0;
+}
+
+/**
+ * Calculates deterministic CBT score using the Humane & Anti-Guessing Formula:
+ * - PG Biasa (1 Kunci Jawaban):
+ *    - Benar: 2 Poin (atau sesuai bobot soal) -> 'Benar Penuh'
+ *    - Salah / Kosong: 0 Poin -> 'Salah'
+ * - PG Kompleks / Jawaban Lebih dari Satu (Multi-Opsi, Bobot Default 3 Poin):
+ *    - Benar Semua tanpa opsi salah: 3 Poin penuh (maxPoints) -> 'Benar Penuh'
+ *    - Setiap jawaban benar yang dipilih siswa dihargai poin secara proporsional: (Benar / Jumlah Kunci) * Bobot.
+ *    - Jika siswa memilih jawaban benar disertai opsi yang meleset (namun masih dalam batas wajar dan tidak asal centang semua),
+ *      siswa tetap memperoleh poin dari setiap jawaban benar yang ditemukan dikurangi koreksi ringan anti-tebak (10% dalam kuota,
+ *      22% jika mencentang melebihi jumlah kunci), dengan jaminan poin apresiasi minimal (0.84 - 1.50 poin pada bobot 3)
+ *      selama ada minimal 1 jawaban benar -> 'Benar Sebagian'.
+ *    - Proteksi Anti-Ngarang: Jika mencentang semua 5 opsi (A,B,C,D,E) atau mencentang >= 4 opsi tetapi hanya 1 yang benar -> 0 Poin ('Salah').
  */
 export function calculateExamScore(
   questionsList: ScoredQuestionItem[],
@@ -217,15 +267,14 @@ export function calculateExamScore(
 
   for (const q of questionsList) {
     const qId = String(q.id);
+    const correctKeys = normalizeAnswerKeys(q.kunci_jawaban);
+    const chosenKeys = normalizeAnswerKeys(studentAnswers[qId] || []);
     const isKompleks =
       q.tipe_soal.toLowerCase().includes('kompleks') ||
-      q.kunci_jawaban.length > 1;
+      correctKeys.length > 1;
     const defaultMax = isKompleks ? 3 : 2;
     const maxPoints = q.bobot && q.bobot > 0 ? q.bobot : defaultMax;
     rawMax += maxPoints;
-
-    const correctKeys = normalizeAnswerKeys(q.kunci_jawaban);
-    const chosenKeys = normalizeAnswerKeys(studentAnswers[qId] || []);
 
     if (chosenKeys.length === 0 || correctKeys.length === 0) {
       breakdown.push({
@@ -255,8 +304,11 @@ export function calculateExamScore(
       const wrongCount = chosenKeys.filter(
         (k) => !correctKeys.includes(k)
       ).length;
+      const totalChosen = chosenKeys.length;
+      const keyCount = Math.max(1, correctKeys.length);
 
       if (matchedCount === correctKeys.length && wrongCount === 0) {
+        // 1. Perfect full match: all correct keys chosen and zero wrong options
         rawEarned += maxPoints;
         breakdown.push({
           questionId: qId,
@@ -264,27 +316,69 @@ export function calculateExamScore(
           maxPoints,
           status: 'Benar Penuh',
         });
-      } else if (matchedCount > 0 && matchedCount > wrongCount) {
-        const netRatio = (matchedCount - wrongCount) / correctKeys.length;
-        const partialPoints = netRatio >= 0.6 ? Math.min(2, maxPoints - 1) : 1;
-        const safePartial = Math.max(1, partialPoints);
-        rawEarned += safePartial;
-        breakdown.push({
-          questionId: qId,
-          earnedPoints: safePartial,
-          maxPoints,
-          status: 'Benar Sebagian',
-        });
-      } else {
+      } else if (
+        matchedCount === 0 ||
+        (totalChosen >= 5 && correctKeys.length < 5) ||
+        (totalChosen >= 4 && matchedCount <= 1 && correctKeys.length <= 3)
+      ) {
+        // 2. Anti-guessing guard:
+        // - Zero correct answers -> 0 points
+        // - Blindly checking all 5 options (A, B, C, D, E) -> 0 points
+        // - Blindly checking 4 options and only hitting 1 correct key -> 0 points
         breakdown.push({
           questionId: qId,
           earnedPoints: 0,
           maxPoints,
           status: 'Salah',
         });
+      } else if (wrongCount === 0) {
+        // 3. Pure partial match (student only selected correct options, zero wrong options)
+        // Every correct answer gets full proportional credit: (matchedCount / keyCount) * maxPoints
+        const rawPartial = (matchedCount / keyCount) * maxPoints;
+        const earned = Math.round(rawPartial * 100) / 100;
+        rawEarned += earned;
+        breakdown.push({
+          questionId: qId,
+          earnedPoints: earned,
+          maxPoints,
+          status: 'Benar Sebagian',
+        });
+      } else {
+        // 4. Humane partial match with wrong option(s) (matchedCount >= 1 and wrongCount >= 1)
+        const effectiveKeyCount = Math.max(2, keyCount);
+        const baseCreditRatio = Math.min(1, matchedCount / effectiveKeyCount);
+
+        const quotaLimit = Math.max(2, keyCount);
+        const excessSelections = Math.max(0, totalChosen - quotaLimit);
+        const withinQuotaWrong = Math.max(0, wrongCount - excessSelections);
+
+        // Gentle deduction (10%) for a missed option within quota; firmer deduction (22%) for over-selecting extra boxes
+        const penaltyRatio = withinQuotaWrong * 0.10 + excessSelections * 0.22;
+
+        // Humane minimum floor per correct answer found so genuine correct selections are never wiped out to 0
+        const minFloorRatio =
+          excessSelections === 0
+            ? Math.min(0.75, 0.28 * matchedCount)
+            : Math.min(0.60, 0.20 * matchedCount);
+
+        const netRatio = Math.min(
+          0.85,
+          Math.max(minFloorRatio, baseCreditRatio - penaltyRatio)
+        );
+        const earned = Math.round(netRatio * maxPoints * 100) / 100;
+
+        rawEarned += earned;
+        breakdown.push({
+          questionId: qId,
+          earnedPoints: earned,
+          maxPoints,
+          status: 'Benar Sebagian',
+        });
       }
     }
   }
+
+  rawEarned = Math.round(rawEarned * 100) / 100;
 
   const normalizedScore =
     rawMax > 0 ? Math.round((rawEarned / rawMax) * 100) : 0;
@@ -2265,9 +2359,16 @@ export function resolveSyncedStudentAnswersForExam<
     params.exam.acak_opsi !== false &&
     typeof params.recordedScore === 'number'
   ) {
-    const directScore = calculateExamScore(params.questions, rawAnswers);
-    if (directScore.normalizedScore !== params.recordedScore) {
-      // Try both default seed and packageCode seed to match any historical session
+    const directNewScore = calculateExamScore(params.questions, rawAnswers).normalizedScore;
+    const directLegacyScore = calculateLegacyExamScore(params.questions, rawAnswers);
+
+    // If rawAnswers already matches recordedScore under either the new or legacy formula, it is already in canonical space
+    const directDiff = Math.min(
+      Math.abs(directNewScore - params.recordedScore),
+      Math.abs(directLegacyScore - params.recordedScore)
+    );
+
+    if (directDiff > 0) {
       const candidateSeeds = [
         hashStudentSeed(params.student.id, params.student.token_ujian, params.exam.id),
         hashStudentSeed(
@@ -2275,10 +2376,12 @@ export function resolveSyncedStudentAnswersForExam<
           params.student.token_ujian,
           params.exam.id
         ),
+        hashStudentSeed(`${params.student.id}_PAKET-A`, params.student.token_ujian, params.exam.id),
+        hashStudentSeed(`${params.student.id}_PAKET-B`, params.student.token_ujian, params.exam.id),
       ];
 
       let bestRemapped = rawAnswers;
-      let bestDiff = Math.abs(directScore.normalizedScore - params.recordedScore);
+      let bestDiff = directDiff;
 
       for (const seed of candidateSeeds) {
         const qRng = createSeededRandom(seed);
@@ -2293,8 +2396,13 @@ export function resolveSyncedStudentAnswersForExam<
         });
 
         const remapped = mapStudentAnswersToCanonicalKeys(working, rawAnswers);
-        const remappedScore = calculateExamScore(params.questions, remapped);
-        const diff = Math.abs(remappedScore.normalizedScore - params.recordedScore);
+        const remappedNewScore = calculateExamScore(params.questions, remapped).normalizedScore;
+        const remappedLegacyScore = calculateLegacyExamScore(params.questions, remapped);
+        const diff = Math.min(
+          Math.abs(remappedNewScore - params.recordedScore),
+          Math.abs(remappedLegacyScore - params.recordedScore)
+        );
+
         if (diff < bestDiff) {
           bestDiff = diff;
           bestRemapped = remapped;
@@ -2307,6 +2415,140 @@ export function resolveSyncedStudentAnswersForExam<
   }
 
   return rawAnswers;
+}
+
+/**
+ * Retroactively recalculates and upgrades scores for all students who have already
+ * completed the exam (including those from previous days) using the new Humane & Anti-Guessing
+ * PG Kompleks scoring formula.
+ * Guarantees that every student's canonical answers are aligned and their score is updated fairly.
+ */
+export function recalculateHistoricalResults<
+  TResult extends {
+    id: number;
+    student_id: number;
+    exam_id: number;
+    skor_angka: number;
+    jawaban_siswa: Record<string, string[]>;
+    analisis_ai?: any;
+    pelanggaran_tab: number;
+    created_at?: string;
+    kode_soal?: string;
+  }
+>(params: {
+  results: TResult[];
+  students: {
+    id: number | string;
+    nama: string;
+    kelas: string;
+    token_ujian: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  }[];
+  exams: {
+    id: number | string;
+    judul_ujian: string;
+    acak_soal?: boolean;
+    acak_opsi?: boolean;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+  }[];
+  questions: {
+    id: number | string;
+    exam_id: number | string;
+    teks_soal: string;
+    tipe_soal: 'PG' | 'Kompleks' | string;
+    data_opsi: {
+      id_soal_csv?: string;
+      wacana?: string;
+      opsi: { A: string; B: string; C: string; D: string; E: string };
+      opsi_original_map?: Record<string, string>;
+      variasi_paket?: string;
+    };
+    kunci_jawaban: string[];
+    bobot: number;
+  }[];
+}): {
+  results: TResult[];
+  changedResults: TResult[];
+  updatedCount: number;
+} {
+  const changedResults: TResult[] = [];
+
+  const updatedList = (params.results || []).map((resItem) => {
+    const rawAns = resItem.jawaban_siswa || {};
+    const answeredKeys = Object.keys(rawAns).filter(
+      (k) => Array.isArray(rawAns[k]) && rawAns[k].length > 0
+    );
+    if (answeredKeys.length === 0) return resItem;
+
+    const student = params.students.find(
+      (s) => Number(s.id) === Number(resItem.student_id)
+    );
+    const exam = params.exams.find(
+      (e) => Number(e.id) === Number(resItem.exam_id)
+    );
+    const examQuestions = params.questions.filter(
+      (q) => Number(q.exam_id) === Number(resItem.exam_id)
+    );
+
+    if (examQuestions.length === 0) return resItem;
+
+    const canonicalAnswers = resolveSyncedStudentAnswersForExam({
+      questions: examQuestions,
+      jawabanSiswa: rawAns,
+      student: student || null,
+      exam: exam || null,
+      recordedScore: resItem.skor_angka,
+    });
+
+    const newSummary = calculateExamScore(examQuestions, canonicalAnswers);
+    // Humane guarantee: upgrade score with the new humane formula while never lowering an already-recorded score
+    const nextSkor = Math.max(
+      Number(resItem.skor_angka) || 0,
+      newSummary.normalizedScore
+    );
+
+    let nextKategori: ExamScoreSummary['kategoriNilai'] = 'Perlu Bimbingan (D)';
+    if (nextSkor >= 85) nextKategori = 'Sangat Baik (A)';
+    else if (nextSkor >= 70) nextKategori = 'Baik (B)';
+    else if (nextSkor >= 55) nextKategori = 'Cukup (C)';
+
+    const scoreChanged = nextSkor !== Number(resItem.skor_angka);
+    const aiChanged =
+      resItem.analisis_ai &&
+      (resItem.analisis_ai.skor_akhir !== nextSkor ||
+        resItem.analisis_ai.kategori_nilai !== nextKategori);
+    const answersChanged =
+      JSON.stringify(canonicalAnswers) !== JSON.stringify(rawAns);
+
+    if (!scoreChanged && !aiChanged && !answersChanged) {
+      return resItem;
+    }
+
+    const updatedItem: TResult = {
+      ...resItem,
+      skor_angka: nextSkor,
+      jawaban_siswa: canonicalAnswers,
+      analisis_ai: resItem.analisis_ai
+        ? {
+            ...resItem.analisis_ai,
+            skor_akhir: nextSkor,
+            kategori_nilai: nextKategori,
+          }
+        : null,
+    };
+
+    changedResults.push(updatedItem);
+    return updatedItem;
+  });
+
+  return {
+    results: updatedList,
+    changedResults,
+    updatedCount: changedResults.length,
+  };
 }
 
 
