@@ -29,7 +29,10 @@ import {
   resolveSyncedStudentAnswersForExam,
   resolveProportionalStudentExamPackage,
 } from '../utils/cbtLogic';
-import { downloadStudentTokenCardsPdf } from '../utils/cbtPdfGenerator';
+import {
+  downloadStudentTokenCardsPdf,
+  downloadSingleStudentResultPdf,
+} from '../utils/cbtPdfGenerator';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 
 interface ExamManagementTabProps {
@@ -669,20 +672,27 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       {viewMode === 'cards' && (
         <div className="space-y-6">
           {/* TABEL 1: Monitoring Siswa yang Sedang Ujian & Nilai Akhir */}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-            <div className="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-blue-600" />
-                  <span>Daftar Siswa, Status Ujian & Nilai Akhir</span>
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Menampilkan status real-time siswa kelas{' '}
-                  <strong className="text-slate-700">{selectedClass}</strong> beserta nilai akhir dan kontrol pembukaan kunci.
-                </p>
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-5 py-4 text-white">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                    <Users className="w-4 h-4 text-amber-300" />
+                    <span>Daftar Siswa, Status Ujian &amp; Nilai Akhir</span>
+                  </h3>
+                  <p className="text-xs text-blue-200/90 mt-0.5">
+                    Menampilkan status real-time siswa kelas{' '}
+                    <strong className="text-amber-300">{selectedClass}</strong> beserta nilai akhir, unduhan PDF pembahasan soal, dan kontrol pembukaan kunci.
+                  </p>
+                </div>
+                <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-[11px] font-mono font-bold text-amber-200">
+                  {filteredStudents.length} Peserta Ditampilkan
+                </span>
               </div>
+            </div>
 
-              {/* Search & Status Filter */}
+            {/* Search & Status Filter Bar */}
+            <div className="p-3.5 bg-gradient-to-r from-indigo-50/70 via-blue-50/50 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
@@ -691,14 +701,14 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                     value={studentSearch}
                     onChange={(e) => setStudentSearch(e.target.value)}
                     placeholder="Cari nama / token..."
-                    className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600"
+                    className="pl-8 pr-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
 
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer"
+                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer font-medium"
                 >
                   <option value="ALL">Semua Status</option>
                   <option value="Sedang Ujian">Sedang Ujian</option>
@@ -710,7 +720,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 <select
                   value={packageFilter}
                   onChange={(e) => setPackageFilter(e.target.value)}
-                  className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer font-mono font-semibold"
+                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer font-mono font-semibold"
                   aria-label="Filter Kode Soal Siswa"
                 >
                   <option value="ALL">Semua Paket</option>
@@ -719,49 +729,49 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                   <option value="PAKET-C">Paket C</option>
                   <option value="PAKET-D">Paket D</option>
                 </select>
-
-                {onBatchDistributePackages && (
-                  <button
-                    type="button"
-                    disabled={isDistributing || classStudents.length === 0}
-                    onClick={async () => {
-                      setIsDistributing(true);
-                      try {
-                        await onBatchDistributePackages(
-                          selectedClass !== 'ALL' ? selectedClass : undefined
-                        );
-                        setActionFeedback({
-                          type: 'success',
-                          message: `Berhasil membagi kode soal berselang-seling (Paket A / B) untuk ${
-                            selectedClass === 'ALL'
-                              ? 'seluruh kelas'
-                              : `kelas ${selectedClass}`
-                          }.`,
-                        });
-                      } catch {
-                        setActionFeedback({
-                          type: 'error',
-                          message: 'Gagal mendistribusikan paket soal ke siswa.',
-                        });
-                      } finally {
-                        setIsDistributing(false);
-                      }
-                    }}
-                    title="Bagi paket soal berselang-seling (A/B) untuk siswa kelas ini"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    <Shuffle className="w-3.5 h-3.5" />
-                    <span>
-                      {isDistributing ? 'Membagi Paket...' : 'Bagi Multi-Paket (A/B)'}
-                    </span>
-                  </button>
-                )}
               </div>
+
+              {onBatchDistributePackages && (
+                <button
+                  type="button"
+                  disabled={isDistributing || classStudents.length === 0}
+                  onClick={async () => {
+                    setIsDistributing(true);
+                    try {
+                      await onBatchDistributePackages(
+                        selectedClass !== 'ALL' ? selectedClass : undefined
+                      );
+                      setActionFeedback({
+                        type: 'success',
+                        message: `Berhasil membagi kode soal berselang-seling (Paket A / B) untuk ${
+                          selectedClass === 'ALL'
+                            ? 'seluruh kelas'
+                            : `kelas ${selectedClass}`
+                        }.`,
+                      });
+                    } catch {
+                      setActionFeedback({
+                        type: 'error',
+                        message: 'Gagal mendistribusikan paket soal ke siswa.',
+                      });
+                    } finally {
+                      setIsDistributing(false);
+                    }
+                  }}
+                  title="Bagi paket soal berselang-seling (A/B) untuk siswa kelas ini"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-800 bg-indigo-100/80 hover:bg-indigo-200/80 border border-indigo-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Shuffle className="w-3.5 h-3.5" />
+                  <span>
+                    {isDistributing ? 'Membagi Paket...' : 'Bagi Multi-Paket (A/B)'}
+                  </span>
+                </button>
+              )}
             </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
+                <thead className="bg-indigo-50/70 border-b border-indigo-100 text-indigo-950 font-bold uppercase tracking-wider text-[11px]">
                   <tr>
                     <th className="py-3 px-4 w-12 text-center">No</th>
                     <th className="py-3 px-4">Nama Siswa</th>
@@ -1601,11 +1611,60 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
               </div>
             )}
 
-            <div className="pt-3 border-t border-slate-200 flex justify-end">
+            <div className="pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              {selectedStudentForModal.result && (() => {
+                const modalExamObj =
+                  exams.find(
+                    (e) => Number(e.id) === Number(selectedStudentForModal.result?.exam_id)
+                  ) || activeExam || null;
+                const modalExamQuestions = questions.filter(
+                  (q) => Number(q.exam_id) === Number(selectedStudentForModal.result?.exam_id)
+                );
+                const questionsToDisplay =
+                  modalExamQuestions.length > 0 ? modalExamQuestions : examQuestions;
+                const modalSyncedAnswers =
+                  syncedStudentAnswersMap.get(selectedStudentForModal.student.id) ||
+                  selectedStudentForModal.result.jawaban_siswa ||
+                  {};
+
+                return (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadSingleStudentResultPdf({
+                        student: selectedStudentForModal.student,
+                        exam: modalExamObj,
+                        score: selectedStudentForModal.result!.skor_angka,
+                        kategori:
+                          selectedStudentForModal.result!.analisis_ai?.kategori_nilai ||
+                          (selectedStudentForModal.result!.skor_angka >= 85
+                            ? 'Sangat Baik (A)'
+                            : selectedStudentForModal.result!.skor_angka >= 70
+                              ? 'Baik (B)'
+                              : selectedStudentForModal.result!.skor_angka >= 55
+                                ? 'Cukup (C)'
+                                : 'Perlu Penguatan (D)'),
+                        answeredCount: Object.keys(modalSyncedAnswers).filter(
+                          (k) => modalSyncedAnswers[k]?.length > 0
+                        ).length,
+                        totalQuestions: questionsToDisplay.length,
+                        tabViolations: selectedStudentForModal.result!.pelanggaran_tab,
+                        aiAnalysis: selectedStudentForModal.result!.analisis_ai,
+                        questions: questionsToDisplay,
+                        studentAnswers: modalSyncedAnswers,
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download PDF Nilai &amp; Rincian Soal/Jawaban</span>
+                  </button>
+                );
+              })()}
               <button
                 type="button"
                 onClick={() => setSelectedStudentForModal(null)}
-                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer ml-auto"
               >
                 Tutup Lembar Jawaban
               </button>

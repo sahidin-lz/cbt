@@ -314,31 +314,34 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Banner & Filter Bar */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-          <div>
-            <div className="text-xs font-bold text-blue-700 uppercase tracking-wider">
-              Laboratorium Psikometri &amp; Evaluasi Pendidikan (Standar AnBuso)
-            </div>
-            <h2 className="text-lg font-extrabold text-slate-900 mt-0.5">
-              Analisis Butir Soal (AnBuso) &amp; Pemetaan Remedial Personal Siswa
-            </h2>
-            <p className="text-xs text-slate-600 mt-1 max-w-3xl leading-relaxed">
-              Evaluasi kualitas instrumen tes secara objektif berbasis respons empiris siswa (Tingkat Kesukaran{' '}
-              <span className="font-mono font-semibold text-slate-800">P</span>, Daya Beda{' '}
-              <span className="font-mono font-semibold text-slate-800">D</span>, Korelasi{' '}
-              <span className="font-mono font-semibold text-slate-800">r_pbi</span>, Efektivitas Pengecoh{' '}
-              <span className="font-mono font-semibold text-slate-800">A–E</span>, dan Reliabilitas Tes{' '}
-              <span className="font-mono font-semibold text-slate-800">Cronbach&apos;s Alpha</span>) serta petakan kebutuhan remedial personal setiap siswa per butir soal.
-            </p>
+      <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+        <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-5 text-white">
+          <div className="text-xs font-bold text-amber-300 uppercase tracking-wider">
+            Laboratorium Psikometri &amp; Evaluasi Pendidikan (Standar AnBuso)
           </div>
+          <h2 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
+            Analisis Butir Soal (AnBuso) &amp; Pemetaan Remedial Personal Siswa
+          </h2>
+          <p className="text-xs text-blue-200/90 mt-1 max-w-4xl leading-relaxed">
+            Evaluasi kualitas instrumen tes secara objektif berbasis respons empiris siswa (Tingkat Kesukaran{' '}
+            <span className="font-mono font-semibold text-amber-300">P</span>, Daya Beda{' '}
+            <span className="font-mono font-semibold text-amber-300">D</span>, Korelasi{' '}
+            <span className="font-mono font-semibold text-amber-300">r_pbi</span>, Efektivitas Pengecoh{' '}
+            <span className="font-mono font-semibold text-amber-300">A–E</span>, dan Reliabilitas Tes{' '}
+            <span className="font-mono font-semibold text-amber-300">Cronbach&apos;s Alpha</span>) serta petakan kebutuhan remedial personal setiap siswa per butir soal.
+          </p>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
+          <span className="text-xs font-bold text-indigo-950">
+            Ekspor Laporan Siap Cetak &amp; Kompatibel Microsoft Excel:
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => downloadAnBusoPdfReport(anBusoReport)}
               disabled={anBusoReport.items.length === 0}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap shadow-2xs"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Cetak Laporan AnBuso (.PDF)</span>
@@ -347,7 +350,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
               type="button"
               onClick={handleExportExcel}
               disabled={anBusoReport.items.length === 0}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap shadow-2xs"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>Download Workbook Excel (.xls)</span>
@@ -356,7 +359,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
               type="button"
               onClick={handleExportCsv}
               disabled={anBusoReport.items.length === 0}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 disabled:opacity-50 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Ekspor CSV</span>
@@ -364,6 +367,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
           </div>
         </div>
 
+        <div className="p-6 space-y-5">
         {/* Source Selector: Paket Ujian + Filter Kelas + KKM Quick Control */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
           <div>
@@ -587,6 +591,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
               Total Responden: {anBusoReport.summary.totalRespondents} Siswa
             </div>
           </div>
+        </div>
         </div>
       </div>
 
@@ -1054,18 +1059,24 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
       {/* STEP 3: PROSES ANALISIS OTOMATIS (KESUKARAN, DAYA BEDA & PENGECOH)     */}
       {/* ===================================================================== */}
       {activeStep === 'statistik_soal' && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                03. Tabel Analisis Statistik Butir Soal, Daya Beda, Efektivitas Pengecoh &amp; Keputusan Bank Soal
-              </h3>
-              <p className="text-xs text-slate-600 mt-0.5">
-                Penentuan kualitas soal didasarkan murni pada data empiris respons siswa: Indeks Kesukaran (<code className="font-mono">P</code>), Daya Beda Kelompok Atas vs Bawah (<code className="font-mono">D = PA - PB</code>), Korelasi Point-Biserial (<code className="font-mono">r_pbi</code>), dan sebaran pemilih pengecoh <code className="font-mono">A–E</code>.
-              </p>
+        <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+          <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+              Tahap 03 · Analisis Psikometri Otomatis
             </div>
+            <h3 className="text-base font-extrabold text-white mt-0.5">
+              03. Tabel Analisis Statistik Butir Soal, Daya Beda, Efektivitas Pengecoh &amp; Keputusan Bank Soal
+            </h3>
+            <p className="text-xs text-blue-200/90 mt-0.5 max-w-4xl">
+              Penentuan kualitas soal didasarkan murni pada data empiris respons siswa: Indeks Kesukaran (<code className="font-mono text-amber-300">P</code>), Daya Beda Kelompok Atas vs Bawah (<code className="font-mono text-amber-300">D = PA - PB</code>), Korelasi Point-Biserial (<code className="font-mono text-amber-300">r_pbi</code>), dan sebaran pemilih pengecoh <code className="font-mono text-amber-300">A–E</code>.
+            </p>
+          </div>
 
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
+            <span className="text-xs font-bold text-indigo-950">
+              Filter Kualitas &amp; Tingkat Kesukaran Butir Soal:
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
               {/* Filter Keputusan Bank Soal */}
               <select
                 aria-label="Filter Keputusan Bank Soal"
@@ -1108,15 +1119,16 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
             </div>
           </div>
 
+          <div className="p-6">
           {filteredItems.length === 0 ? (
             <div className="py-12 text-center text-xs text-slate-500">
               Tidak ada butir soal yang sesuai dengan filter kriteria di atas.
             </div>
           ) : (
-            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <div className="overflow-x-auto border border-indigo-100 rounded-xl">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-slate-100 border-b border-slate-200 text-slate-700">
+                  <tr className="bg-indigo-50/80 border-b border-indigo-100 text-indigo-950">
                     <th className="py-3 px-3 font-bold text-center w-12">No</th>
                     <th className="py-3 px-3 font-bold min-w-[210px]">
                       Butir Soal &amp; Indikator Materi
@@ -1300,6 +1312,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
               </table>
             </div>
           )}
+          </div>
         </div>
       )}
 
@@ -1377,18 +1390,24 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
           </div>
 
           {/* Tabel Pemetaan Remedial Personal per Siswa (Prinsip 2 AnBuso) */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  04B. Pemetaan Kebutuhan Remedial Personal Siswa per Butir Soal ({filteredRemedialStudents.length} Siswa)
-                </h3>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Memetakan secara spesifik <strong>nomor butir soal dan konsep materi apa</strong> yang belum dipahami oleh masing-masing siswa secara individu, bukan sekadar melihat nilai akhir.
-                </p>
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                Tahap 04B · Pemetaan Diagnostik Individual
               </div>
+              <h3 className="text-base font-extrabold text-white mt-0.5">
+                04B. Pemetaan Kebutuhan Remedial Personal Siswa per Butir Soal ({filteredRemedialStudents.length} Siswa)
+              </h3>
+              <p className="text-xs text-blue-200/90 mt-0.5 max-w-4xl">
+                Memetakan secara spesifik <strong className="text-amber-300">nomor butir soal dan konsep materi apa</strong> yang belum dipahami oleh masing-masing siswa secara individu, bukan sekadar melihat nilai akhir.
+              </p>
+            </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
+              <span className="text-xs font-bold text-indigo-950">
+                Pencarian &amp; Filter Status Ketuntasan Siswa:
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
@@ -1417,15 +1436,16 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
               </div>
             </div>
 
+            <div className="p-6">
             {filteredRemedialStudents.length === 0 ? (
               <div className="py-12 text-center text-xs text-slate-500">
                 Tidak ada data siswa yang sesuai dengan pencarian/filter di atas.
               </div>
             ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <div className="overflow-x-auto border border-indigo-100 rounded-xl">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
-                    <tr className="bg-slate-100 border-b border-slate-200 text-slate-700">
+                    <tr className="bg-indigo-50/80 border-b border-indigo-100 text-indigo-950">
                       <th className="py-3 px-3 font-bold text-center w-10">No</th>
                       <th className="py-3 px-3 font-bold min-w-[180px]">
                         Nama Siswa &amp; Kelas
@@ -1533,6 +1553,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                 </table>
               </div>
             )}
+            </div>
           </div>
         </div>
       )}

@@ -1,6 +1,12 @@
 import { jsPDF } from 'jspdf';
-import { StudentItem, ResultItem, ExamItem, AnalisisAI } from '../types/cbt';
-import { extractTingkatFromKelas } from './cbtLogic';
+import {
+  StudentItem,
+  ResultItem,
+  ExamItem,
+  AnalisisAI,
+  QuestionItem,
+} from '../types/cbt';
+import { extractTingkatFromKelas, calculateExamScore } from './cbtLogic';
 
 export interface TokenCardPdfOptions {
   title?: string;
@@ -21,6 +27,20 @@ export interface SingleStudentResultPdfParams {
   tabViolations?: number;
   aiAnalysis?: AnalisisAI | null;
   submittedAt?: string;
+  questions?: QuestionItem[];
+  studentAnswers?: Record<string, string[]>;
+}
+
+function stripMarkupForPdf(input: string | undefined | null): string {
+  if (!input) return '-';
+  const stripped = String(input)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\$+/g, '')
+    .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1/$2)')
+    .replace(/\\sqrt\{([^}]+)\}/g, 'sqrt($1)')
+    .replace(/\\[a-zA-Z]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  return cleanPdfText(stripped);
 }
 
 /**
@@ -572,6 +592,8 @@ export function downloadSingleStudentResultPdf(
     tabViolations = 0,
     aiAnalysis,
     submittedAt,
+    questions = [],
+    studentAnswers = {},
   } = params;
 
   const doc = new jsPDF({
@@ -858,43 +880,325 @@ export function downloadSingleStudentResultPdf(
     });
   } else {
     // Summary Verification Box when AI Evaluation has not been generated yet
+    const evalSummary =
+      questions.length > 0
+        ? calculateExamScore(questions, studentAnswers)
+        : null;
+    const fullRightCount = evalSummary
+      ? evalSummary.breakdown.filter((b) => b.status === 'Benar Penuh').length
+      : 0;
+    const partialRightCount = evalSummary
+      ? evalSummary.breakdown.filter((b) => b.status === 'Benar Sebagian')
+          .length
+      : 0;
+    const wrongOrEmptyCount = evalSummary
+      ? evalSummary.breakdown.filter((b) => b.status === 'Salah').length
+      : 0;
+
     doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(226, 232, 240);
-    doc.roundedRect(marginX, y, contentWidth, 36, 2, 2, 'FD');
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(marginX, y, contentWidth, 38, 2, 2, 'FD');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(30, 58, 138);
-    doc.text('KETERANGAN BUKTI HASIL UJIAN CBT SOSIOLOGI', marginX + 5, y + 8);
+    doc.text(
+      'RINGKASAN CAPAIAN BUTIR SOAL & BUKTI HASIL UJIAN CBT',
+      marginX + 5,
+      y + 7.5
+    );
+
+    if (evalSummary) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(6, 95, 70);
+      doc.text(
+        `Benar Penuh: ${fullRightCount} Soal`,
+        marginX + 5,
+        y + 14.5
+      );
+      doc.setTextColor(180, 83, 9);
+      doc.text(
+        `Benar Sebagian (PGK): ${partialRightCount} Soal`,
+        marginX + 52,
+        y + 14.5
+      );
+      doc.setTextColor(190, 18, 60);
+      doc.text(
+        `Salah / Kosong: ${wrongOrEmptyCount} Soal`,
+        marginX + 114,
+        y + 14.5
+      );
+    }
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFontSize(7.8);
     doc.setTextColor(71, 85, 105);
     const noteLines = doc.splitTextToSize(
-      'Dokumen ini adalah bukti sah penyelesaian sesi ujian berbasis komputer (CBT Sosiologi SMA). Skor akhir dihitung secara otomatis dan terkunci di dalam sistem database sekolah. Sesuai kebijakan keamanan ujian, rincian kunci jawaban per butir soal bersifat rahasia dan hanya menampilkan skor akhir serta predikat capaian peserta.',
+      'Dokumen ini merupakan bukti resmi penyelesaian ujian CBT beserta rincian lengkap lembar jawaban siswa per butir soal di halaman berikutnya agar siswa dapat mempelajari kembali letak jawaban benar maupun konsep yang masih keliru.',
       contentWidth - 10
     );
-    doc.text(noteLines, marginX + 5, y + 15);
+    doc.text(noteLines, marginX + 5, y + (evalSummary ? 21 : 15));
   }
 
-  // Footer Stamp
-  doc.setDrawColor(226, 232, 240);
-  doc.line(marginX, 272, pageWidth - marginX, 272);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.setTextColor(71, 85, 105);
-  doc.text(
-    'Dokumen Resmi CBT Sosiologi SMA — Terverifikasi Secara Digital',
-    marginX,
-    278
-  );
-  doc.setFont('courier', 'normal');
-  doc.setFontSize(7);
-  doc.text(
-    `ID Token: ${cleanPdfText(student.token_ujian)} | Skor: ${score}/100`,
-    pageWidth - marginX,
-    278,
-    { align: 'right' }
-  );
+  // Page 1 Footer Stamp
+  const drawPageFooter = (pageNum: number) => {
+    doc.setDrawColor(226, 232, 240);
+    doc.line(marginX, 281, pageWidth - marginX, 281);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.2);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `Dokumen Resmi CBT — ${cleanPdfText(student.nama)} (${cleanPdfText(student.kelas)})`,
+      marginX,
+      285.5
+    );
+    doc.setFont('courier', 'normal');
+    doc.setFontSize(7);
+    doc.text(
+      `Token: ${cleanPdfText(student.token_ujian)} | Skor: ${score}/100 | Hal. ${pageNum}`,
+      pageWidth - marginX,
+      285.5,
+      { align: 'right' }
+    );
+  };
+
+  let currentPageNumber = 1;
+  drawPageFooter(currentPageNumber);
+
+  // =========================================================================
+  // HALAMAN RINCIAN SOAL, OPSI JAWABAN SISWA, KUNCI & STATUS BENAR/SALAH
+  // =========================================================================
+  if (questions && questions.length > 0) {
+    const scoreBreakdown = calculateExamScore(questions, studentAnswers);
+    const breakdownMap = new Map<string, (typeof scoreBreakdown.breakdown)[0]>();
+    scoreBreakdown.breakdown.forEach((b) =>
+      breakdownMap.set(String(b.questionId), b)
+    );
+
+    const drawReviewPageHeader = () => {
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.4);
+      doc.roundedRect(8, 8, pageWidth - 16, 281, 3, 3, 'S');
+
+      doc.setFillColor(30, 58, 138);
+      doc.roundedRect(10, 10, pageWidth - 20, 18, 2, 2, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10.5);
+      doc.setTextColor(255, 255, 255);
+      doc.text(
+        'RINCIAN LEMBAR JAWABAN SISWA, TEKS SOAL & PEMBAHASAN KUNCI JAWABAN',
+        marginX,
+        17.5
+      );
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.8);
+      doc.setTextColor(219, 234, 254);
+      doc.text(
+        `Peserta: ${cleanPdfText(student.nama)} (${cleanPdfText(student.kelas)})  |  Ujian: ${cleanPdfText(exam?.judul_ujian || 'CBT')}  |  Nilai Akhir: ${score}/100  |  Poin Mentah: ${scoreBreakdown.rawEarned}/${scoreBreakdown.rawMax}`,
+        marginX,
+        23.5
+      );
+      return 33;
+    };
+
+    doc.addPage('a4', 'portrait');
+    currentPageNumber++;
+    let curY = drawReviewPageHeader();
+
+    // Legend Box at top of first review page
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(marginX, curY, contentWidth, 8, 1.5, 1.5, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(6, 95, 70);
+    doc.text('[BENAR PENUH] = Jawaban Tepat 100%', marginX + 3, curY + 5.2);
+    doc.setTextColor(180, 83, 9);
+    doc.text(
+      '[BENAR SEBAGIAN] = Dapat Poin Parsial (PG Kompleks)',
+      marginX + 60,
+      curY + 5.2
+    );
+    doc.setTextColor(190, 18, 60);
+    doc.text(
+      '[SALAH / KOSONG] = Belum Tepat (0 Poin)',
+      marginX + 132,
+      curY + 5.2
+    );
+    curY += 11;
+
+    const optionKeys: ('A' | 'B' | 'C' | 'D' | 'E')[] = ['A', 'B', 'C', 'D', 'E'];
+
+    questions.forEach((q, idx) => {
+      const qIdStr = String(q.id);
+      const qEval = breakdownMap.get(qIdStr);
+      const chosenRaw = studentAnswers[qIdStr] || [];
+      const chosen = Array.isArray(chosenRaw)
+        ? chosenRaw.map((c) => c.toUpperCase().trim())
+        : [];
+      const correctKeys = (q.kunci_jawaban || []).map((k) =>
+        k.toUpperCase().trim()
+      );
+      const status = qEval?.status || 'Salah';
+      const earned = qEval?.earnedPoints ?? 0;
+      const maxPts = qEval?.maxPoints ?? (q.tipe_soal === 'Kompleks' ? 3 : 2);
+      const isKompleks = (q.tipe_soal || '').toLowerCase().includes('kompleks');
+
+      // Prepare question text lines
+      const qTextClean = stripMarkupForPdf(q.teks_soal);
+      const qTextLines = doc.splitTextToSize(
+        qTextClean,
+        contentWidth - 8
+      ) as string[];
+      const cappedQTextLines = qTextLines.slice(0, 5);
+
+      // Prepare options lines
+      const optRows: Array<{
+        key: 'A' | 'B' | 'C' | 'D' | 'E';
+        lines: string[];
+        isChosen: boolean;
+        isKey: boolean;
+      }> = [];
+
+      optionKeys.forEach((optKey) => {
+        const rawOpt = q.data_opsi?.opsi?.[optKey];
+        if (!rawOpt && rawOpt !== '') return;
+        const isChosen = chosen.includes(optKey);
+        const isKey = correctKeys.includes(optKey);
+
+        let tagSuffix = '';
+        if (isChosen && isKey) {
+          tagSuffix = '  [Dipilih Siswa - BENAR]';
+        } else if (isChosen && !isKey) {
+          tagSuffix = '  [Dipilih Siswa - KURANG TEPAT]';
+        } else if (!isChosen && isKey) {
+          tagSuffix = '  [Kunci Jawaban Benar]';
+        }
+
+        const optClean = `${optKey}. ${stripMarkupForPdf(rawOpt)}${tagSuffix}`;
+        const wrappedOpt = doc.splitTextToSize(
+          optClean,
+          contentWidth - 14
+        ) as string[];
+        optRows.push({
+          key: optKey,
+          lines: wrappedOpt.slice(0, 2),
+          isChosen,
+          isKey,
+        });
+      });
+
+      const totalOptLines = optRows.reduce((acc, r) => acc + r.lines.length, 0);
+      const cardHeight =
+        8 +
+        cappedQTextLines.length * 3.6 +
+        totalOptLines * 3.5 +
+        optRows.length * 1.1 +
+        8;
+
+      if (curY + cardHeight > 276) {
+        drawPageFooter(currentPageNumber);
+        doc.addPage('a4', 'portrait');
+        currentPageNumber++;
+        curY = drawReviewPageHeader();
+      }
+
+      // Card background & border based on status
+      if (status === 'Benar Penuh') {
+        doc.setFillColor(240, 253, 244);
+        doc.setDrawColor(134, 239, 172);
+      } else if (status === 'Benar Sebagian') {
+        doc.setFillColor(255, 251, 235);
+        doc.setDrawColor(252, 211, 77);
+      } else {
+        doc.setFillColor(255, 241, 242);
+        doc.setDrawColor(253, 164, 175);
+      }
+      doc.setLineWidth(0.35);
+      doc.roundedRect(marginX, curY, contentWidth, cardHeight, 2, 2, 'FD');
+
+      // Card Header Strip
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(
+        `Soal #${idx + 1}  (${isKompleks ? 'PG Kompleks / Multi-Jawaban' : 'Pilihan Ganda'})`,
+        marginX + 3.5,
+        curY + 5.2
+      );
+
+      // Status & Points Badge on Right
+      const statusLabel =
+        status === 'Benar Penuh'
+          ? `BENAR PENUH (+${earned}/${maxPts} Poin)`
+          : status === 'Benar Sebagian'
+          ? `BENAR SEBAGIAN (+${earned}/${maxPts} Poin)`
+          : `SALAH / BELUM TEPAT (0/${maxPts} Poin)`;
+
+      if (status === 'Benar Penuh') {
+        doc.setTextColor(6, 95, 70);
+      } else if (status === 'Benar Sebagian') {
+        doc.setTextColor(180, 83, 9);
+      } else {
+        doc.setTextColor(190, 18, 60);
+      }
+      doc.text(statusLabel, marginX + contentWidth - 3.5, curY + 5.2, {
+        align: 'right',
+      });
+
+      // Question text
+      let innerY = curY + 9.5;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.6);
+      doc.setTextColor(30, 41, 59);
+      doc.text(cappedQTextLines, marginX + 4, innerY);
+      innerY += cappedQTextLines.length * 3.6 + 1.2;
+
+      // Options A-E
+      optRows.forEach((optRow) => {
+        if (optRow.isChosen && optRow.isKey) {
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(6, 95, 70); // Green
+        } else if (optRow.isChosen && !optRow.isKey) {
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(190, 18, 60); // Red
+        } else if (!optRow.isChosen && optRow.isKey) {
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(29, 78, 216); // Blue highlight for missed key
+        } else {
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(71, 85, 105);
+        }
+        doc.setFontSize(7.2);
+        doc.text(optRow.lines, marginX + 7, innerY);
+        innerY += optRow.lines.length * 3.5 + 1.1;
+      });
+
+      // Summary Footer inside Question Card
+      doc.setDrawColor(203, 213, 225);
+      doc.line(
+        marginX + 3.5,
+        innerY - 0.5,
+        marginX + contentWidth - 3.5,
+        innerY - 0.5
+      );
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7.2);
+      doc.setTextColor(15, 23, 42);
+      const chosenDisplay =
+        chosen.length > 0 ? chosen.join(', ') : '(Tidak Dijawab / Kosong)';
+      const keyDisplay = correctKeys.join(', ');
+      doc.text(
+        `Jawaban Siswa: [ ${chosenDisplay} ]    |    Kunci Jawaban: [ ${keyDisplay} ]`,
+        marginX + 4,
+        innerY + 3.5
+      );
+
+      curY += cardHeight + 3.2;
+    });
+
+    drawPageFooter(currentPageNumber);
+  }
 
   const safeName = cleanPdfText(student.nama)
     .toLowerCase()

@@ -53,6 +53,7 @@ import {
   computeClassAnalytics,
   classifyQuestionCognitiveLevel,
   assignPackageVariantsToStudents,
+  resolveSyncedStudentAnswersForExam,
   SOSIOLOGI_EXAM_CATEGORIES,
 } from '../utils/cbtLogic';
 import {
@@ -1726,8 +1727,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // ============================================================================
   if (!isAuthenticated) {
     return (
-      <div className="max-w-md mx-auto py-12 px-4 sm:px-6">
-        <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6 shadow-2xs">
+      <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6">
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xs">
           <div className="border-b border-slate-100 pb-4">
             <div className="flex items-center gap-2 text-slate-600 text-xs font-semibold uppercase tracking-wider">
               <Lock className="w-3.5 h-3.5 text-blue-600" />
@@ -2487,44 +2488,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Tabel Daftar Paket Ujian per Tingkatan */}
-            <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
-                <h2 className="text-base font-bold text-slate-900">
-                  Daftar Distribusi Paket Ujian ({filteredExams.length})
-                </h2>
-
-                {/* Filter Bar: Tingkatan, Kategori, & Status */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Segmented Filter per Tingkatan */}
-                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
-                    {(
-                      [
-                        ['SEMUA', 'Semua'],
-                        ['10', 'Tingkat 1 (X)'],
-                        ['11', 'Tingkat 2 (XI)'],
-                        ['12', 'Tingkat 3 (XII)'],
-                      ] as const
-                    ).map(([val, label]) => (
-                      <button
-                        key={val}
-                        type="button"
-                        onClick={() => setFilterExamTingkat(val)}
-                        className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                          filterExamTingkat === val
-                            ? 'bg-white text-slate-900 shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
+            <div className="lg:col-span-8 bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+              <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                    Manajemen Sesi &amp; Distribusi Paket
                   </div>
+                  <h2 className="text-base font-extrabold text-white mt-0.5">
+                    Daftar Distribusi Paket Ujian ({filteredExams.length} Paket)
+                  </h2>
+                </div>
+                <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200">
+                  Total Soal: {questions.length} Butir
+                </span>
+              </div>
 
+              {/* Dedicated Full-Width Filter Bar: Tingkatan, Kategori, & Status */}
+              <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
+                {/* Segmented Filter per Tingkatan */}
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-white rounded-lg border border-indigo-200 shadow-2xs">
+                  {(
+                    [
+                      ['SEMUA', 'Semua'],
+                      ['10', 'Tingkat 1 (X)'],
+                      ['11', 'Tingkat 2 (XI)'],
+                      ['12', 'Tingkat 3 (XII)'],
+                    ] as const
+                  ).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setFilterExamTingkat(val)}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                        filterExamTingkat === val
+                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
                   {/* Filter Status Ujian */}
                   <select
                     value={filterExamStatus}
                     onChange={(e) => setFilterExamStatus(e.target.value)}
-                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg cursor-pointer"
+                    className="px-3 py-1.5 text-xs font-semibold bg-white border border-indigo-200 rounded-lg cursor-pointer text-slate-800"
                     aria-label="Filter Status Ujian"
                   >
                     <option value="SEMUA">Semua Status</option>
@@ -2537,7 +2548,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <select
                     value={filterExamKategori}
                     onChange={(e) => setFilterExamKategori(e.target.value)}
-                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg cursor-pointer"
+                    className="px-3 py-1.5 text-xs font-semibold bg-white border border-indigo-200 rounded-lg cursor-pointer text-slate-800"
                     aria-label="Filter Kategori Momen Ujian"
                   >
                     <option value="SEMUA">Semua Kategori Momen</option>
@@ -2550,6 +2561,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
+              <div className="p-6">
               {filteredExams.length === 0 ? (
                 <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
                   <p className="text-sm font-semibold text-slate-700">
@@ -2561,16 +2573,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <div className="overflow-x-auto border border-indigo-100 rounded-xl">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                        <th className="py-3 px-4">Judul & Kode Paket</th>
-                        <th className="py-3 px-4">Kategori & Status Sesi</th>
-                        <th className="py-3 px-4">Distribusi Tingkat & Rombel</th>
+                      <tr className="bg-indigo-50/80 border-b border-indigo-100 text-xs font-bold text-indigo-950">
+                        <th className="py-3 px-4">Judul &amp; Kode Paket</th>
+                        <th className="py-3 px-4">Kategori &amp; Status Sesi</th>
+                        <th className="py-3 px-4">Distribusi Tingkat &amp; Rombel</th>
                         <th className="py-3 px-4 text-right">Durasi</th>
                         <th className="py-3 px-4 text-right">Bank Soal</th>
-                        <th className="py-3 px-4 text-right">Aksi Sesi & Distribusi</th>
+                        <th className="py-3 px-4 text-right">Aksi Sesi &amp; Distribusi</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 text-sm">
@@ -2741,6 +2753,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </table>
                 </div>
               )}
+              </div>
             </div>
           </div>
 
@@ -2781,15 +2794,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'siswa' && (
         <div className="space-y-6">
           {/* Panel Manajemen Kelas / Rombel (Tambah Kelas, Ubah Nama Kelas, Download per Kelas) */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
-                <h2 className="text-base font-bold text-slate-900">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                  Administrasi Rombongan Belajar
+                </div>
+                <h2 className="text-base font-extrabold text-white mt-0.5">
                   Manajemen Kelas / Rombel (Kelas X, XI, XII)
                 </h2>
-                <p className="text-xs text-slate-600 mt-0.5">
+                <p className="text-xs text-blue-200/90 mt-0.5">
                   Buat daftar kelas/rombel baru, ubah nama kelas secara massal,
-                  reset status ujian satu kelas penuh, atau unduh daftar siswa &
+                  reset status ujian satu kelas penuh, atau unduh daftar siswa &amp;
                   token per kelas maupun semua kelas.
                 </p>
               </div>
@@ -2804,11 +2820,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   value={newClassNameInput}
                   onChange={(e) => setNewClassNameInput(e.target.value)}
                   placeholder="Tambah Kelas (misal: X SOS 1)"
-                  className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="px-3 py-2 text-xs text-slate-900 bg-white border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400"
                 />
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-lg cursor-pointer shadow-xs"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Tambah Kelas
@@ -2816,18 +2832,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </form>
             </div>
 
+            <div className="p-5">
             {classAnalyticsData.perClass.length > 0 && (
-              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <div className="overflow-x-auto border border-indigo-100 rounded-xl">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                    <tr className="bg-indigo-50/80 border-b border-indigo-100 text-xs font-bold text-indigo-950">
                       <th className="py-2.5 px-3.5">Nama Kelas / Rombel</th>
                       <th className="py-2.5 px-3.5">Tingkatan</th>
                       <th className="py-2.5 px-3.5 text-right">Jumlah Siswa</th>
                       <th className="py-2.5 px-3.5">Status Ujian Kelas</th>
                       <th className="py-2.5 px-3.5 text-right">Rata-Rata Nilai</th>
                       <th className="py-2.5 px-3.5 text-right">
-                        Aksi Manajemen Kelas & Download
+                        Aksi Manajemen Kelas &amp; Download
                       </th>
                     </tr>
                   </thead>
@@ -2963,82 +2980,84 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </table>
               </div>
             )}
+            </div>
           </div>
 
           {/* Baris Ringkasan & Manajemen Status Ujian Siswa */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-              <div>
-                <h2 className="text-base font-bold text-slate-900">
-                  Manajemen Status Ujian Siswa & Export Excel Terpisah per Kolom
-                </h2>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Pantau dan kelola status peserta ujian secara real-time: buka
-                  kunci siswa yang terblokir Anti-Cheat, reset status siswa yang
-                  sudah selesai agar bisa login ulang, atau unduh daftar Nama,
-                  Kelas & Token dalam kolom Excel terpisah.
-                </p>
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-6 py-4 text-white">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                Kontrol Status Peserta &amp; Kartu Token Ujian
               </div>
+              <h2 className="text-base font-extrabold text-white mt-0.5">
+                Manajemen Status Ujian Siswa &amp; Export Excel Terpisah per Kolom
+              </h2>
+              <p className="text-xs text-blue-200/90 mt-0.5 max-w-4xl">
+                Pantau dan kelola status peserta ujian secara real-time: buka
+                kunci siswa yang terblokir Anti-Cheat, reset status siswa yang
+                sudah selesai agar bisa login ulang, atau unduh daftar Nama,
+                Kelas &amp; Token dalam kolom Excel terpisah maupun PDF Kartu Token.
+              </p>
+            </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                disabled={filteredStudents.length === 0}
+                onClick={() =>
+                  downloadStudentTokenCardsPdf(filteredStudents, {
+                    kelasLabel:
+                      filterKelas !== 'SEMUA'
+                        ? `Kelas ${filterKelas}`
+                        : 'Semua Kelas',
+                    exams,
+                    results,
+                    includeSummaryPage: true,
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all cursor-pointer shadow-2xs"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>
+                  {filterKelas !== 'SEMUA'
+                    ? `Download Kartu Token & Nilai Kelas ${filterKelas} (.PDF)`
+                    : 'Download Kartu Token & Nilai (.PDF)'}
+                </span>
+              </button>
+              {filterKelas !== 'SEMUA' && (
                 <button
                   type="button"
-                  disabled={filteredStudents.length === 0}
                   onClick={() =>
-                    downloadStudentTokenCardsPdf(filteredStudents, {
-                      kelasLabel:
-                        filterKelas !== 'SEMUA'
-                          ? `Kelas ${filterKelas}`
-                          : 'Semua Kelas',
-                      exams,
-                      results,
-                      includeSummaryPage: true,
-                    })
+                    handleDownloadClassStudentsExcel(filterKelas)
                   }
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all cursor-pointer shadow-2xs"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>
-                    {filterKelas !== 'SEMUA'
-                      ? `Download Kartu Token & Nilai Kelas ${filterKelas} (.PDF)`
-                      : 'Download Kartu Token & Nilai (.PDF)'}
-                  </span>
+                  Download Siswa Kelas {filterKelas} (.xls)
                 </button>
-                {filterKelas !== 'SEMUA' && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleDownloadClassStudentsExcel(filterKelas)
-                    }
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Download Siswa Kelas {filterKelas} (.xls)
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleExportStudentsExcel}
-                  disabled={students.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Download Semua Siswa &amp; Token (.xls)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleBulkUpdateStudentStatus('Belum Mulai')}
-                  disabled={filteredStudents.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  Reset Status ke &ldquo;Belum Mulai&rdquo;
-                </button>
-              </div>
+              )}
+              <button
+                type="button"
+                onClick={handleExportStudentsExcel}
+                disabled={students.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download Semua Siswa &amp; Token (.xls)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBulkUpdateStudentStatus('Belum Mulai')}
+                disabled={filteredStudents.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset Status ke &ldquo;Belum Mulai&rdquo;
+              </button>
             </div>
 
             {/* Filter & Indikator 4 Status Ujian Siswa */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-2 border-t border-slate-100">
+            <div className="p-5 grid grid-cols-2 sm:grid-cols-5 gap-2.5">
               {(
                 [
                   ['SEMUA', 'Semua Status', students.length, 'text-slate-900'],
@@ -3364,49 +3383,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Tabel Database Siswa (Dengan Filter 3 Tingkatan, Kelas & Manajemen Status) */}
-            <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+            <div className="lg:col-span-7 bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+              <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                    Daftar Peserta &amp; Kode Paket Terkunci
+                  </div>
+                  <h2 className="text-base font-extrabold text-white mt-0.5">
                     Database Siswa ({filteredStudents.length} Peserta)
                   </h2>
                 </div>
+                <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200">
+                  {uniqueClasses.length} Kelas / Rombel
+                </span>
+              </div>
+
+              <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
+                {/* Filter 3 Tingkatan */}
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-white rounded-lg border border-indigo-200 shadow-2xs">
+                  {(
+                    [
+                      ['SEMUA', 'Semua'],
+                      ['10', 'Kelas X'],
+                      ['11', 'Kelas XI'],
+                      ['12', 'Kelas XII'],
+                    ] as const
+                  ).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => {
+                        setFilterStudentTingkat(val);
+                        setFilterKelas('SEMUA');
+                      }}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                        filterStudentTingkat === val
+                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {/* Filter 3 Tingkatan */}
-                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
-                    {(
-                      [
-                        ['SEMUA', 'Semua'],
-                        ['10', 'Kelas X'],
-                        ['11', 'Kelas XI'],
-                        ['12', 'Kelas XII'],
-                      ] as const
-                    ).map(([val, label]) => (
-                      <button
-                        key={val}
-                        type="button"
-                        onClick={() => {
-                          setFilterStudentTingkat(val);
-                          setFilterKelas('SEMUA');
-                        }}
-                        className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                          filterStudentTingkat === val
-                            ? 'bg-white text-slate-900 shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-
                   {uniqueClasses.length > 0 && (
                     <select
                       aria-label="Filter Rombel Siswa"
                       value={filterKelas}
                       onChange={(e) => setFilterKelas(e.target.value)}
-                      className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                      className="px-3 py-1.5 text-xs font-semibold bg-white border border-indigo-200 rounded-lg text-slate-800"
                     >
                       <option value="SEMUA">Semua Rombel</option>
                       {uniqueClasses.map((kls) => (
@@ -3426,7 +3453,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       )
                     }
                     title="Bagi varian paket berselang-seling (Paket A, Paket B) agar teman sekelas/sebangku mendapat paket berbeda"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-800 bg-indigo-100/80 hover:bg-indigo-200/80 border border-indigo-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                   >
                     <Shuffle className="w-3.5 h-3.5" />
                     <span>
@@ -3438,6 +3465,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
+              <div className="p-6">
               {filteredStudents.length === 0 ? (
                 <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
                   <p className="text-sm font-semibold text-slate-700">
@@ -3632,6 +3660,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </table>
                 </div>
               )}
+              </div>
             </div>
           </div>
         </div>
@@ -3758,36 +3787,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {!isBankSoalDetailOpen && exams.length > 0 ? (
-            <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+            <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+              <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                    Repositori Instrumen Ujian Sosiologi
+                  </div>
+                  <h2 className="text-lg font-extrabold text-white mt-0.5">
                     Daftar Bank Soal Ujian ({exams.length} Paket Bank Soal · Total {questions.length} Butir Soal)
                   </h2>
-                  <p className="text-xs text-slate-600 mt-0.5">
-                    Pilih atau klik salah satu <strong>Bank Soal</strong> di bawah ini untuk melihat seluruh daftar butir soal, kunci jawaban, menambah/upload soal, atau menghapus bank soal.
+                  <p className="text-xs text-blue-200/90 mt-0.5">
+                    Pilih atau klik salah satu <strong className="text-amber-300">Bank Soal</strong> di bawah ini untuk melihat seluruh daftar butir soal, kunci jawaban, menambah/upload soal, atau menghapus bank soal.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setActiveTab('ujian')}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-lg transition-colors shrink-0 cursor-pointer shadow-xs"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Buat Paket Bank Soal Baru
                 </button>
               </div>
 
-              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <div className="p-6">
+              <div className="overflow-x-auto border border-indigo-100 rounded-xl">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                    <tr className="bg-indigo-50/80 border-b border-indigo-100 text-xs font-bold text-indigo-950">
                       <th className="py-3.5 px-4">Nama Bank Soal / Paket Ujian</th>
                       <th className="py-3.5 px-4">Target Distribusi Kelas</th>
                       <th className="py-3.5 px-4 text-right">Durasi</th>
                       <th className="py-3.5 px-4 text-right">Jumlah Butir Soal</th>
-                      <th className="py-3.5 px-4">Komposisi Tipe & Kognitif</th>
-                      <th className="py-3.5 px-4 text-right">Aksi & Hapus Bank Soal</th>
+                      <th className="py-3.5 px-4">Komposisi Tipe &amp; Kognitif</th>
+                      <th className="py-3.5 px-4 text-right">Aksi &amp; Hapus Bank Soal</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-sm">
@@ -3887,6 +3920,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     })}
                   </tbody>
                 </table>
+              </div>
               </div>
             </div>
           ) : (
@@ -4445,40 +4479,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               showUploadPanel ? 'lg:col-span-7' : 'lg:col-span-12'
             } bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all duration-200`}
           >
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-base font-bold text-slate-900">
-                    Manajemen & Tinjauan Soal:{' '}
-                    {currentExam ? currentExam.judul_ujian : 'Belum Ada Ujian'} (
-                    {currentExamQuestions.length} Butir)
-                  </h2>
-                  {!showUploadPanel && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-full">
-                      <Maximize2 className="w-3 h-3" />
-                      Mode Tinjau Layar Penuh (12 Kolom)
-                    </span>
+            <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 -mx-6 -mt-6 px-6 py-4 text-white rounded-t-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-base font-extrabold text-white">
+                      Manajemen &amp; Tinjauan Soal:{' '}
+                      {currentExam ? currentExam.judul_ujian : 'Belum Ada Ujian'} (
+                      {currentExamQuestions.length} Butir)
+                    </h2>
+                    {!showUploadPanel && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold text-amber-950 bg-amber-300 rounded-full">
+                        <Maximize2 className="w-3 h-3" />
+                        Mode Tinjau Layar Penuh (12 Kolom)
+                      </span>
+                    )}
+                  </div>
+                  {currentExam && (
+                    <p className="text-xs text-blue-200 font-medium mt-0.5">
+                      Distribusi:{' '}
+                      {formatDistribusiLabel(
+                        currentExam.target_tingkat,
+                        currentExam.target_kelas
+                      )}
+                    </p>
                   )}
                 </div>
-                {currentExam && (
-                  <p className="text-xs text-blue-700 font-medium mt-0.5">
-                    Distribusi:{' '}
-                    {formatDistribusiLabel(
-                      currentExam.target_tingkat,
-                      currentExam.target_kelas
-                    )}
-                  </p>
-                )}
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/15">
                 <button
                   type="button"
                   onClick={() => setShowUploadPanel((prev) => !prev)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors cursor-pointer ${
                     showUploadPanel
-                      ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border-indigo-200'
-                      : 'text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-200'
+                      ? 'text-white bg-white/15 hover:bg-white/25 border-white/25'
+                      : 'text-slate-950 bg-amber-400 hover:bg-amber-300 border-amber-300'
                   }`}
                 >
                   {showUploadPanel ? (
@@ -4506,7 +4542,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="button"
                   onClick={handleExportQuestionsCsv}
                   disabled={questions.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
                   Download CSV (.csv)
@@ -4516,7 +4552,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     type="button"
                     onClick={() => handleExportQuestionsExcel(true)}
                     disabled={questions.length === 0}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-white/10 hover:bg-white/20 border border-white/20 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
                     Semua Paket (.xls)
@@ -4765,86 +4801,90 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'laporan' && (
         <div className="space-y-6">
           {/* Panel Rekapitulasi Analisis & Download Per Kelas dan Semua Kelas */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">
-                  Analisis Statistik & Download Hasil Ujian Siswa Per Kelas & Semuanya
-                </h2>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Lihat analisis capaian nilai rata-rata, ketuntasan, sebaran
-                  predikat (A/B/C/D), serta unduh laporan hasil ujian siswa baik{' '}
-                  <strong>per kelas (rombel)</strong> maupun{' '}
-                  <strong>semua kelas sekaligus</strong> dalam format Excel
-                  (.xls) & CSV.
-                </p>
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-5 text-white">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                Pusat Pelaporan &amp; Evaluasi Akademik
               </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() =>
-                    downloadStudentTokenCardsPdf(students, {
-                      kelasLabel: 'Semua Kelas',
-                      exams,
-                      results,
-                      includeSummaryPage: true,
-                    })
-                  }
-                  disabled={students.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all cursor-pointer shadow-2xs"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Rekap &amp; Kartu Nilai (.PDF)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleExportResultsExcel('all')}
-                  disabled={students.length === 0 && results.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Download Semua Hasil Ujian (.xls)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleExportResultsCsv('all')}
-                  disabled={students.length === 0 && results.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Download Semua Hasil (.csv)
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportClassSummaryExcel}
-                  disabled={
-                    students.length === 0 && results.length === 0
-                  }
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Download Rekap Analisis Kelas (.xls)
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRecalculateAllScores}
-                  disabled={isRecalculatingScores || results.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <RefreshCw
-                    className={`w-3.5 h-3.5 ${
-                      isRecalculatingScores ? 'animate-spin' : ''
-                    }`}
-                  />
-                  <span>
-                    {isRecalculatingScores
-                      ? 'Menyinkronkan Nilai...'
-                      : 'Sinkronkan Nilai Formula Humanis'}
-                  </span>
-                </button>
-              </div>
+              <h2 className="text-lg font-extrabold text-white mt-0.5">
+                Analisis Statistik &amp; Download Hasil Ujian Siswa Per Kelas &amp; Semuanya
+              </h2>
+              <p className="text-xs text-blue-200/90 mt-1 max-w-4xl leading-relaxed">
+                Lihat analisis capaian nilai rata-rata, ketuntasan, sebaran
+                predikat (A/B/C/D), serta unduh laporan hasil ujian siswa baik{' '}
+                <strong className="text-amber-300">per kelas (rombel)</strong> maupun{' '}
+                <strong className="text-amber-300">semua kelas sekaligus</strong> dalam format PDF, Excel
+                (.xls) &amp; CSV.
+              </p>
             </div>
+
+            {/* Dedicated Full-Width Export & Action Bar */}
+            <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() =>
+                  downloadStudentTokenCardsPdf(students, {
+                    kelasLabel: 'Semua Kelas',
+                    exams,
+                    results,
+                    includeSummaryPage: true,
+                  })
+                }
+                disabled={students.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 rounded-lg transition-all cursor-pointer shadow-2xs"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download Rekap &amp; Kartu Nilai (.PDF)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportResultsExcel('all')}
+                disabled={students.length === 0 && results.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download Semua Hasil Ujian (.xls)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportResultsCsv('all')}
+                disabled={students.length === 0 && results.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download Semua Hasil (.csv)
+              </button>
+              <button
+                type="button"
+                onClick={handleExportClassSummaryExcel}
+                disabled={
+                  students.length === 0 && results.length === 0
+                }
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-800 bg-white hover:bg-slate-100 border border-slate-300 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download Rekap Analisis Kelas (.xls)
+              </button>
+              <button
+                type="button"
+                onClick={handleRecalculateAllScores}
+                disabled={isRecalculatingScores || results.length === 0}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-indigo-800 bg-indigo-100/80 hover:bg-indigo-200/80 border border-indigo-300 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    isRecalculatingScores ? 'animate-spin' : ''
+                  }`}
+                />
+                <span>
+                  {isRecalculatingScores
+                    ? 'Menyinkronkan Nilai...'
+                    : 'Sinkronkan Nilai Formula Humanis'}
+                </span>
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
 
             {/* Info Banner Formula Penilaian Humanis & Anti-Ngarang */}
             <div className="p-3.5 rounded-xl bg-gradient-to-r from-indigo-50/90 via-blue-50/80 to-emerald-50/80 border border-indigo-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -4955,14 +4995,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* Tabel Rekapitulasi Analisis & Download Per Kelas */}
             {classAnalyticsData.perClass.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-bold text-slate-900">
-                  Tabel Analisis Capaian & Download Hasil Ujian Per Kelas
-                </h3>
-                <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between bg-gradient-to-r from-indigo-50 via-blue-50 to-slate-50 px-4 py-2.5 rounded-xl border border-indigo-100">
+                  <h3 className="text-sm font-extrabold text-indigo-950">
+                    Tabel Analisis Capaian &amp; Download Hasil Ujian Per Kelas
+                  </h3>
+                  <span className="text-[11px] font-mono font-semibold text-indigo-700">
+                    {classAnalyticsData.perClass.length} Kelas Terdaftar
+                  </span>
+                </div>
+                <div className="overflow-x-auto border border-indigo-100 rounded-xl">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                      <tr className="bg-indigo-50/80 border-b border-indigo-100 text-xs font-bold text-indigo-950">
                         <th className="py-3 px-3.5">Kelas / Rombel</th>
                         <th className="py-3 px-3.5 text-right">
                           Peserta Selesai
@@ -4981,7 +5026,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </th>
                         <th className="py-3 px-3.5">Sebaran A / B / C / D</th>
                         <th className="py-3 px-3.5 text-right">
-                          Download & Analisis Per Kelas
+                          Download &amp; Analisis Per Kelas
                         </th>
                       </tr>
                     </thead>
@@ -5125,28 +5170,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
             )}
+            </div>
           </div>
 
           {/* Tabel Detail Hasil Ujian Siswa (Dengan Filter Per Kelas, Tingkatan & Paket Ujian) */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-            <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-              <div>
-                <h2 className="text-base font-bold text-slate-900">
-                  Daftar Nilai &amp; Evaluasi Capaian Peserta (
-                  {filterResultKelas === 'SEMUA'
-                    ? 'Semua Kelas'
-                    : `Kelas ${filterResultKelas}`}{' '}
-                  — {filteredResults.length} Peserta)
-                </h2>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Pilih filter Kelas/Rombel di bawah untuk melihat dan mengunduh
-                  hasil ujian khusus kelas tersebut atau seluruh kelas.
-                </p>
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            {/* Full-Width Colorful Institutional Header Banner (Never Squished) */}
+            <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                    Daftar Nilai, Pembahasan Soal &amp; Evaluasi Kognitif Siswa
+                  </div>
+                  <h2 className="text-base sm:text-lg font-extrabold text-white mt-0.5">
+                    Daftar Nilai &amp; Evaluasi Capaian Peserta (
+                    {filterResultKelas === 'SEMUA'
+                      ? 'Semua Kelas'
+                      : `Kelas ${filterResultKelas}`}{' '}
+                    — {filteredResults.length} Peserta)
+                  </h2>
+                  <p className="text-xs text-blue-200/90 mt-0.5">
+                    Pilih filter Kelas/Rombel di bawah untuk melihat nilai akhir, mengunduh PDF Nilai lengkap beserta rincian soal &amp; jawaban siswa, atau mengunduh Excel kelas.
+                  </p>
+                </div>
+                <span className="px-3 py-1.5 rounded-xl bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200 shrink-0">
+                  {filteredResults.length} Hasil Ujian
+                </span>
               </div>
+            </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Dedicated Full-Width Filter & Action Bar */}
+            <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 {/* Filter 3 Tingkatan */}
-                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                <div className="flex items-center gap-1 p-1 bg-white rounded-lg border border-indigo-200 shadow-2xs">
                   {(
                     [
                       ['SEMUA', 'Semua'],
@@ -5162,10 +5219,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setFilterResultTingkat(val);
                         setFilterResultKelas('SEMUA');
                       }}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                         filterResultTingkat === val
-                          ? 'bg-white text-slate-900 shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
+                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50'
                       }`}
                     >
                       {label}
@@ -5178,7 +5235,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   aria-label="Filter Hasil Per Kelas"
                   value={filterResultKelas}
                   onChange={(e) => setFilterResultKelas(e.target.value)}
-                  className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-medium"
+                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-semibold text-slate-800"
                 >
                   <option value="SEMUA">Semua Kelas / Rombel</option>
                   {uniqueClasses.map((kls) => (
@@ -5194,7 +5251,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     aria-label="Filter Hasil Per Paket Ujian"
                     value={filterResultExamId}
                     onChange={(e) => setFilterResultExamId(e.target.value)}
-                    className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                    className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-medium text-slate-800"
                   >
                     <option value="SEMUA">Semua Paket Ujian</option>
                     {exams.map((ex) => (
@@ -5204,12 +5261,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     ))}
                   </select>
                 )}
+              </div>
 
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleExportResultsExcel('filtered')}
                   disabled={students.length === 0 && filteredResults.length === 0}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer shadow-2xs"
                 >
                   <Download className="w-3.5 h-3.5" />
                   {filterResultKelas !== 'SEMUA'
@@ -5220,7 +5279,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={onRefreshData}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-900 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-lg transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   Muat Ulang
@@ -5228,6 +5287,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
+            <div className="p-6 space-y-5">
             {aiErrorBanner && (
               <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -5247,10 +5307,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <div className="overflow-x-auto border border-indigo-100 rounded-xl">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                    <tr className="bg-indigo-50/80 border-b border-indigo-100 text-xs font-bold text-indigo-950">
                       <th className="py-3 px-4">Nama Siswa</th>
                       <th className="py-3 px-4">Kelas · Token</th>
                       <th className="py-3 px-4">Paket Ujian</th>
@@ -5322,7 +5382,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               {st && (
                                 <button
                                   type="button"
-                                  onClick={() =>
+                                  onClick={() => {
+                                    const examQuestionsForPdf = questions.filter(
+                                      (q) => Number(q.exam_id) === Number(resItem.exam_id)
+                                    );
+                                    const syncedAnswersForPdf =
+                                      examQuestionsForPdf.length > 0
+                                        ? resolveSyncedStudentAnswersForExam({
+                                            questions: examQuestionsForPdf,
+                                            jawabanSiswa: resItem.jawaban_siswa || {},
+                                            student: st,
+                                            exam: ex || null,
+                                            recordedScore: resItem.skor_angka,
+                                          })
+                                        : resItem.jawaban_siswa || {};
                                     downloadSingleStudentResultPdf({
                                       student: st,
                                       exam: ex || null,
@@ -5336,14 +5409,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                             : resItem.skor_angka >= 55
                                               ? 'Cukup (C)'
                                               : 'Perlu Penguatan (D)'),
-                                      answeredCount: resItem.jawaban_siswa
-                                        ? Object.keys(resItem.jawaban_siswa).filter(
-                                            (k) =>
-                                              resItem.jawaban_siswa?.[k]?.length > 0
-                                          ).length
-                                        : undefined,
+                                      answeredCount: Object.keys(syncedAnswersForPdf).filter(
+                                        (k) => syncedAnswersForPdf[k]?.length > 0
+                                      ).length,
+                                      totalQuestions: examQuestionsForPdf.length,
                                       tabViolations: resItem.pelanggaran_tab,
                                       aiAnalysis: resItem.analisis_ai,
+                                      questions: examQuestionsForPdf,
+                                      studentAnswers: syncedAnswersForPdf,
                                       submittedAt: resItem.created_at
                                         ? new Date(
                                             resItem.created_at
@@ -5353,12 +5426,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                             year: 'numeric',
                                           })
                                         : undefined,
-                                    })
-                                  }
+                                    });
+                                  }}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                                 >
                                   <Download className="w-3.5 h-3.5" />
-                                  <span>PDF Nilai</span>
+                                  <span>PDF Nilai &amp; Soal</span>
                                 </button>
                               )}
                               {hasAi && resItem.analisis_ai && (
@@ -5406,6 +5479,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </table>
               </div>
             )}
+            </div>
           </div>
         </div>
       )}
