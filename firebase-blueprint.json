@@ -76,6 +76,20 @@
           "description": "Optional end schedule timestamp.",
           "maxLength": 64
         },
+        "token_sesi": {
+          "type": "string",
+          "description": "Dynamic exam session token configured by the teacher.",
+          "maxLength": 20
+        },
+        "tampilkan_nilai": {
+          "type": "boolean",
+          "description": "Whether students can view their score immediately after completing the exam."
+        },
+        "pengumuman": {
+          "type": "string",
+          "description": "Announcement shown on the student dashboard.",
+          "maxLength": 600
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
@@ -128,6 +142,16 @@
           "type": "string",
           "description": "Package variant letter (e.g. A, B, C).",
           "maxLength": 8
+        },
+        "nisn": {
+          "type": "string",
+          "description": "Student National Identification Number (NISN).",
+          "maxLength": 40
+        },
+        "password_login": {
+          "type": "string",
+          "description": "Custom account login password/token set by the student.",
+          "maxLength": 40
         },
         "updatedAt": {
           "type": "string",

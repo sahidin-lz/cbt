@@ -23,6 +23,8 @@ export interface StudentItem {
   status_ujian: StudentExamStatus | string;
   kode_soal?: string; // e.g. 'PAKET-A' | 'PAKET-B' | 'KODE-01'
   variasi_paket?: string; // 'A' | 'B' | 'C' | 'D'
+  nisn?: string; // Nomor Induk Siswa Nasional
+  password_login?: string; // Password / Token Login Akun Siswa yang bisa diubah mandiri oleh siswa
   created_at?: string;
   authorUid?: string;
   updatedAt?: string;
@@ -44,6 +46,9 @@ export interface ExamItem {
   kode_paket?: string; // Kode paket default (misal 'PAKET-A', 'PAKET-B', 'UTAMA')
   mode_multi_paket?: boolean; // Mode variasi paket soal per angkatan/kelas (A/B/C)
   jumlah_paket?: number; // Jumlah varian paket (2, 3, atau 4)
+  token_sesi?: string; // Token Sesi Ujian dinamis yang diberikan dan diatur oleh Guru setiap akan ujian
+  tampilkan_nilai?: boolean; // Apakah nilai langsung ditampilkan ke siswa di menu Hasil Ujian
+  pengumuman?: string; // Pengumuman dari guru/sekolah di Beranda Siswa
   created_at?: string;
   authorUid?: string;
   updatedAt?: string;

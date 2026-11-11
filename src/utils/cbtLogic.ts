@@ -1565,6 +1565,7 @@ export function validateStudentCascadingLogin<
     nama: string;
     kelas: string;
     token_ujian: string;
+    password_login?: string;
     status_ujian?: string;
   }
 >(params: {
@@ -1572,6 +1573,7 @@ export function validateStudentCascadingLogin<
   selectedKelas: string;
   selectedStudentId: string | number;
   tokenInput: string;
+  allowAccountPortalLogin?: boolean;
 }): { ok: true; student: T } | { ok: false; error: string } {
   const cleanKelas = (params.selectedKelas || '').trim();
   if (!cleanKelas) {
@@ -1605,38 +1607,118 @@ export function validateStudentCascadingLogin<
     };
   }
 
-  const cleanToken = (params.tokenInput || '').trim().toUpperCase();
-  if (!cleanToken || cleanToken.length !== 6) {
+  const rawInput = (params.tokenInput || '').trim();
+  const cleanUpperInput = rawInput.toUpperCase();
+  if (!rawInput || rawInput.length < 4) {
     return {
       ok: false,
-      error: 'Token Ujian harus terdiri dari 6 karakter alfanumerik (Langkah 3).',
+      error: 'Masukkan Password / Token Login Akun Anda (minimal 4–6 karakter) pada Langkah 3.',
     };
   }
 
-  if ((selectedStudent.token_ujian || '').trim().toUpperCase() !== cleanToken) {
+  const systemToken = (selectedStudent.token_ujian || '').trim().toUpperCase();
+  const customPassword = (selectedStudent.password_login || '').trim();
+
+  const matchesSystemToken = systemToken.length > 0 && cleanUpperInput === systemToken;
+  const matchesCustomPassword =
+    customPassword.length > 0 &&
+    (rawInput === customPassword || cleanUpperInput === customPassword.toUpperCase());
+
+  if (!matchesSystemToken && !matchesCustomPassword) {
     return {
       ok: false,
-      error: `Token Ujian tidak sesuai untuk siswa "${selectedStudent.nama}" (${selectedStudent.kelas}). Pastikan Anda memasukkan 6 karakter token milik Anda sendiri.`,
+      error: `Password / Token Login tidak sesuai untuk akun "${selectedStudent.nama}" (${selectedStudent.kelas}). Gunakan Token Bawaan Sistem pada kartu Anda atau Password Login yang telah Anda atur.`,
     };
   }
 
-  if (selectedStudent.status_ujian === 'Diblokir') {
-    return {
-      ok: false,
-      error:
-        'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.',
-    };
-  }
+  if (!params.allowAccountPortalLogin) {
+    if (selectedStudent.status_ujian === 'Diblokir') {
+      return {
+        ok: false,
+        error:
+          'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.',
+      };
+    }
 
-  if (selectedStudent.status_ujian === 'Selesai') {
-    return {
-      ok: false,
-      error:
-        'Anda telah menyelesaikan ujian dengan akun ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai.',
-    };
+    if (selectedStudent.status_ujian === 'Selesai') {
+      return {
+        ok: false,
+        error:
+          'Anda telah menyelesaikan ujian dengan akun ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai.',
+      };
+    }
   }
 
   return { ok: true, student: selectedStudent };
+}
+
+/**
+ * Computes a deterministic or configured 6-character Exam Session Token (token_sesi) for an exam package.
+ * Teachers can change this token anytime; if not yet explicitly set on an older exam, a deterministic 6-char
+ * session token is derived so every exam always has a ready-to-use Token Sesi Ujian.
+ */
+export function getEffectiveExamSessionToken(exam: {
+  id: number | string;
+  judul_ujian?: string;
+  target_tingkat?: string;
+  token_sesi?: string;
+}): string {
+  const custom = (exam.token_sesi || '').trim().toUpperCase();
+  if (custom.length >= 4) {
+    return custom;
+  }
+  const tingkatPrefix =
+    exam.target_tingkat === '10'
+      ? 'X'
+      : exam.target_tingkat === '11'
+        ? 'XI'
+        : exam.target_tingkat === '12'
+          ? 'XII'
+          : 'CBT';
+  const numPart = String(Math.abs(Number(exam.id) || 101) % 900 + 100);
+  const rawCode = `S${tingkatPrefix}${numPart}`.replace(/[^A-Z0-9]/g, '');
+  return rawCode.padEnd(6, 'A').slice(0, 6);
+}
+
+/**
+ * Validates the Exam Session Token entered by the student when clicking "Mulai Ujian" in Jadwal Ujian.
+ * Accepts the teacher's configured Exam Session Token (token_sesi) or, as a seamless fallback, the student's own token.
+ */
+export function verifyExamSessionToken(params: {
+  exam: {
+    id: number | string;
+    judul_ujian: string;
+    target_tingkat?: string;
+    token_sesi?: string;
+  };
+  student?: {
+    token_ujian?: string;
+    password_login?: string;
+  } | null;
+  inputToken: string;
+}): { ok: true; matchedType: 'session_token' | 'student_token' } | { ok: false; error: string } {
+  const cleanInput = (params.inputToken || '').trim().toUpperCase();
+  if (!cleanInput || cleanInput.length < 4) {
+    return {
+      ok: false,
+      error: 'Masukkan Token Sesi Ujian yang diberikan oleh Guru Pengawas untuk memulai ujian.',
+    };
+  }
+
+  const effectiveSessionToken = getEffectiveExamSessionToken(params.exam);
+  if (cleanInput === effectiveSessionToken) {
+    return { ok: true, matchedType: 'session_token' };
+  }
+
+  const studentSysToken = (params.student?.token_ujian || '').trim().toUpperCase();
+  if (studentSysToken && cleanInput === studentSysToken) {
+    return { ok: true, matchedType: 'student_token' };
+  }
+
+  return {
+    ok: false,
+    error: `Token Sesi Ujian "${cleanInput}" tidak sesuai untuk ujian "${params.exam.judul_ujian}". Silakan minta Token Sesi Ujian terbaru kepada Guru / Pengawas Ruangan.`,
+  };
 }
 
 /**

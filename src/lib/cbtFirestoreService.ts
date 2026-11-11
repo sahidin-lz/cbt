@@ -38,8 +38,62 @@ import {
   mapStudentAnswersToCanonicalKeys,
   resolveSyncedStudentAnswersForExam,
   recalculateHistoricalResults,
+  getEffectiveExamSessionToken,
   ExamScoreSummary,
 } from '../utils/cbtLogic';
+
+function buildCleanExamFirestoreDoc(ex: ExamItem, nowIso: string): Record<string, any> {
+  const docObj: Record<string, any> = {
+    id: Number(ex.id),
+    judul_ujian: String(ex.judul_ujian || '').slice(0, 200),
+    durasi_menit: Math.max(1, Math.min(300, Number(ex.durasi_menit) || 60)),
+    target_tingkat: String(ex.target_tingkat || 'SEMUA').slice(0, 16),
+    target_kelas: String(ex.target_kelas || 'SEMUA').slice(0, 64),
+    authorUid: 'sahidin30@gmail.com',
+    updatedAt: nowIso,
+  };
+  if (ex.kategori_ujian) docObj.kategori_ujian = String(ex.kategori_ujian).slice(0, 64);
+  if (ex.status_ujian) docObj.status_ujian = String(ex.status_ujian).slice(0, 32);
+  if (Array.isArray(ex.target_rombel)) docObj.target_rombel = ex.target_rombel.slice(0, 50);
+  if (ex.jadwal_mulai) docObj.jadwal_mulai = String(ex.jadwal_mulai).slice(0, 64);
+  if (ex.jadwal_selesai) docObj.jadwal_selesai = String(ex.jadwal_selesai).slice(0, 64);
+  if (ex.acak_soal !== undefined) docObj.acak_soal = Boolean(ex.acak_soal);
+  if (ex.acak_opsi !== undefined) docObj.acak_opsi = Boolean(ex.acak_opsi);
+  if (ex.kode_paket) docObj.kode_paket = String(ex.kode_paket).slice(0, 32);
+  if (ex.mode_multi_paket !== undefined) docObj.mode_multi_paket = Boolean(ex.mode_multi_paket);
+  if (ex.jumlah_paket !== undefined) docObj.jumlah_paket = Math.max(1, Math.min(10, Number(ex.jumlah_paket) || 2));
+  const effectiveTokenSesi = (ex.token_sesi || getEffectiveExamSessionToken(ex)).trim().toUpperCase().slice(0, 20);
+  if (effectiveTokenSesi) docObj.token_sesi = effectiveTokenSesi;
+  if (ex.tampilkan_nilai !== undefined) docObj.tampilkan_nilai = Boolean(ex.tampilkan_nilai);
+  if (ex.pengumuman !== undefined && String(ex.pengumuman).trim() !== '') {
+    docObj.pengumuman = String(ex.pengumuman).trim().slice(0, 600);
+  }
+  return docObj;
+}
+
+function buildCleanStudentFirestoreDoc(st: StudentItem, nowIso: string): Record<string, any> {
+  const validToken = /^[A-Z0-9]{6}$/.test((st.token_ujian || '').toUpperCase().trim())
+    ? st.token_ujian.toUpperCase().trim()
+    : generateExamToken(Number(st.id) || 1);
+  const docObj: Record<string, any> = {
+    id: Number(st.id),
+    nama: String(st.nama || '').slice(0, 150),
+    kelas: String(st.kelas || '').slice(0, 64),
+    token_ujian: validToken,
+    status_ujian: String(st.status_ujian || 'Belum Mulai').slice(0, 32),
+    authorUid: 'sahidin30@gmail.com',
+    updatedAt: nowIso,
+  };
+  if (st.kode_soal) docObj.kode_soal = String(st.kode_soal).slice(0, 64);
+  if (st.variasi_paket) docObj.variasi_paket = String(st.variasi_paket).slice(0, 64);
+  if (st.nisn !== undefined && String(st.nisn).trim() !== '') {
+    docObj.nisn = String(st.nisn).trim().slice(0, 40);
+  }
+  if (st.password_login !== undefined && String(st.password_login).trim() !== '') {
+    docObj.password_login = String(st.password_login).trim().slice(0, 40);
+  }
+  return docObj;
+}
 
 /**
  * Safely calls a backend API endpoint and returns parsed JSON only if the server
@@ -310,36 +364,11 @@ export async function pushSnapshotToFirestoreClient(
     const batch = writeBatch(db);
 
     for (const ex of data.exams) {
-      const examDoc: Record<string, any> = {
-        id: Number(ex.id),
-        judul_ujian: String(ex.judul_ujian || '').slice(0, 200),
-        durasi_menit: Number(ex.durasi_menit) || 60,
-        target_tingkat: String(ex.target_tingkat || 'SEMUA').slice(0, 16),
-        target_kelas: String(ex.target_kelas || 'SEMUA').slice(0, 64),
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      };
-      if (ex.acak_soal !== undefined) examDoc.acak_soal = Boolean(ex.acak_soal);
-      if (ex.acak_opsi !== undefined) examDoc.acak_opsi = Boolean(ex.acak_opsi);
-      if (ex.kode_paket) examDoc.kode_paket = ex.kode_paket.slice(0, 32);
-      if (ex.mode_multi_paket !== undefined) examDoc.mode_multi_paket = Boolean(ex.mode_multi_paket);
-      if (ex.jumlah_paket !== undefined) examDoc.jumlah_paket = Number(ex.jumlah_paket);
-      batch.set(doc(db, 'exams', String(ex.id)), examDoc);
+      batch.set(doc(db, 'exams', String(ex.id)), buildCleanExamFirestoreDoc(ex, nowIso), { merge: true });
     }
 
     for (const st of data.students) {
-      const studentDoc: Record<string, any> = {
-        id: Number(st.id),
-        nama: String(st.nama || '').slice(0, 150),
-        kelas: String(st.kelas || '').slice(0, 64),
-        token_ujian: String(st.token_ujian || '').slice(0, 6),
-        status_ujian: String(st.status_ujian || 'Belum Mulai').slice(0, 32),
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      };
-      if (st.kode_soal) studentDoc.kode_soal = st.kode_soal.slice(0, 32);
-      if (st.variasi_paket) studentDoc.variasi_paket = st.variasi_paket.slice(0, 8);
-      batch.set(doc(db, 'students', String(st.id)), studentDoc);
+      batch.set(doc(db, 'students', String(st.id)), buildCleanStudentFirestoreDoc(st, nowIso), { merge: true });
     }
 
     for (const q of data.questions) {
@@ -429,9 +458,50 @@ export async function loadUnifiedDashboardData(): Promise<{
     if (apiTotal === 0 && fsTotal > 0 && firestoreData) {
       return firestoreData;
     }
+
+    // Merge rich Firestore fields (token_sesi, status_ujian, kategori_ujian, tampilkan_nilai, pengumuman, nisn, password_login, kode_soal)
+    const fsExamMap = new Map<number, ExamItem>(
+      (firestoreData?.exams || []).map((e) => [Number(e.id), e])
+    );
+    const fsStudentMap = new Map<number, StudentItem>(
+      (firestoreData?.students || []).map((s) => [Number(s.id), s])
+    );
+
+    const mergedExams = (apiRes.data.exams || []).map((apiEx) => {
+      const fsEx = fsExamMap.get(Number(apiEx.id));
+      const combined: ExamItem = {
+        ...fsEx,
+        ...apiEx,
+        status_ujian: fsEx?.status_ujian || apiEx.status_ujian || 'AKTIF',
+        kategori_ujian: fsEx?.kategori_ujian || apiEx.kategori_ujian,
+        target_rombel: fsEx?.target_rombel || apiEx.target_rombel,
+        kode_paket: fsEx?.kode_paket || apiEx.kode_paket,
+        acak_soal: fsEx?.acak_soal ?? apiEx.acak_soal,
+        acak_opsi: fsEx?.acak_opsi ?? apiEx.acak_opsi,
+        mode_multi_paket: fsEx?.mode_multi_paket ?? apiEx.mode_multi_paket,
+        jumlah_paket: fsEx?.jumlah_paket ?? apiEx.jumlah_paket,
+        token_sesi: fsEx?.token_sesi || apiEx.token_sesi || getEffectiveExamSessionToken(apiEx),
+        tampilkan_nilai: fsEx?.tampilkan_nilai ?? apiEx.tampilkan_nilai ?? true,
+        pengumuman: fsEx?.pengumuman ?? apiEx.pengumuman,
+      };
+      return combined;
+    });
+
+    const mergedStudents = (apiRes.data.students || []).map((apiSt) => {
+      const fsSt = fsStudentMap.get(Number(apiSt.id));
+      return {
+        ...fsSt,
+        ...apiSt,
+        kode_soal: fsSt?.kode_soal || apiSt.kode_soal,
+        variasi_paket: fsSt?.variasi_paket || apiSt.variasi_paket,
+        nisn: fsSt?.nisn || apiSt.nisn,
+        password_login: fsSt?.password_login || apiSt.password_login,
+      } satisfies StudentItem;
+    });
+
     return {
-      exams: apiRes.data.exams || [],
-      students: apiRes.data.students || [],
+      exams: mergedExams,
+      students: mergedStudents,
       questions: apiRes.data.questions || [],
       results: apiRes.data.results || [],
     };
@@ -572,6 +642,9 @@ export async function saveExamCbt(
     kode_paket?: string;
     mode_multi_paket?: boolean;
     jumlah_paket?: number;
+    token_sesi?: string;
+    tampilkan_nilai?: boolean;
+    pengumuman?: string;
   },
   editingExamId?: number | null
 ): Promise<ExamItem> {
@@ -585,51 +658,44 @@ export async function saveExamCbt(
   });
 
   const nowIso = new Date().toISOString();
-  const examRecord: ExamItem =
-    apiRes.ok && apiRes.data?.exam
-      ? apiRes.data.exam
-      : {
-          id: editingExamId || Date.now(),
-          judul_ujian: payload.judul_ujian.trim(),
-          durasi_menit: Math.max(5, Number(payload.durasi_menit) || 60),
-          target_tingkat: payload.target_tingkat || 'SEMUA',
-          target_kelas: payload.target_kelas || 'SEMUA',
-          kategori_ujian: payload.kategori_ujian || 'Penilaian Harian (PH / Kuis)',
-          status_ujian: payload.status_ujian || 'DRAF',
-          target_rombel: Array.isArray(payload.target_rombel) ? payload.target_rombel : [],
-          jadwal_mulai: payload.jadwal_mulai || '',
-          jadwal_selesai: payload.jadwal_selesai || '',
-          acak_soal: payload.acak_soal !== undefined ? payload.acak_soal : true,
-          acak_opsi: payload.acak_opsi !== undefined ? payload.acak_opsi : true,
-          kode_paket: payload.kode_paket?.trim() || 'PAKET-A',
-          mode_multi_paket: Boolean(payload.mode_multi_paket),
-          jumlah_paket: Number(payload.jumlah_paket) || 2,
-        };
+  const baseId = apiRes.ok && apiRes.data?.exam ? apiRes.data.exam.id : editingExamId || Date.now();
+  const cleanTokenSesi =
+    (payload.token_sesi || '').trim().toUpperCase() ||
+    getEffectiveExamSessionToken({
+      id: baseId,
+      judul_ujian: payload.judul_ujian,
+      target_tingkat: payload.target_tingkat,
+    });
+
+  const examRecord: ExamItem = {
+    ...(apiRes.ok && apiRes.data?.exam ? apiRes.data.exam : {}),
+    id: baseId,
+    judul_ujian: payload.judul_ujian.trim(),
+    durasi_menit: Math.max(5, Number(payload.durasi_menit) || 60),
+    target_tingkat: payload.target_tingkat || 'SEMUA',
+    target_kelas: payload.target_kelas || 'SEMUA',
+    kategori_ujian: payload.kategori_ujian || 'Penilaian Harian (PH / Kuis)',
+    status_ujian: payload.status_ujian || 'DRAF',
+    target_rombel: Array.isArray(payload.target_rombel) ? payload.target_rombel : [],
+    jadwal_mulai: payload.jadwal_mulai || '',
+    jadwal_selesai: payload.jadwal_selesai || '',
+    acak_soal: payload.acak_soal !== undefined ? payload.acak_soal : true,
+    acak_opsi: payload.acak_opsi !== undefined ? payload.acak_opsi : true,
+    kode_paket: payload.kode_paket?.trim() || 'PAKET-A',
+    mode_multi_paket: Boolean(payload.mode_multi_paket),
+    jumlah_paket: Number(payload.jumlah_paket) || 2,
+    token_sesi: cleanTokenSesi,
+    tampilkan_nilai: payload.tampilkan_nilai !== undefined ? Boolean(payload.tampilkan_nilai) : true,
+    pengumuman: payload.pengumuman?.trim() || '',
+  };
 
   if (db) {
-    const examDoc: Record<string, any> = {
-      id: Number(examRecord.id),
-      judul_ujian: examRecord.judul_ujian.slice(0, 200),
-      durasi_menit: Number(examRecord.durasi_menit),
-      target_tingkat: examRecord.target_tingkat.slice(0, 16),
-      target_kelas: examRecord.target_kelas.slice(0, 64),
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: nowIso,
-    };
-    if (examRecord.kategori_ujian) examDoc.kategori_ujian = examRecord.kategori_ujian.slice(0, 64);
-    if (examRecord.status_ujian) examDoc.status_ujian = examRecord.status_ujian.slice(0, 32);
-    if (Array.isArray(examRecord.target_rombel)) examDoc.target_rombel = examRecord.target_rombel.slice(0, 50);
-    if (examRecord.jadwal_mulai) examDoc.jadwal_mulai = examRecord.jadwal_mulai.slice(0, 64);
-    if (examRecord.jadwal_selesai) examDoc.jadwal_selesai = examRecord.jadwal_selesai.slice(0, 64);
-    if (examRecord.acak_soal !== undefined) examDoc.acak_soal = Boolean(examRecord.acak_soal);
-    if (examRecord.acak_opsi !== undefined) examDoc.acak_opsi = Boolean(examRecord.acak_opsi);
-    if (examRecord.kode_paket) examDoc.kode_paket = examRecord.kode_paket.slice(0, 32);
-    if (examRecord.mode_multi_paket !== undefined) examDoc.mode_multi_paket = Boolean(examRecord.mode_multi_paket);
-    if (examRecord.jumlah_paket !== undefined) examDoc.jumlah_paket = Number(examRecord.jumlah_paket);
-
-    await setDoc(doc(db, 'exams', String(examRecord.id)), examDoc);
+    await setDoc(
+      doc(db, 'exams', String(examRecord.id)),
+      buildCleanExamFirestoreDoc(examRecord, nowIso)
+    );
     await updateFirestorePulse(
-      `Paket ujian disimpan: ${examRecord.judul_ujian} [${examRecord.status_ujian || 'DRAF'}] (${examRecord.kategori_ujian || 'Ujian'})`
+      `Paket ujian disimpan: ${examRecord.judul_ujian} [Token Sesi: ${examRecord.token_sesi}]`
     );
   }
 
@@ -653,8 +719,42 @@ export async function toggleExamStatusCbt(
     kode_paket: exam.kode_paket,
     mode_multi_paket: exam.mode_multi_paket,
     jumlah_paket: exam.jumlah_paket,
+    token_sesi: exam.token_sesi || getEffectiveExamSessionToken(exam),
+    tampilkan_nilai: exam.tampilkan_nilai !== false,
+    pengumuman: exam.pengumuman || '',
   };
   await saveExamCbt(payload, exam.id);
+}
+
+export async function updateExamSessionTokenCbt(
+  exam: ExamItem,
+  customSessionToken?: string
+): Promise<ExamItem> {
+  const nextToken =
+    customSessionToken && customSessionToken.trim().length >= 4
+      ? customSessionToken.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12)
+      : generateExamToken();
+
+  return await saveExamCbt(
+    {
+      judul_ujian: exam.judul_ujian,
+      durasi_menit: exam.durasi_menit,
+      target_tingkat: exam.target_tingkat,
+      target_kelas: exam.target_kelas,
+      kategori_ujian: exam.kategori_ujian,
+      status_ujian: exam.status_ujian || 'AKTIF',
+      target_rombel: exam.target_rombel,
+      acak_soal: exam.acak_soal,
+      acak_opsi: exam.acak_opsi,
+      kode_paket: exam.kode_paket,
+      mode_multi_paket: exam.mode_multi_paket,
+      jumlah_paket: exam.jumlah_paket,
+      token_sesi: nextToken,
+      tampilkan_nilai: exam.tampilkan_nilai !== false,
+      pengumuman: exam.pengumuman || '',
+    },
+    exam.id
+  );
 }
 
 export async function batchAssignPackageVariantsCbt(
@@ -673,18 +773,11 @@ export async function batchAssignPackageVariantsCbt(
     const batch = writeBatch(firestoreDb);
     const nowIso = new Date().toISOString();
     updatedStudents.forEach((st) => {
-      const studentDoc: Record<string, any> = {
-        id: Number(st.id),
-        nama: st.nama.slice(0, 150),
-        kelas: st.kelas.slice(0, 64),
-        token_ujian: st.token_ujian.slice(0, 6),
-        status_ujian: st.status_ujian.slice(0, 32),
-        kode_soal: (st.kode_soal || 'PAKET-A').slice(0, 32),
-        variasi_paket: (st.variasi_paket || 'A').slice(0, 8),
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      };
-      batch.set(doc(firestoreDb, 'students', String(st.id)), studentDoc);
+      batch.set(
+        doc(firestoreDb, 'students', String(st.id)),
+        buildCleanStudentFirestoreDoc(st, nowIso),
+        { merge: true }
+      );
     });
     await batch.commit();
     await updateFirestorePulse(
@@ -720,7 +813,7 @@ export async function deleteExamCbt(examId: number, title: string): Promise<void
 }
 
 export async function saveStudentCbt(
-  payload: { nama: string; kelas: string },
+  payload: { nama: string; kelas: string; nisn?: string; password_login?: string },
   editingStudentId?: number | null,
   existingStudent?: StudentItem
 ): Promise<StudentItem> {
@@ -739,7 +832,7 @@ export async function saveStudentCbt(
   );
 
   const nowIso = new Date().toISOString();
-  const studentRecord: StudentItem =
+  const baseStudent: StudentItem =
     apiRes.ok && apiRes.data?.student
       ? apiRes.data.student
       : {
@@ -750,22 +843,70 @@ export async function saveStudentCbt(
           status_ujian: existingStudent?.status_ujian || 'Belum Mulai',
         };
 
+  const studentRecord: StudentItem = {
+    ...existingStudent,
+    ...baseStudent,
+    nisn: payload.nisn !== undefined ? payload.nisn.trim() : existingStudent?.nisn,
+    password_login:
+      payload.password_login !== undefined
+        ? payload.password_login.trim()
+        : existingStudent?.password_login,
+  };
+
   if (db) {
-    await setDoc(doc(db, 'students', String(studentRecord.id)), {
-      id: Number(studentRecord.id),
-      nama: studentRecord.nama.slice(0, 150),
-      kelas: studentRecord.kelas.slice(0, 64),
-      token_ujian: studentRecord.token_ujian.slice(0, 6),
-      status_ujian: studentRecord.status_ujian.slice(0, 32),
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: nowIso,
-    });
+    await setDoc(
+      doc(db, 'students', String(studentRecord.id)),
+      buildCleanStudentFirestoreDoc(studentRecord, nowIso),
+      { merge: true }
+    );
     await updateFirestorePulse(
       `Data siswa disimpan: ${studentRecord.nama} (${studentRecord.kelas})`
     );
   }
 
   return studentRecord;
+}
+
+export async function updateStudentProfileAndPasswordCbt(
+  student: StudentItem,
+  payload: {
+    nisn?: string;
+    password_login: string;
+    syncSystemToken?: boolean;
+  }
+): Promise<StudentItem> {
+  const cleanPassword = (payload.password_login || '').trim();
+  if (cleanPassword.length < 4 || cleanPassword.length > 32) {
+    throw new Error('Password / Token Login Akun baru harus terdiri dari 4 hingga 32 karakter.');
+  }
+
+  const cleanNisn = payload.nisn !== undefined ? payload.nisn.trim().slice(0, 32) : student.nisn;
+  const upperCandidate = cleanPassword.toUpperCase();
+  const isSixCharAlnum = /^[A-Z0-9]{6}$/.test(upperCandidate);
+
+  const nextSystemToken =
+    payload.syncSystemToken && isSixCharAlnum ? upperCandidate : student.token_ujian;
+
+  const updatedStudent: StudentItem = {
+    ...student,
+    nisn: cleanNisn,
+    password_login: cleanPassword,
+    token_ujian: nextSystemToken,
+  };
+
+  if (db) {
+    const nowIso = new Date().toISOString();
+    await setDoc(
+      doc(db, 'students', String(updatedStudent.id)),
+      buildCleanStudentFirestoreDoc(updatedStudent, nowIso),
+      { merge: true }
+    );
+    await updateFirestorePulse(
+      `Profil & Password Login diperbarui oleh siswa: ${updatedStudent.nama} (${updatedStudent.kelas})`
+    );
+  }
+
+  return updatedStudent;
 }
 
 export async function uploadStudentsCsvCbt(
@@ -829,15 +970,7 @@ export async function uploadStudentsCsvCbt(
 
     const batch = writeBatch(db);
     for (const st of insertedStudents) {
-      batch.set(doc(db, 'students', String(st.id)), {
-        id: Number(st.id),
-        nama: st.nama.slice(0, 150),
-        kelas: st.kelas.slice(0, 64),
-        token_ujian: st.token_ujian.slice(0, 6),
-        status_ujian: st.status_ujian.slice(0, 32),
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      });
+      batch.set(doc(db, 'students', String(st.id)), buildCleanStudentFirestoreDoc(st, nowIso));
     }
     await batch.commit();
     await updateFirestorePulse(
@@ -859,25 +992,22 @@ export async function regenerateStudentTokenCbt(
     { method: 'POST' }
   );
 
-  const updated: StudentItem =
-    apiRes.ok && apiRes.data?.student
-      ? apiRes.data.student
-      : {
-          ...student,
-          token_ujian: generateExamToken(),
-          status_ujian: 'Belum Mulai',
-        };
+  const updated: StudentItem = {
+    ...student,
+    ...(apiRes.ok && apiRes.data?.student ? apiRes.data.student : {}),
+    token_ujian:
+      apiRes.ok && apiRes.data?.student
+        ? apiRes.data.student.token_ujian
+        : generateExamToken(),
+    status_ujian: 'Belum Mulai',
+  };
 
   if (db) {
-    await setDoc(doc(db, 'students', String(updated.id)), {
-      id: Number(updated.id),
-      nama: updated.nama.slice(0, 150),
-      kelas: updated.kelas.slice(0, 64),
-      token_ujian: updated.token_ujian.slice(0, 6),
-      status_ujian: updated.status_ujian.slice(0, 32),
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: new Date().toISOString(),
-    });
+    await setDoc(
+      doc(db, 'students', String(updated.id)),
+      buildCleanStudentFirestoreDoc(updated, new Date().toISOString()),
+      { merge: true }
+    );
     await updateFirestorePulse(
       `Token baru dibuat untuk ${updated.nama}: ${updated.token_ujian}`
     );
@@ -899,24 +1029,18 @@ export async function updateStudentStatusCbt(
     }
   );
 
-  const updated: StudentItem =
-    apiRes.ok && apiRes.data?.student
-      ? apiRes.data.student
-      : {
-          ...student,
-          status_ujian,
-        };
+  const updated: StudentItem = {
+    ...student,
+    ...(apiRes.ok && apiRes.data?.student ? apiRes.data.student : {}),
+    status_ujian,
+  };
 
   if (db) {
-    await setDoc(doc(db, 'students', String(updated.id)), {
-      id: Number(updated.id),
-      nama: updated.nama.slice(0, 150),
-      kelas: updated.kelas.slice(0, 64),
-      token_ujian: updated.token_ujian.slice(0, 6),
-      status_ujian: updated.status_ujian.slice(0, 32),
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: new Date().toISOString(),
-    });
+    await setDoc(
+      doc(db, 'students', String(updated.id)),
+      buildCleanStudentFirestoreDoc(updated, new Date().toISOString()),
+      { merge: true }
+    );
     await updateFirestorePulse(
       `Status siswa ${updated.nama} diubah menjadi: ${updated.status_ujian}`
     );
@@ -944,15 +1068,11 @@ export async function bulkUpdateStudentStatusCbt(
     const nowIso = new Date().toISOString();
     const batch = writeBatch(db);
     for (const st of targetStudents) {
-      batch.set(doc(db, 'students', String(st.id)), {
-        id: Number(st.id),
-        nama: st.nama.slice(0, 150),
-        kelas: st.kelas.slice(0, 64),
-        token_ujian: st.token_ujian.slice(0, 6),
-        status_ujian: status_ujian.slice(0, 32),
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      });
+      batch.set(
+        doc(db, 'students', String(st.id)),
+        buildCleanStudentFirestoreDoc({ ...st, status_ujian }, nowIso),
+        { merge: true }
+      );
     }
     await batch.commit();
     await updateFirestorePulse(
@@ -1014,15 +1134,11 @@ export async function renameClassCbt(
     const nowIso = new Date().toISOString();
     const batch = writeBatch(db);
     for (const st of matching) {
-      batch.set(doc(db, 'students', String(st.id)), {
-        id: Number(st.id),
-        nama: st.nama.slice(0, 150),
-        kelas: cleanNew.slice(0, 64),
-        token_ujian: st.token_ujian.slice(0, 6),
-        status_ujian: st.status_ujian.slice(0, 32),
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      });
+      batch.set(
+        doc(db, 'students', String(st.id)),
+        buildCleanStudentFirestoreDoc({ ...st, kelas: cleanNew }, nowIso),
+        { merge: true }
+      );
     }
     await batch.commit();
     await updateFirestorePulse(
@@ -1351,7 +1467,8 @@ export async function loginStudentExamCbt(
   questions: QuestionItem[];
 }> {
   const cleanNama = nama.trim();
-  const cleanToken = token_ujian.toUpperCase().trim();
+  const cleanToken = token_ujian.trim();
+  const cleanTokenUpper = cleanToken.toUpperCase();
 
   const apiRes = await safeApiJson<{
     student?: StudentItem;
@@ -1363,76 +1480,73 @@ export async function loginStudentExamCbt(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       nama: cleanNama,
-      token_ujian: cleanToken,
+      token_ujian: cleanTokenUpper,
       examId,
     }),
   });
 
-  if (apiRes.isApiAvailable) {
-    if (!apiRes.ok || apiRes.data?.error) {
-      throw new Error(apiRes.data?.error || 'Gagal memulai sesi ujian.');
+  if (apiRes.isApiAvailable && apiRes.ok && apiRes.data?.student && apiRes.data?.exam && apiRes.data?.questions) {
+    const syncedPkg =
+      apiRes.data.student.kode_soal ||
+      apiRes.data.exam.kode_paket ||
+      'PAKET-A';
+    const syncedStudent: StudentItem = {
+      ...apiRes.data.student,
+      status_ujian: 'Sedang Ujian',
+      kode_soal: syncedPkg,
+      variasi_paket:
+        apiRes.data.student.variasi_paket ||
+        syncedPkg.replace(/^PAKET[-_\s]*/i, '') ||
+        'A',
+    };
+    if (db) {
+      await setDoc(
+        doc(db, 'students', String(syncedStudent.id)),
+        buildCleanStudentFirestoreDoc(syncedStudent, new Date().toISOString()),
+        { merge: true }
+      ).catch(() => {});
     }
-    if (apiRes.data?.student && apiRes.data?.exam && apiRes.data?.questions) {
-      const syncedPkg =
-        apiRes.data.student.kode_soal ||
-        apiRes.data.exam.kode_paket ||
-        'PAKET-A';
-      const syncedStudent: StudentItem = {
-        ...apiRes.data.student,
-        status_ujian: 'Sedang Ujian',
-        kode_soal: syncedPkg,
-      };
-      if (db) {
-        await setDoc(doc(db, 'students', String(syncedStudent.id)), {
-          id: Number(syncedStudent.id),
-          nama: syncedStudent.nama.slice(0, 150),
-          kelas: syncedStudent.kelas.slice(0, 64),
-          token_ujian: syncedStudent.token_ujian.slice(0, 6),
-          status_ujian: 'Sedang Ujian',
-          kode_soal: syncedPkg.slice(0, 32),
-          variasi_paket: (syncedStudent.variasi_paket || syncedPkg.replace(/^PAKET[-_\s]*/i, '') || 'A').slice(0, 8),
-          authorUid: 'sahidin30@gmail.com',
-          updatedAt: new Date().toISOString(),
-        }).catch(() => {});
-      }
-      return {
-        student: syncedStudent,
-        exam: apiRes.data.exam,
-        questions: apiRes.data.questions,
-      };
-    }
+    return {
+      student: syncedStudent,
+      exam: apiRes.data.exam,
+      questions: apiRes.data.questions,
+    };
   }
 
-  // Fallback / Direct Firebase Firestore verification (for Vercel static deployments)
+  // Fallback / Direct Firebase Firestore verification (also handles custom password_login and Vercel static deployments)
   const fsData = await fetchAllFromFirestore();
   if (!fsData) {
+    if (apiRes.isApiAvailable && apiRes.data?.error) {
+      throw new Error(apiRes.data.error);
+    }
     throw new Error('Tidak dapat terhubung ke database Firebase Firestore.');
   }
 
-  const matchedStudent = fsData.students.find(
-    (s) => s.token_ujian.toUpperCase() === cleanToken
-  );
+  const matchedStudent = fsData.students.find((s) => {
+    const nameMatch = s.nama.trim().toLowerCase() === cleanNama.toLowerCase();
+    const sysTokenMatch = (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper;
+    const customPassMatch =
+      Boolean(s.password_login) &&
+      (s.password_login!.trim() === cleanToken ||
+        s.password_login!.trim().toUpperCase() === cleanTokenUpper);
+    return nameMatch && (sysTokenMatch || customPassMatch);
+  }) || fsData.students.find((s) => (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper);
+
   if (!matchedStudent) {
     throw new Error(
-      'Token Ujian tidak ditemukan di database siswa. Hubungi Guru/Pengawas Anda.'
+      'Token / Password Akun Siswa tidak ditemukan di database. Hubungi Guru/Pengawas Anda.'
     );
   }
 
   if (matchedStudent.nama.trim().toLowerCase() !== cleanNama.toLowerCase()) {
     throw new Error(
-      `Token Ujian tidak sesuai untuk siswa "${cleanNama}". Pastikan Anda memilih Kelas, Nama Siswa, dan memasukkan 6 karakter Token milik Anda sendiri.`
+      `Token Ujian tidak sesuai untuk siswa "${cleanNama}". Pastikan Anda memilih Kelas dan Nama Siswa yang sesuai.`
     );
   }
 
   if (matchedStudent.status_ujian === 'Diblokir') {
     throw new Error(
       'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.'
-    );
-  }
-
-  if (matchedStudent.status_ujian === 'Selesai') {
-    throw new Error(
-      'Anda telah menyelesaikan ujian dengan Token ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai.'
     );
   }
 
@@ -1475,17 +1589,11 @@ export async function loginStudentExamCbt(
   };
 
   if (db) {
-    await setDoc(doc(db, 'students', String(updatedStudent.id)), {
-      id: Number(updatedStudent.id),
-      nama: updatedStudent.nama.slice(0, 150),
-      kelas: updatedStudent.kelas.slice(0, 64),
-      token_ujian: updatedStudent.token_ujian.slice(0, 6),
-      status_ujian: 'Sedang Ujian',
-      kode_soal: proportionalAlloc.packageCode.slice(0, 32),
-      variasi_paket: proportionalAlloc.variantLetter.slice(0, 8),
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: new Date().toISOString(),
-    });
+    await setDoc(
+      doc(db, 'students', String(updatedStudent.id)),
+      buildCleanStudentFirestoreDoc(updatedStudent, new Date().toISOString()),
+      { merge: true }
+    );
     await updateFirestorePulse(
       `Siswa mulai ujian: ${updatedStudent.nama} (${updatedStudent.kelas}) — ${activeExam.judul_ujian} [${proportionalAlloc.packageCode}]`
     );
@@ -1559,17 +1667,19 @@ export async function submitStudentExamCbt(payload: {
       payload.student.variasi_paket?.slice(0, 64) ||
       'PAKET-A';
 
-    await setDoc(doc(db, 'students', String(payload.student.id)), {
-      id: Number(payload.student.id),
-      nama: payload.student.nama.slice(0, 150),
-      kelas: payload.student.kelas.slice(0, 64),
-      token_ujian: payload.student.token_ujian.slice(0, 6),
-      status_ujian: 'Selesai',
-      kode_soal: studentPkg,
-      variasi_paket: studentPkg,
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: nowIso,
-    });
+    await setDoc(
+      doc(db, 'students', String(payload.student.id)),
+      buildCleanStudentFirestoreDoc(
+        {
+          ...payload.student,
+          status_ujian: 'Selesai',
+          kode_soal: studentPkg,
+          variasi_paket: studentPkg,
+        },
+        nowIso
+      ),
+      { merge: true }
+    );
 
     await setDoc(doc(db, 'results', String(resultId)), {
       id: Number(resultId),

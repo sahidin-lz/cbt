@@ -54,6 +54,8 @@ import {
   classifyQuestionCognitiveLevel,
   assignPackageVariantsToStudents,
   resolveSyncedStudentAnswersForExam,
+  getEffectiveExamSessionToken,
+  generateExamToken,
   SOSIOLOGI_EXAM_CATEGORIES,
 } from '../utils/cbtLogic';
 import {
@@ -71,6 +73,7 @@ import {
   saveExamCbt,
   deleteExamCbt,
   toggleExamStatusCbt,
+  updateExamSessionTokenCbt,
   saveStudentCbt,
   uploadStudentsCsvCbt,
   regenerateStudentTokenCbt,
@@ -253,6 +256,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newExamKodePaket, setNewExamKodePaket] = useState<string>('PAKET-A');
   const [newExamMultiPaket, setNewExamMultiPaket] = useState<boolean>(false);
   const [newExamJumlahPaket, setNewExamJumlahPaket] = useState<number>(2);
+  const [newExamTokenSesi, setNewExamTokenSesi] = useState<string>(() => generateExamToken());
+  const [newExamTampilkanNilai, setNewExamTampilkanNilai] = useState<boolean>(true);
+  const [newExamPengumuman, setNewExamPengumuman] = useState<string>('');
+  const [inlineTokenEditExamId, setInlineTokenEditExamId] = useState<number | null>(null);
+  const [inlineTokenEditValue, setInlineTokenEditValue] = useState<string>('');
   const [isDistributingPackages, setIsDistributingPackages] = useState(false);
   const [filterExamTingkat, setFilterExamTingkat] = useState<string>('SEMUA');
   const [editingExamId, setEditingExamId] = useState<number | null>(null);
@@ -264,6 +272,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     'manual'
   );
   const [studentNameInput, setStudentNameInput] = useState('');
+  const [studentNisnInput, setStudentNisnInput] = useState('');
   const [studentTingkatPreset, setStudentTingkatPreset] = useState<
     'X' | 'XI' | 'XII'
   >('X');
@@ -549,12 +558,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       kode_paket: newExamKodePaket.trim() || 'PAKET-A',
       mode_multi_paket: newExamMultiPaket,
       jumlah_paket: newExamJumlahPaket,
+      token_sesi: newExamTokenSesi.trim().toUpperCase() || generateExamToken(),
+      tampilkan_nilai: newExamTampilkanNilai,
+      pengumuman: newExamPengumuman.trim(),
     };
 
     try {
       const savedExam = await saveExamCbt(payload, editingExamId);
       if (editingExamId) {
-        setExamFeedback(`Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] (${savedExam.kategori_ujian || 'Ujian'}) berhasil diperbarui.`);
+        setExamFeedback(
+          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] berhasil diperbarui (Token Sesi Ujian: ${savedExam.token_sesi}).`
+        );
         setEditingExamId(null);
         setNewExamTitle('');
         setNewExamDuration('60');
@@ -568,9 +582,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setNewExamKodePaket('PAKET-A');
         setNewExamMultiPaket(false);
         setNewExamJumlahPaket(2);
+        setNewExamTokenSesi(generateExamToken());
+        setNewExamTampilkanNilai(true);
+        setNewExamPengumuman('');
       } else {
         setExamFeedback(
-          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] (${savedExam.kategori_ujian || 'Ujian'}) berhasil dibuat.`
+          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] berhasil dibuat dengan Token Sesi Ujian: ${savedExam.token_sesi}.`
         );
         setSelectedExamId(savedExam.id);
         setNewExamTitle('');
@@ -583,10 +600,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setNewExamKodePaket('PAKET-A');
         setNewExamMultiPaket(false);
         setNewExamJumlahPaket(2);
+        setNewExamTokenSesi(generateExamToken());
+        setNewExamTampilkanNilai(true);
+        setNewExamPengumuman('');
       }
       await onRefreshData();
     } finally {
       setIsSavingExam(false);
+    }
+  };
+
+  const handleUpdateExamSessionToken = async (exam: ExamItem, customToken?: string) => {
+    setExamFeedback(null);
+    try {
+      const updated = await updateExamSessionTokenCbt(exam, customToken);
+      setInlineTokenEditExamId(null);
+      setInlineTokenEditValue('');
+      setExamFeedback(
+        `Token Sesi Ujian untuk "${updated.judul_ujian}" berhasil diperbarui menjadi: ${updated.token_sesi}. Berikan token ini kepada siswa saat ujian dimulai.`
+      );
+      await onRefreshData();
+    } catch (err: any) {
+      setExamFeedback(err.message || 'Gagal memperbarui Token Sesi Ujian.');
     }
   };
 
@@ -599,7 +634,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await toggleExamStatusCbt(exam, nextStatus);
       setExamFeedback(
         nextStatus === 'AKTIF'
-          ? `Sesi ujian "${exam.judul_ujian}" kini AKTIF! Siswa pada kelas terkait sudah bisa masuk dan mengerjakan ujian.`
+          ? `Sesi ujian "${exam.judul_ujian}" kini AKTIF! Token Sesi Ujian: ${getEffectiveExamSessionToken(exam)}. Siswa sudah bisa memilih ujian ini di menu Jadwal Ujian.`
           : nextStatus === 'DRAF'
             ? `Sesi ujian "${exam.judul_ujian}" kini berstatus DRAF (Tersimpan di Bank Soal, siswa tidak bisa melihat).`
             : `Sesi ujian "${exam.judul_ujian}" telah DITUTUP (Arsip).`
@@ -711,6 +746,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {
           nama: studentNameInput.trim(),
           kelas: studentClassInput.trim(),
+          nisn: studentNisnInput.trim() || undefined,
         },
         editingStudentId,
         existingSt
@@ -723,12 +759,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
         setEditingStudentId(null);
         setStudentNameInput('');
+        setStudentNisnInput('');
       } else {
         setStudentFeedback({
           type: 'success',
-          message: `Siswa "${savedStudent.nama}" (${savedStudent.kelas}) berhasil disimpan dengan Token: ${savedStudent.token_ujian}`,
+          message: `Siswa "${savedStudent.nama}" (${savedStudent.kelas}) berhasil disimpan dengan Token Login: ${savedStudent.token_ujian}`,
         });
         setStudentNameInput('');
+        setStudentNisnInput('');
       }
       await onRefreshData();
     } finally {
@@ -2441,6 +2479,88 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
+                {/* Token Sesi Ujian (Diberikan Guru Setiap Akan Ujian) & Pengumuman */}
+                <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-lg space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-indigo-950">
+                      Token Sesi Ujian &amp; Portal Siswa
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-600 text-white">
+                      Kontrol Guru
+                    </span>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="exam-token-sesi-input"
+                      className="block text-[11px] font-semibold text-indigo-950 mb-1"
+                    >
+                      Token Sesi Ujian (Diinput Siswa Saat Klik &ldquo;Mulai Ujian&rdquo;)
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        id="exam-token-sesi-input"
+                        type="text"
+                        maxLength={12}
+                        value={newExamTokenSesi}
+                        onChange={(e) =>
+                          setNewExamTokenSesi(
+                            e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '')
+                          )
+                        }
+                        placeholder="Misal: SOS10A"
+                        className="flex-1 px-3 py-1.5 text-xs font-mono font-extrabold tracking-widest uppercase bg-white border border-indigo-300 text-indigo-900 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setNewExamTokenSesi(generateExamToken())}
+                        className="px-2.5 py-1.5 text-[11px] font-bold text-indigo-800 bg-white hover:bg-indigo-100 border border-indigo-300 rounded-md cursor-pointer shrink-0 flex items-center gap-1"
+                        title="Buat Token Sesi Ujian acak 6 karakter baru"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Acak Token</span>
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-indigo-800/80 mt-1 leading-tight">
+                      Token ini dapat Bapak/Ibu ubah kapan saja setiap akan mulai sesi ujian.
+                    </p>
+                  </div>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none pt-1 border-t border-indigo-200/60">
+                    <input
+                      type="checkbox"
+                      checked={newExamTampilkanNilai}
+                      onChange={(e) => setNewExamTampilkanNilai(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 text-indigo-600 rounded border-indigo-300"
+                    />
+                    <div className="text-xs">
+                      <span className="font-semibold text-indigo-950">
+                        Tampilkan Hasil &amp; Nilai di Akun Siswa
+                      </span>
+                      <p className="text-[10px] text-indigo-800/80">
+                        Jika aktif, siswa dapat melihat skor &amp; mengunduh PDF pembahasan di menu Hasil Ujian.
+                      </p>
+                    </div>
+                  </label>
+
+                  <div>
+                    <label
+                      htmlFor="exam-pengumuman-input"
+                      className="block text-[11px] font-semibold text-indigo-950 mb-1"
+                    >
+                      Pengumuman Ujian di Beranda Siswa (Opsional)
+                    </label>
+                    <textarea
+                      id="exam-pengumuman-input"
+                      rows={2}
+                      value={newExamPengumuman}
+                      onChange={(e) => setNewExamPengumuman(e.target.value)}
+                      placeholder="Contoh: Kerjakan dengan jujur dan teliti. Waktu ujian 60 menit."
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-indigo-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    />
+                  </div>
+                </div>
+
                 <div className="flex items-center gap-2">
                   <button
                     type="submit"
@@ -2471,6 +2591,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setNewExamKodePaket('PAKET-A');
                         setNewExamMultiPaket(false);
                         setNewExamJumlahPaket(2);
+                        setNewExamTokenSesi(generateExamToken());
+                        setNewExamTampilkanNilai(true);
+                        setNewExamPengumuman('');
                       }}
                       className="px-3 py-2.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                     >
@@ -2666,6 +2789,79 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   </button>
                                 )}
                               </div>
+
+                              {/* Token Sesi Ujian Control right inside the row */}
+                              <div className="mt-2 pt-1.5 border-t border-slate-100 flex flex-wrap items-center gap-1.5">
+                                <span className="text-[10px] font-semibold text-slate-500">
+                                  Token Sesi:
+                                </span>
+                                {inlineTokenEditExamId === ex.id ? (
+                                  <div className="inline-flex items-center gap-1">
+                                    <input
+                                      type="text"
+                                      maxLength={12}
+                                      value={inlineTokenEditValue}
+                                      onChange={(e) =>
+                                        setInlineTokenEditValue(
+                                          e.target.value
+                                            .toUpperCase()
+                                            .replace(/[^A-Z0-9-]/g, '')
+                                        )
+                                      }
+                                      className="w-20 px-1.5 py-0.5 text-[11px] font-mono font-bold uppercase border border-indigo-400 rounded bg-white text-indigo-950"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleUpdateExamSessionToken(
+                                          ex,
+                                          inlineTokenEditValue
+                                        )
+                                      }
+                                      className="px-1.5 py-0.5 text-[10px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded cursor-pointer"
+                                    >
+                                      Simpan
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setInlineTokenEditExamId(null)}
+                                      className="px-1.5 py-0.5 text-[10px] text-slate-600 bg-slate-100 rounded cursor-pointer"
+                                    >
+                                      Batal
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <code className="px-2 py-0.5 rounded bg-indigo-950 text-amber-300 font-mono text-[11px] font-extrabold tracking-wider">
+                                      {getEffectiveExamSessionToken(ex)}
+                                    </code>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleUpdateExamSessionToken(ex)
+                                      }
+                                      title="Acak Token Sesi Ujian baru untuk ujian ini"
+                                      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded cursor-pointer"
+                                    >
+                                      <RefreshCw className="w-2.5 h-2.5" />
+                                      <span>Acak</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setInlineTokenEditExamId(ex.id);
+                                        setInlineTokenEditValue(
+                                          getEffectiveExamSessionToken(ex)
+                                        );
+                                      }}
+                                      title="Atur sendiri kode Token Sesi Ujian"
+                                      className="px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                                    >
+                                      Set Token
+                                    </button>
+                                  </>
+                                )}
+                              </div>
                             </td>
 
                             <td className="py-3.5 px-4 text-xs text-slate-700">
@@ -2728,6 +2924,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     setNewExamKodePaket(ex.kode_paket || 'PAKET-A');
                                     setNewExamMultiPaket(Boolean(ex.mode_multi_paket));
                                     setNewExamJumlahPaket(ex.jumlah_paket || 2);
+                                    setNewExamTokenSesi(
+                                      ex.token_sesi || getEffectiveExamSessionToken(ex)
+                                    );
+                                    setNewExamTampilkanNilai(ex.tampilkan_nilai !== false);
+                                    setNewExamPengumuman(ex.pengumuman || '');
                                   }}
                                   aria-label={`Edit ujian ${ex.judul_ujian}`}
                                   className="p-1.5 text-slate-500 hover:text-slate-900 rounded-md cursor-pointer"
@@ -3175,6 +3376,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   <div>
+                    <label
+                      htmlFor="add-student-nisn"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
+                    >
+                      NISN Siswa (Opsional — Tampil di Profil Akun Siswa)
+                    </label>
+                    <input
+                      id="add-student-nisn"
+                      type="text"
+                      value={studentNisnInput}
+                      onChange={(e) => setStudentNisnInput(e.target.value)}
+                      placeholder="Contoh: 0078123456"
+                      className="w-full px-3.5 py-2 text-sm font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    />
+                  </div>
+
+                  <div>
                     <span className="block text-xs font-semibold text-slate-700 mb-1.5">
                       Pilih Tingkatan Kelas Cepat
                     </span>
@@ -3500,7 +3718,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         return (
                           <tr key={st.id} className="hover:bg-slate-50/80">
                             <td className="py-3 px-3.5 font-semibold text-slate-900">
-                              {st.nama}
+                              <div>{st.nama}</div>
+                              {st.nisn && (
+                                <div className="text-[11px] font-mono text-slate-500 mt-0.5">
+                                  NISN: {st.nisn}
+                                </div>
+                              )}
                             </td>
                             <td className="py-3 px-3.5 text-xs text-slate-700">
                               <span className="font-semibold text-slate-900">
@@ -3514,9 +3737,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               )}
                             </td>
                             <td className="py-3 px-3.5">
-                              <code className="font-mono font-bold text-sm text-blue-700">
-                                {st.token_ujian}
-                              </code>
+                              <div className="flex flex-col gap-0.5">
+                                <code className="font-mono font-bold text-sm text-blue-700">
+                                  {st.token_ujian}
+                                </code>
+                                {st.password_login &&
+                                  st.password_login.toUpperCase() !==
+                                    st.token_ujian.toUpperCase() && (
+                                    <span className="text-[10px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
+                                      Pass: {st.password_login}
+                                    </span>
+                                  )}
+                              </div>
                             </td>
                             <td className="py-3 px-3.5">
                               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200">
@@ -3635,6 +3867,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     setEditingStudentId(st.id);
                                     setStudentNameInput(st.nama);
                                     setStudentClassInput(st.kelas);
+                                    setStudentNisnInput(st.nisn || '');
                                   }}
                                   aria-label={`Edit siswa ${st.nama}`}
                                   className="p-1.5 text-slate-500 hover:text-slate-900 rounded-md cursor-pointer"
@@ -5383,9 +5616,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const examQuestionsForPdf = questions.filter(
+                                    let examQuestionsForPdf = questions.filter(
                                       (q) => Number(q.exam_id) === Number(resItem.exam_id)
                                     );
+                                    if (
+                                      examQuestionsForPdf.length === 0 &&
+                                      resItem.jawaban_siswa
+                                    ) {
+                                      const ansIds = new Set(
+                                        Object.keys(resItem.jawaban_siswa)
+                                      );
+                                      const matchedQ = questions.find((q) =>
+                                        ansIds.has(String(q.id))
+                                      );
+                                      if (matchedQ) {
+                                        examQuestionsForPdf = questions.filter(
+                                          (q) =>
+                                            Number(q.exam_id) ===
+                                            Number(matchedQ.exam_id)
+                                        );
+                                      }
+                                    }
                                     const syncedAnswersForPdf =
                                       examQuestionsForPdf.length > 0
                                         ? resolveSyncedStudentAnswersForExam({

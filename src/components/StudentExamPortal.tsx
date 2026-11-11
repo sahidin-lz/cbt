@@ -44,6 +44,10 @@ import {
 } from '../utils/cbtLogic';
 import { downloadSingleStudentResultPdf } from '../utils/cbtPdfGenerator';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
+import {
+  StudentAccountDashboard,
+  StudentDashboardMenu,
+} from './StudentAccountDashboard';
 
 export interface StudentActivityLog {
   timestamp: string;
@@ -186,6 +190,32 @@ function clearActiveStudentSession() {
   } catch {}
 }
 
+const LOGGED_IN_STUDENT_ACCOUNT_KEY = 'cbt_logged_in_student_account';
+
+function saveLoggedInStudentAccount(student: StudentItem) {
+  try {
+    localStorage.setItem(LOGGED_IN_STUDENT_ACCOUNT_KEY, JSON.stringify(student));
+  } catch (e) {
+    console.error('Failed to save student account session', e);
+  }
+}
+
+function getLoggedInStudentAccount(): StudentItem | null {
+  try {
+    const raw = localStorage.getItem(LOGGED_IN_STUDENT_ACCOUNT_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearLoggedInStudentAccount() {
+  try {
+    localStorage.removeItem(LOGGED_IN_STUDENT_ACCOUNT_KEY);
+  } catch {}
+}
+
 interface StudentExamPortalProps {
   exams: ExamItem[];
   questions?: QuestionItem[];
@@ -263,6 +293,31 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     if (!initialSession?.student?.token_ujian) return null;
     return getLocalProgress(initialSession.student.token_ujian, initialSession.exam?.id);
   }, [initialSession]);
+
+  // Logged-in Student Account State (Portal Akun Siswa)
+  const [loggedInAccount, setLoggedInAccount] = useState<StudentItem | null>(() => {
+    return initialSession?.student || getLoggedInStudentAccount() || null;
+  });
+  const [accountDashboardMenu, setAccountDashboardMenu] =
+    useState<StudentDashboardMenu>('beranda');
+
+  // Keep loggedInAccount synced when students list updates from Firestore
+  useEffect(() => {
+    if (!loggedInAccount || students.length === 0) return;
+    const fresh = students.find((s) => Number(s.id) === Number(loggedInAccount.id));
+    if (fresh) {
+      const merged: StudentItem = {
+        ...loggedInAccount,
+        ...fresh,
+        password_login: fresh.password_login ?? loggedInAccount.password_login,
+        nisn: fresh.nisn ?? loggedInAccount.nisn,
+      };
+      if (JSON.stringify(merged) !== JSON.stringify(loggedInAccount)) {
+        setLoggedInAccount(merged);
+        saveLoggedInStudentAccount(merged);
+      }
+    }
+  }, [students, loggedInAccount]);
 
   // Active Exam Session State
   const [activeStudent, setActiveStudent] = useState<StudentItem | null>(() => {
@@ -433,17 +488,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     }
   };
 
-  const handleStartExam = async (e: React.FormEvent) => {
+  // Login to Student Account Portal (3-Step Login with Custom Password or System Token)
+  const handleAccountLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
-
-    // Enforce pre-validation check for Diblokir status
-    if (selectedStudentObj && selectedStudentObj.status_ujian === 'Diblokir') {
-      setLoginError(
-        'Akses ujian Anda saat ini DIBLOKIR / DIKUNCI karena terdeteksi berpindah tab atau dikunci pengawas. Silakan hubungi Guru Pengawas untuk membuka blokir Anda terlebih dahulu di Dashboard Guru.'
-      );
-      return;
-    }
 
     if (students.length > 0) {
       const validation = validateStudentCascadingLogin({
@@ -451,50 +499,88 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         selectedKelas,
         selectedStudentId,
         tokenInput,
+        allowAccountPortalLogin: true,
       });
       if (!validation.ok) {
         setLoginError(validation.error);
         return;
       }
+
+      const matchedStudent = validation.student;
+      const proportional = resolveProportionalStudentExamPackage({
+        student: matchedStudent,
+        allStudents: students,
+        exams,
+        questions,
+      });
+
+      const enrichedStudent: StudentItem = {
+        ...matchedStudent,
+        kode_soal:
+          matchedStudent.kode_soal ||
+          proportional?.packageCode ||
+          'PAKET-A',
+      };
+
+      setLoggedInAccount(enrichedStudent);
+      saveLoggedInStudentAccount(enrichedStudent);
+      setAccountDashboardMenu('beranda');
+      setTokenInput('');
+      setLoginError(null);
     } else {
       if (!namaInput.trim()) {
         setLoginError('Silakan pilih atau masukkan Nama Lengkap Siswa terlebih dahulu.');
         return;
       }
-      if (!tokenInput.trim() || tokenInput.trim().length !== 6) {
-        setLoginError('Token Ujian harus terdiri dari 6 karakter alfanumerik.');
+      if (!tokenInput.trim() || tokenInput.trim().length < 4) {
+        setLoginError('Password / Token Login minimal 4 karakter.');
         return;
       }
     }
+  };
 
-    const targetNama = selectedStudentObj ? selectedStudentObj.nama : namaInput.trim();
-    const cleanToken = tokenInput.toUpperCase().trim();
+  // Start Exam Worksheet from Student Account Dashboard (after Teacher's Exam Session Token is verified)
+  const handleStartExamFromDashboard = async (targetExam: ExamItem) => {
+    const currentAccount = loggedInAccount || selectedStudentObj;
+    if (!currentAccount) {
+      throw new Error('Sesi akun siswa tidak ditemukan. Silakan login kembali.');
+    }
 
-    // Panggil Fullscreen SEKARANG (sebelum ada proses await/jaringan)
-    // agar browser mendeteksi sebagai Transient User Activation dari klik user.
+    if (currentAccount.status_ujian === 'Diblokir') {
+      throw new Error(
+        'Akses ujian Anda saat ini DIBLOKIR / DIKUNCI karena terdeteksi berpindah tab atau dikunci pengawas. Silakan hubungi Guru Pengawas untuk membuka blokir Anda.'
+      );
+    }
+
     requestExamFullscreen();
-
     setIsLoggingIn(true);
+
     try {
-      const targetExamIdToLoad = selectedExamId
-        ? Number(selectedExamId)
-        : studentProportionalAllocation?.exam?.id;
+      const cleanSystemToken = String(currentAccount.token_ujian || '')
+        .toUpperCase()
+        .trim();
 
       const session = await loginStudentExamCbt(
-        targetNama,
-        cleanToken,
-        targetExamIdToLoad
+        currentAccount.nama,
+        cleanSystemToken,
+        targetExam.id
       );
 
-      const savedProgress = getLocalProgress(cleanToken, session.exam?.id);
+      const savedProgress = getLocalProgress(cleanSystemToken, session.exam?.id);
+
+      const proportional = resolveProportionalStudentExamPackage({
+        student: currentAccount,
+        allStudents: students,
+        exams,
+        questions,
+      });
 
       const syncedPackageCode =
-        session.student.kode_soal ||
-        studentProportionalAllocation?.packageCode ||
         session.exam?.kode_paket ||
+        session.student.kode_soal ||
+        proportional?.packageCode ||
         'PAKET-A';
 
-      // Prepare questions with deterministic question & option shuffling + synchronized package routing
       const prepared = prepareStudentExamQuestions({
         questions: session.questions || [],
         student: {
@@ -507,9 +593,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
       const updatedStudent: StudentItem = {
         ...session.student,
+        nisn: currentAccount.nisn || session.student.nisn,
+        password_login:
+          currentAccount.password_login || session.student.password_login,
         kode_soal: prepared.studentPackageCode,
         variasi_paket: prepared.studentPackageCode.replace(/[^A-D]/g, '') || 'A',
       };
+
+      setLoggedInAccount(updatedStudent);
+      saveLoggedInStudentAccount(updatedStudent);
 
       setActiveStudent(updatedStudent);
       setActiveExam(session.exam);
@@ -522,7 +614,6 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       });
 
       if (savedProgress && Object.keys(savedProgress.answers || {}).length > 0) {
-        // RESUME EXISTING PROGRESS (Siswa tinggal melanjutkan!)
         setAnswers(savedProgress.answers);
         setCurrentIndex(savedProgress.currentIndex || 0);
         setRemainingSeconds(
@@ -544,7 +635,6 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           `Sesi Ujian Dilanjutkan! Jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis.`
         );
       } else {
-        // Fresh Session
         setAnswers({});
         setCurrentIndex(0);
         setRemainingSeconds((session.exam?.durasi_menit || 60) * 60);
@@ -553,7 +643,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             action: 'login',
-            detail: 'Siswa berhasil login dan memulai sesi ujian.',
+            detail: `Siswa memulai sesi ujian "${session.exam?.judul_ujian || targetExam.judul_ujian}" setelah verifikasi Token Sesi Ujian.`,
           },
         ]);
         setResumeNotice(null);
@@ -569,7 +659,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       if (document.fullscreenElement && document.exitFullscreen) {
         document.exitFullscreen().catch(() => {});
       }
-      setLoginError(err.message || 'Gagal memulai sesi ujian.');
+      throw err;
     } finally {
       setIsLoggingIn(false);
     }
@@ -1142,13 +1232,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   onClick={() => {
                     setActiveStudent(null);
                     setSubmittedSummary(null);
+                    setAccountDashboardMenu('hasil');
                     setNamaInput('');
                     setTokenInput('');
                   }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  Kembali ke Halaman Login
+                  Kembali ke Dashboard Akun Siswa
                 </button>
               </div>
             </div>
@@ -1218,16 +1309,63 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
   }
 
-  // 2. RENDER DEDICATED STUDENT PORTAL (MASUK UJIAN SISWA)
+  // 2. RENDER STUDENT ACCOUNT DASHBOARD (IF LOGGED IN TO ACCOUNT & NOT IN ACTIVE EXAM WORKSHEET)
+  if (!activeStudent && loggedInAccount) {
+    return (
+      <StudentAccountDashboard
+        student={loggedInAccount}
+        allStudents={students}
+        exams={exams}
+        questions={questions}
+        results={results}
+        initialMenu={accountDashboardMenu}
+        hasSavedProgressForExam={(examId: number) => {
+          const saved = getLocalProgress(
+            String(loggedInAccount.token_ujian || '').toUpperCase().trim(),
+            examId
+          );
+          const count = Object.keys(saved?.answers || {}).filter(
+            (k) => saved?.answers[k] && saved.answers[k].length > 0
+          ).length;
+          return {
+            hasProgress: count > 0,
+            answeredCount: count,
+          };
+        }}
+        onStartExamWithSessionToken={handleStartExamFromDashboard}
+        onStudentUpdated={(updated) => {
+          setLoggedInAccount(updated);
+          saveLoggedInStudentAccount(updated);
+          onExamCompleted();
+        }}
+        onRefreshData={onExamCompleted}
+        onLogout={() => {
+          clearLoggedInStudentAccount();
+          clearActiveStudentSession();
+          setLoggedInAccount(null);
+          setActiveStudent(null);
+          setSubmittedSummary(null);
+          setTokenInput('');
+          setLoginError(null);
+        }}
+      />
+    );
+  }
+
+  // 2B. RENDER DEDICATED STUDENT LOGIN PORTAL (LOGIN AKUN SISWA)
   if (!activeStudent) {
     const step1Done = Boolean(selectedKelas);
     const step2Done = Boolean(selectedKelas && selectedStudentObj);
-    const step3Done = Boolean(step2Done && tokenInput.trim().length === 6);
+    const step3Done = Boolean(step2Done && tokenInput.trim().length >= 4);
 
     // Check if there is saved unsubmitted progress in localStorage for current student
-    const activeSavedProgress = step3Done
-      ? getLocalProgress(tokenInput.toUpperCase().trim(), selectedExamId ? Number(selectedExamId) : undefined)
-      : null;
+    const activeSavedProgress =
+      step2Done && selectedStudentObj
+        ? getLocalProgress(
+            selectedStudentObj.token_ujian.toUpperCase().trim(),
+            selectedExamId ? Number(selectedExamId) : undefined
+          )
+        : null;
 
     return (
       <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 space-y-5">
@@ -1244,17 +1382,17 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               <div className="flex items-center justify-between gap-2 text-xs text-amber-300 font-bold uppercase tracking-wider">
                 <span className="flex items-center gap-1.5">
                   <LogIn className="w-3.5 h-3.5" />
-                  <span>Portal Peserta CBT Sosiologi SMA</span>
+                  <span>Portal Login Akun Siswa CBT Sosiologi SMA</span>
                 </span>
                 <span className="font-mono text-white/90 bg-white/15 backdrop-blur-xs px-2.5 py-0.5 rounded-md">
-                  3 Langkah Mudah
+                  Sistem Akun &amp; Token Sesi
                 </span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mt-1">
-                Selamat Datang di Ruang Ujian Sosiologi
+                Selamat Datang di Portal Akun Siswa Sosiologi
               </h1>
-              <p className="text-xs text-slate-100 mt-1 leading-relaxed max-w-xl">
-                Siapkan fokus terbaikmu! Pilih <strong>Kelas</strong>, pilih <strong>Nama Lengkap</strong>, lalu masukkan <strong>Token Ujian</strong> untuk memulai asesmen.
+              <p className="text-xs text-slate-100 mt-1 leading-relaxed max-w-2xl">
+                Pilih <strong>Kelas</strong>, pilih <strong>Nama Lengkap</strong>, lalu masukkan <strong>Password Login Akun</strong> (atau <strong>Token Bawaan Sistem</strong>) untuk mengakses Beranda, Jadwal Ujian, Nilai, Riwayat, dan Profil Siswa.
               </p>
             </div>
           </div>
@@ -1324,15 +1462,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-mono font-bold text-white ${step3Done ? 'bg-emerald-600' : step2Done ? 'bg-amber-600' : 'bg-slate-400'}`}>
                       3
                     </span>
-                    <span>Token Ujian</span>
+                    <span>Password / Token Login</span>
                   </span>
                   {step3Done && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
                 </div>
                 <div className="text-[11px] mt-1.5 font-semibold truncate opacity-90">
                   {step3Done
-                    ? 'Token siap diverifikasi'
+                    ? 'Kredensial siap diverifikasi'
                     : step2Done
-                      ? 'Masukkan 6 karakter'
+                      ? 'Masukkan Password / Token'
                       : 'Menunggu peserta'}
                 </div>
               </div>
@@ -1349,14 +1487,13 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   <p className="mt-0.5 leading-relaxed text-emerald-800">
                     Sistem mendeteksi ada{' '}
                     <strong>{Object.keys(activeSavedProgress.answers).length} jawaban tersimpan</strong>{' '}
-                    dari sesi sebelumnya. Saat Anda klik <em>Mulai Ujian</em>, Anda akan langsung{' '}
-                    <strong>melanjutkan</strong> pengerjaan soal tanpa kehilangan jawaban.
+                    dari sesi sebelumnya. Setelah masuk ke Dashboard Akun Siswa, Anda dapat langsung melanjutkan ujian tanpa kehilangan jawaban.
                   </p>
                 </div>
               </div>
             )}
 
-            <form onSubmit={handleStartExam} className="space-y-5">
+            <form onSubmit={handleAccountLogin} className="space-y-5">
               {/* LANGKAH 1: PILIH KELAS / ROMBEL */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
@@ -1468,80 +1605,29 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                         </>
                       )}
                     </div>
-                    <span
-                      className={`font-bold ${
-                        selectedStudentObj.status_ujian === 'Diblokir'
-                          ? 'text-red-700'
-                          : selectedStudentObj.status_ujian === 'Selesai'
-                            ? 'text-amber-700'
-                            : 'text-emerald-700'
-                      }`}
-                    >
-                      Status: {selectedStudentObj.status_ujian || 'Belum Mulai'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {selectedStudentObj.password_login && (
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold text-[11px]">
+                          Password Kustom Aktif
+                        </span>
+                      )}
+                      <span
+                        className={`font-bold ${
+                          selectedStudentObj.status_ujian === 'Diblokir'
+                            ? 'text-red-700'
+                            : selectedStudentObj.status_ujian === 'Selesai'
+                              ? 'text-amber-700'
+                              : 'text-emerald-700'
+                        }`}
+                      >
+                        Status: {selectedStudentObj.status_ujian || 'Belum Mulai'}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* SINKRONISASI PAKET SOAL PROPORISONAL PER KELAS & ANGKATAN */}
-              {step1Done && (
-                <div className="space-y-2">
-                  {matchedExamsForSelectedClass.length === 0 ? (
-                    <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start gap-2.5">
-                      <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                      <div>
-                        <div className="font-bold">Belum Ada Sesi Ujian Sosiologi yang Dibuka</div>
-                        <p className="mt-0.5 leading-relaxed text-amber-800">
-                          Saat ini belum ada sesi ujian berstatus <strong>AKTIF</strong> untuk kelas <strong>{selectedKelas}</strong>. Bank soal mungkin masih berstatus <em>DRAF</em> (sedang disiapkan guru) atau sesi ujian telah ditutup oleh Guru Sosiologi. Silakan tunggu instruksi pengawas.
-                        </p>
-                      </div>
-                    </div>
-                  ) : studentProportionalAllocation?.exam ? (
-                    <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 text-white border border-indigo-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="px-2.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider bg-amber-400 text-slate-950">
-                            {studentProportionalAllocation.packageCode} · Terdistribusi Proporsional
-                          </span>
-                          <span className="text-[11px] text-blue-200 font-medium">
-                            {studentProportionalAllocation.exam.kategori_ujian || 'Ujian Sosiologi'}
-                          </span>
-                        </div>
-                        <div className="font-extrabold text-sm sm:text-base text-white">
-                          {studentProportionalAllocation.exam.judul_ujian}
-                        </div>
-                        <div className="text-[11px] text-blue-200/90">
-                          Sinkron Otomatis: Soal yang tampil, dikerjakan, dan dinilai terkunci pada paket ini ({questions.filter((q) => Number(q.exam_id) === Number(studentProportionalAllocation.exam?.id)).length || 40} Butir Soal).
-                        </div>
-                      </div>
-                      <div className="flex sm:flex-col items-center sm:items-end justify-between gap-1 shrink-0 bg-white/10 border border-white/15 rounded-lg px-3.5 py-2">
-                        <span className="text-[10px] uppercase tracking-wider text-blue-200 font-semibold">
-                          Durasi Ujian
-                        </span>
-                        <span className="text-sm font-mono font-extrabold text-amber-300">
-                          {studentProportionalAllocation.exam.durasi_menit} Menit
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-3 rounded-lg bg-blue-50/60 border border-blue-200 text-xs flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 shrink-0">
-                          {matchedExamsForSelectedClass[0].kategori_ujian || 'Ujian Sosiologi'}
-                        </span>
-                        <span className="font-semibold text-slate-900 line-clamp-1">
-                          {matchedExamsForSelectedClass[0].judul_ujian} ({matchedExamsForSelectedClass.length} Paket Aktif)
-                        </span>
-                      </div>
-                      <span className="text-[11px] font-mono font-bold text-slate-600 shrink-0">
-                        {matchedExamsForSelectedClass[0].durasi_menit} Menit
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* LANGKAH 3: MASUKKAN TOKEN UJIAN (AKTIF SETELAH PILIH NAMA SISWA) */}
+              {/* LANGKAH 3: MASUKKAN PASSWORD LOGIN AKUN ATAU TOKEN BAWAAN SISTEM */}
               <div
                 className={`transition-opacity ${
                   step2Done || students.length === 0 ? 'opacity-100' : 'opacity-60'
@@ -1550,25 +1636,28 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                   <label
                     htmlFor="student-token-input"
-                    className="block text-sm font-semibold text-slate-800 whitespace-nowrap"
+                    className="block text-sm font-semibold text-slate-800"
                   >
-                    Langkah 3 — Masukkan Token Ujian (6 Karakter)
+                    Langkah 3 — Masukkan Password Login Akun / Token Sistem
                   </label>
+                  <span className="text-[11px] text-slate-500">
+                    Bisa diubah sendiri di menu <strong>Profil Siswa</strong> setelah login
+                  </span>
                 </div>
                 <input
                   ref={tokenInputRef}
                   id="student-token-input"
                   type="text"
-                  maxLength={6}
+                  maxLength={32}
                   disabled={students.length > 0 && !step2Done}
                   value={tokenInput}
-                  onChange={(e) => setTokenInput(e.target.value.toUpperCase())}
+                  onChange={(e) => setTokenInput(e.target.value)}
                   placeholder={
                     students.length > 0 && !step2Done
                       ? 'Pilih Kelas & Nama Siswa Terlebih Dahulu'
-                      : 'Masukkan 6 Karakter Token Ujian Anda'
+                      : 'Masukkan Password Login Akun atau 6 Karakter Token Sistem Anda'
                   }
-                  className="w-full px-4 py-2.5 text-base font-mono tracking-widest uppercase bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed"
+                  className="w-full px-4 py-2.5 text-base font-mono tracking-wider bg-white border border-slate-300 disabled:bg-slate-100 disabled:text-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -1589,22 +1678,22 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 type="submit"
                 disabled={
                   isLoggingIn ||
-                  (students.length > 0 && (!step1Done || !step2Done || !step3Done)) ||
-                  (step1Done && matchedExamsForSelectedClass.length === 0)
+                  (students.length > 0 && (!step1Done || !step2Done || !step3Done))
                 }
-                className="w-full py-3.5 px-5 text-sm font-bold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-700 hover:via-indigo-700 hover:to-emerald-700 disabled:opacity-50 rounded-xl transition-all cursor-pointer disabled:cursor-not-allowed shadow-xs"
+                className="w-full py-3.5 px-5 text-sm font-bold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-700 hover:via-indigo-700 hover:to-emerald-700 disabled:opacity-50 rounded-xl transition-all cursor-pointer disabled:cursor-not-allowed shadow-xs flex items-center justify-center gap-2"
               >
-                {isLoggingIn
-                  ? 'Memverifikasi Kelas, Nama & Token...'
-                  : activeSavedProgress
-                    ? 'Lanjutkan Ujian (Jawaban Tersimpan)'
-                    : 'Mulai Ujian Sekarang'}
+                <LogIn className="w-4 h-4" />
+                <span>
+                  {isLoggingIn
+                    ? 'Memverifikasi Akun Siswa...'
+                    : 'Masuk ke Dashboard Akun Siswa'}
+                </span>
               </button>
             </form>
 
             <div className="pt-5 border-t border-slate-200 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
-              <span>Dukungan Soal: PG Biasa &amp; PG Kompleks</span>
-              <span>Proteksi Anti-Cheat &amp; Autosave Aktif</span>
+              <span>Fitur Akun Siswa: Beranda · Jadwal Ujian · Hasil Nilai · Riwayat · Profil &amp; Ubah Password</span>
+              <span>Token Sesi Ujian Diberikan Guru Saat Mulai Ujian</span>
             </div>
           </div>
         </div>

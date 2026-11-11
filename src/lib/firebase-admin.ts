@@ -49,64 +49,80 @@ export async function syncCbtStateToFirestore(
     // 2. Sync Exams (/exams/{id})
     for (const ex of data.exams) {
       const docRef = adminDb.collection('exams').doc(String(ex.id));
-      batch.set(docRef, {
-        id: Number(ex.id),
-        judul_ujian: String(ex.judul_ujian || '').slice(0, 200),
-        durasi_menit: Number(ex.durasi_menit) || 60,
-        target_tingkat: String(ex.target_tingkat || 'SEMUA').slice(0, 16),
-        target_kelas: String(ex.target_kelas || 'SEMUA').slice(0, 64),
-        authorUid: DEFAULT_ADMIN_UID,
-        updatedAt: nowIso,
-      });
+      batch.set(
+        docRef,
+        {
+          id: Number(ex.id),
+          judul_ujian: String(ex.judul_ujian || '').slice(0, 200),
+          durasi_menit: Number(ex.durasi_menit) || 60,
+          target_tingkat: String(ex.target_tingkat || 'SEMUA').slice(0, 16),
+          target_kelas: String(ex.target_kelas || 'SEMUA').slice(0, 64),
+          authorUid: DEFAULT_ADMIN_UID,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
     }
 
     // 3. Sync Students (/students/{id})
     for (const st of data.students) {
       const docRef = adminDb.collection('students').doc(String(st.id));
-      batch.set(docRef, {
-        id: Number(st.id),
-        nama: String(st.nama || '').slice(0, 150),
-        kelas: String(st.kelas || '').slice(0, 64),
-        token_ujian: String(st.token_ujian || '').slice(0, 6),
-        status_ujian: String(st.status_ujian || 'Belum Mulai').slice(0, 32),
-        authorUid: DEFAULT_ADMIN_UID,
-        updatedAt: nowIso,
-      });
+      batch.set(
+        docRef,
+        {
+          id: Number(st.id),
+          nama: String(st.nama || '').slice(0, 150),
+          kelas: String(st.kelas || '').slice(0, 64),
+          token_ujian: String(st.token_ujian || '').slice(0, 6),
+          status_ujian: String(st.status_ujian || 'Belum Mulai').slice(0, 32),
+          authorUid: DEFAULT_ADMIN_UID,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
     }
 
     // 4. Sync Questions (/questions/{id}) including full data_opsi & kunci_jawaban
     for (const q of data.questions) {
       const docRef = adminDb.collection('questions').doc(String(q.id));
-      batch.set(docRef, {
-        id: Number(q.id),
-        exam_id: Number(q.exam_id),
-        teks_soal: String(q.teks_soal || '').slice(0, 4000),
-        tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
-        data_opsi: q.data_opsi || { wacana: '', opsi: { A: '', B: '', C: '', D: '', E: '' } },
-        kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
-        bobot: Number(q.bobot) || 2,
-        authorUid: DEFAULT_ADMIN_UID,
-        updatedAt: nowIso,
-      });
+      batch.set(
+        docRef,
+        {
+          id: Number(q.id),
+          exam_id: Number(q.exam_id),
+          teks_soal: String(q.teks_soal || '').slice(0, 4000),
+          tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+          data_opsi: q.data_opsi || { wacana: '', opsi: { A: '', B: '', C: '', D: '', E: '' } },
+          kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
+          bobot: Number(q.bobot) || 2,
+          authorUid: DEFAULT_ADMIN_UID,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
     }
 
     // 5. Sync Results (/results/{id}) including full jawaban_siswa & analisis_ai
     for (const r of data.results) {
       const docRef = adminDb.collection('results').doc(String(r.id));
-      batch.set(docRef, {
-        id: Number(r.id),
-        student_id: Number(r.student_id),
-        exam_id: Number(r.exam_id),
-        skor_angka: Number(r.skor_angka) || 0,
-        jawaban_siswa: r.jawaban_siswa || {},
-        analisis_ai: r.analisis_ai || null,
-        pelanggaran_tab: Number(r.pelanggaran_tab) || 0,
-        created_at: r.created_at
-          ? new Date(r.created_at).toISOString()
-          : nowIso,
-        authorUid: DEFAULT_ADMIN_UID,
-        updatedAt: nowIso,
-      });
+      batch.set(
+        docRef,
+        {
+          id: Number(r.id),
+          student_id: Number(r.student_id),
+          exam_id: Number(r.exam_id),
+          skor_angka: Number(r.skor_angka) || 0,
+          jawaban_siswa: r.jawaban_siswa || {},
+          analisis_ai: r.analisis_ai || null,
+          pelanggaran_tab: Number(r.pelanggaran_tab) || 0,
+          created_at: r.created_at
+            ? new Date(r.created_at).toISOString()
+            : nowIso,
+          authorUid: DEFAULT_ADMIN_UID,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
     }
 
     await batch.commit();

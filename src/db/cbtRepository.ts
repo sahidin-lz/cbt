@@ -488,13 +488,6 @@ export async function verifyStudentTokenForExam(
       };
     }
 
-    if (student.status_ujian === 'Selesai') {
-      return {
-        error:
-          'Anda telah menyelesaikan ujian dengan Token ini (Status: Selesai). Hubungi Guru Pengawas jika status ujian Anda perlu di-reset ke Belum Mulai.',
-      };
-    }
-
     const allExams = await db.select().from(exams).orderBy(desc(exams.id));
     if (allExams.length === 0) {
       return {

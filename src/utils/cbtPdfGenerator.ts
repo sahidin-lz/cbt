@@ -34,12 +34,22 @@ export interface SingleStudentResultPdfParams {
 function stripMarkupForPdf(input: string | undefined | null): string {
   if (!input) return '-';
   const stripped = String(input)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<\/(td|th)>/gi, ' | ')
     .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
     .replace(/\$+/g, '')
     .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1/$2)')
     .replace(/\\sqrt\{([^}]+)\}/g, 'sqrt($1)')
     .replace(/\\[a-zA-Z]+/g, ' ')
-    .replace(/\s+/g, ' ');
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n');
   return cleanPdfText(stripped);
 }
 
@@ -1044,15 +1054,23 @@ export function downloadSingleStudentResultPdf(
       const maxPts = qEval?.maxPoints ?? (q.tipe_soal === 'Kompleks' ? 3 : 2);
       const isKompleks = (q.tipe_soal || '').toLowerCase().includes('kompleks');
 
-      // Prepare question text lines
+      // Prepare optional stimulus / wacana lines (FULL, NO TRUNCATION)
+      const rawWacana = q.data_opsi?.wacana ? String(q.data_opsi.wacana).trim() : '';
+      const wacanaLines: string[] = rawWacana
+        ? (doc.splitTextToSize(
+            `Wacana / Stimulus: ${stripMarkupForPdf(rawWacana)}`,
+            contentWidth - 10
+          ) as string[])
+        : [];
+
+      // Prepare full question text lines (FULL, NO TRUNCATION)
       const qTextClean = stripMarkupForPdf(q.teks_soal);
       const qTextLines = doc.splitTextToSize(
         qTextClean,
         contentWidth - 8
       ) as string[];
-      const cappedQTextLines = qTextLines.slice(0, 5);
 
-      // Prepare options lines
+      // Prepare full options lines (FULL, NO TRUNCATION)
       const optRows: Array<{
         key: 'A' | 'B' | 'C' | 'D' | 'E';
         lines: string[];
@@ -1082,49 +1100,73 @@ export function downloadSingleStudentResultPdf(
         ) as string[];
         optRows.push({
           key: optKey,
-          lines: wrappedOpt.slice(0, 2),
+          lines: wrappedOpt,
           isChosen,
           isKey,
         });
       });
 
+      const totalWacanaHeight =
+        wacanaLines.length > 0 ? wacanaLines.length * 3.6 + 4.5 : 0;
+      const totalQTextHeight = qTextLines.length * 3.8 + 2;
       const totalOptLines = optRows.reduce((acc, r) => acc + r.lines.length, 0);
-      const cardHeight =
-        8 +
-        cappedQTextLines.length * 3.6 +
-        totalOptLines * 3.5 +
-        optRows.length * 1.1 +
-        8;
+      const totalOptsHeight = totalOptLines * 3.6 + optRows.length * 1.4;
+      const estimatedCardHeight =
+        9 + totalWacanaHeight + totalQTextHeight + totalOptsHeight + 8.5;
 
-      if (curY + cardHeight > 276) {
+      // If the question fits on a single page but would overflow the current page, start a new page first
+      if (curY + Math.min(estimatedCardHeight, 55) > 274 || (estimatedCardHeight <= 238 && curY + estimatedCardHeight > 274)) {
         drawPageFooter(currentPageNumber);
         doc.addPage('a4', 'portrait');
         currentPageNumber++;
         curY = drawReviewPageHeader();
       }
 
-      // Card background & border based on status
-      if (status === 'Benar Penuh') {
-        doc.setFillColor(240, 253, 244);
-        doc.setDrawColor(134, 239, 172);
-      } else if (status === 'Benar Sebagian') {
-        doc.setFillColor(255, 251, 235);
-        doc.setDrawColor(252, 211, 77);
-      } else {
-        doc.setFillColor(255, 241, 242);
-        doc.setDrawColor(253, 164, 175);
+      const applyCardColors = () => {
+        if (status === 'Benar Penuh') {
+          doc.setFillColor(240, 253, 244);
+          doc.setDrawColor(134, 239, 172);
+        } else if (status === 'Benar Sebagian') {
+          doc.setFillColor(255, 251, 235);
+          doc.setDrawColor(252, 211, 77);
+        } else {
+          doc.setFillColor(255, 241, 242);
+          doc.setDrawColor(253, 164, 175);
+        }
+        doc.setLineWidth(0.35);
+      };
+
+      // If the entire question card fits on the current page, draw the full rounded card upfront
+      const fitsInCurrentPage = curY + estimatedCardHeight <= 275;
+      if (fitsInCurrentPage) {
+        applyCardColors();
+        doc.roundedRect(marginX, curY, contentWidth, estimatedCardHeight, 2, 2, 'FD');
       }
-      doc.setLineWidth(0.35);
-      doc.roundedRect(marginX, curY, contentWidth, cardHeight, 2, 2, 'FD');
+
+      const ensurePageSpace = (neededMm: number) => {
+        if (innerY + neededMm > 272) {
+          drawPageFooter(currentPageNumber);
+          doc.addPage('a4', 'portrait');
+          currentPageNumber++;
+          curY = drawReviewPageHeader();
+          innerY = curY + 4;
+        }
+      };
 
       // Card Header Strip
+      let innerY = curY + 5.5;
+      if (!fitsInCurrentPage) {
+        applyCardColors();
+        doc.roundedRect(marginX, curY, contentWidth, 8, 1.5, 1.5, 'FD');
+      }
+
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
+      doc.setFontSize(8.2);
       doc.setTextColor(15, 23, 42);
       doc.text(
         `Soal #${idx + 1}  (${isKompleks ? 'PG Kompleks / Multi-Jawaban' : 'Pilihan Ganda'})`,
         marginX + 3.5,
-        curY + 5.2
+        innerY
       );
 
       // Status & Points Badge on Right
@@ -1142,39 +1184,68 @@ export function downloadSingleStudentResultPdf(
       } else {
         doc.setTextColor(190, 18, 60);
       }
-      doc.text(statusLabel, marginX + contentWidth - 3.5, curY + 5.2, {
+      doc.text(statusLabel, marginX + contentWidth - 3.5, innerY, {
         align: 'right',
       });
 
-      // Question text
-      let innerY = curY + 9.5;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.6);
-      doc.setTextColor(30, 41, 59);
-      doc.text(cappedQTextLines, marginX + 4, innerY);
-      innerY += cappedQTextLines.length * 3.6 + 1.2;
+      innerY += 4.5;
 
-      // Options A-E
+      // Render Stimulus / Wacana (if present) line by line so it is NEVER truncated
+      if (wacanaLines.length > 0) {
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(7.5);
+        doc.setTextColor(51, 65, 85);
+        wacanaLines.forEach((line) => {
+          ensurePageSpace(4.2);
+          doc.setFont('helvetica', 'italic');
+          doc.setFontSize(7.5);
+          doc.setTextColor(51, 65, 85);
+          doc.text(line, marginX + 4, innerY);
+          innerY += 3.6;
+        });
+        innerY += 1.5;
+      }
+
+      // Render Question Text line by line so it is NEVER truncated
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.8);
+      doc.setTextColor(15, 23, 42);
+      qTextLines.forEach((line) => {
+        ensurePageSpace(4.2);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.8);
+        doc.setTextColor(15, 23, 42);
+        doc.text(line, marginX + 4, innerY);
+        innerY += 3.8;
+      });
+      innerY += 1.5;
+
+      // Render Options A-E line by line so they are NEVER truncated
       optRows.forEach((optRow) => {
-        if (optRow.isChosen && optRow.isKey) {
-          doc.setFont('helvetica', 'bold');
-          doc.setTextColor(6, 95, 70); // Green
-        } else if (optRow.isChosen && !optRow.isKey) {
-          doc.setFont('helvetica', 'bold');
-          doc.setTextColor(190, 18, 60); // Red
-        } else if (!optRow.isChosen && optRow.isKey) {
-          doc.setFont('helvetica', 'bold');
-          doc.setTextColor(29, 78, 216); // Blue highlight for missed key
-        } else {
-          doc.setFont('helvetica', 'normal');
-          doc.setTextColor(71, 85, 105);
-        }
-        doc.setFontSize(7.2);
-        doc.text(optRow.lines, marginX + 7, innerY);
-        innerY += optRow.lines.length * 3.5 + 1.1;
+        optRow.lines.forEach((optLine) => {
+          ensurePageSpace(4.2);
+          if (optRow.isChosen && optRow.isKey) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(6, 95, 70); // Green
+          } else if (optRow.isChosen && !optRow.isKey) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(190, 18, 60); // Red
+          } else if (!optRow.isChosen && optRow.isKey) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(29, 78, 216); // Blue highlight for missed key
+          } else {
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(51, 65, 85);
+          }
+          doc.setFontSize(7.4);
+          doc.text(optLine, marginX + 7, innerY);
+          innerY += 3.6;
+        });
+        innerY += 1.2;
       });
 
       // Summary Footer inside Question Card
+      ensurePageSpace(7);
       doc.setDrawColor(203, 213, 225);
       doc.line(
         marginX + 3.5,
@@ -1183,7 +1254,7 @@ export function downloadSingleStudentResultPdf(
         innerY - 0.5
       );
       doc.setFont('courier', 'bold');
-      doc.setFontSize(7.2);
+      doc.setFontSize(7.3);
       doc.setTextColor(15, 23, 42);
       const chosenDisplay =
         chosen.length > 0 ? chosen.join(', ') : '(Tidak Dijawab / Kosong)';
@@ -1191,10 +1262,10 @@ export function downloadSingleStudentResultPdf(
       doc.text(
         `Jawaban Siswa: [ ${chosenDisplay} ]    |    Kunci Jawaban: [ ${keyDisplay} ]`,
         marginX + 4,
-        innerY + 3.5
+        innerY + 3.6
       );
 
-      curY += cardHeight + 3.2;
+      curY = fitsInCurrentPage ? curY + estimatedCardHeight + 3.5 : innerY + 7;
     });
 
     drawPageFooter(currentPageNumber);
