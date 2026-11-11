@@ -34,6 +34,10 @@ import {
   isExamMatchedForStudentClass,
   calculateExamScore,
   normalizeAnswerKeys,
+  resolveProportionalStudentExamPackage,
+  mapStudentAnswersToCanonicalKeys,
+  resolveSyncedStudentAnswersForExam,
+  ExamScoreSummary,
 } from '../utils/cbtLogic';
 
 /**
@@ -1283,8 +1287,30 @@ export async function loginStudentExamCbt(
       throw new Error(apiRes.data?.error || 'Gagal memulai sesi ujian.');
     }
     if (apiRes.data?.student && apiRes.data?.exam && apiRes.data?.questions) {
+      const syncedPkg =
+        apiRes.data.student.kode_soal ||
+        apiRes.data.exam.kode_paket ||
+        'PAKET-A';
+      const syncedStudent: StudentItem = {
+        ...apiRes.data.student,
+        status_ujian: 'Sedang Ujian',
+        kode_soal: syncedPkg,
+      };
+      if (db) {
+        await setDoc(doc(db, 'students', String(syncedStudent.id)), {
+          id: Number(syncedStudent.id),
+          nama: syncedStudent.nama.slice(0, 150),
+          kelas: syncedStudent.kelas.slice(0, 64),
+          token_ujian: syncedStudent.token_ujian.slice(0, 6),
+          status_ujian: 'Sedang Ujian',
+          kode_soal: syncedPkg.slice(0, 32),
+          variasi_paket: (syncedStudent.variasi_paket || syncedPkg.replace(/^PAKET[-_\s]*/i, '') || 'A').slice(0, 8),
+          authorUid: 'sahidin30@gmail.com',
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
       return {
-        student: apiRes.data.student,
+        student: syncedStudent,
         exam: apiRes.data.exam,
         questions: apiRes.data.questions,
       };
@@ -1330,21 +1356,24 @@ export async function loginStudentExamCbt(
     );
   }
 
-  const matchedExams = fsData.exams.filter((ex) =>
-    isExamMatchedForStudentClass(ex, matchedStudent.kelas, { requireActive: true })
-  );
-  if (matchedExams.length === 0) {
+  // Proportional Exam Package Resolution across Class & Angkatan
+  const proportionalAlloc = resolveProportionalStudentExamPackage({
+    student: matchedStudent,
+    allStudents: fsData.students,
+    exams: fsData.exams,
+    questions: fsData.questions,
+    preferredExamId: examId,
+  });
+
+  if (!proportionalAlloc.exam || proportionalAlloc.matchedExams.length === 0) {
     throw new Error(
       `Belum ada sesi ujian Sosiologi berstatus AKTIF yang dijadwalkan untuk kelas Anda (${matchedStudent.kelas}). Paket soal mungkin masih berstatus DRAF atau telah ditutup oleh Guru Sosiologi.`
     );
   }
 
-  const activeExam =
-    (examId ? matchedExams.find((e) => e.id === examId) : matchedExams[0]) ||
-    matchedExams[0];
-
+  const activeExam = proportionalAlloc.exam;
   const examQuestions = fsData.questions.filter(
-    (q) => q.exam_id === activeExam.id
+    (q) => Number(q.exam_id) === Number(activeExam.id)
   );
   if (examQuestions.length === 0) {
     throw new Error(
@@ -1355,6 +1384,8 @@ export async function loginStudentExamCbt(
   const updatedStudent: StudentItem = {
     ...matchedStudent,
     status_ujian: 'Sedang Ujian',
+    kode_soal: proportionalAlloc.packageCode,
+    variasi_paket: proportionalAlloc.variantLetter,
   };
 
   if (db) {
@@ -1364,11 +1395,13 @@ export async function loginStudentExamCbt(
       kelas: updatedStudent.kelas.slice(0, 64),
       token_ujian: updatedStudent.token_ujian.slice(0, 6),
       status_ujian: 'Sedang Ujian',
+      kode_soal: proportionalAlloc.packageCode.slice(0, 32),
+      variasi_paket: proportionalAlloc.variantLetter.slice(0, 8),
       authorUid: 'sahidin30@gmail.com',
       updatedAt: new Date().toISOString(),
     });
     await updateFirestorePulse(
-      `Siswa mulai ujian: ${updatedStudent.nama} (${updatedStudent.kelas}) — ${activeExam.judul_ujian}`
+      `Siswa mulai ujian: ${updatedStudent.nama} (${updatedStudent.kelas}) — ${activeExam.judul_ujian} [${proportionalAlloc.packageCode}]`
     );
   }
 
@@ -1391,6 +1424,7 @@ export async function submitStudentExamCbt(payload: {
   kategori: string;
   rawEarned: number;
   rawMax: number;
+  canonicalAnswers: Record<string, string[]>;
 }> {
   const answeredKeys = Object.keys(payload.jawabanSiswa || {}).filter(
     (k) =>
@@ -1403,7 +1437,14 @@ export async function submitStudentExamCbt(payload: {
     );
   }
 
+  // 1. Calculate deterministic score against the exact prepared questions (with shuffled keys)
   const scoreSummary = calculateExamScore(
+    payload.questions,
+    payload.jawabanSiswa
+  );
+
+  // 2. Map student answers from shuffled display keys back to canonical Bank Soal option keys (A-E)
+  const canonicalAnswers = mapStudentAnswersToCanonicalKeys(
     payload.questions,
     payload.jawabanSiswa
   );
@@ -1417,7 +1458,7 @@ export async function submitStudentExamCbt(payload: {
     body: JSON.stringify({
       studentId: payload.student.id,
       examId: payload.exam.id,
-      jawabanSiswa: payload.jawabanSiswa,
+      jawabanSiswa: canonicalAnswers,
       pelanggaranTab: payload.pelanggaranTab,
     }),
   });
@@ -1428,6 +1469,7 @@ export async function submitStudentExamCbt(payload: {
   if (db) {
     const studentPkg =
       payload.student.kode_soal?.slice(0, 64) ||
+      payload.exam.kode_paket?.slice(0, 64) ||
       payload.student.variasi_paket?.slice(0, 64) ||
       'PAKET-A';
 
@@ -1448,7 +1490,7 @@ export async function submitStudentExamCbt(payload: {
       student_id: Number(payload.student.id),
       exam_id: Number(payload.exam.id),
       skor_angka: scoreSummary.normalizedScore,
-      jawaban_siswa: payload.jawabanSiswa,
+      jawaban_siswa: canonicalAnswers,
       kode_soal: studentPkg,
       analisis_ai: null,
       pelanggaran_tab: Number(payload.pelanggaranTab) || 0,
@@ -1458,7 +1500,7 @@ export async function submitStudentExamCbt(payload: {
     });
 
     await updateFirestorePulse(
-      `Ujian selesai dikumpulkan: ${payload.student.nama} (Skor ${scoreSummary.normalizedScore}/100)`
+      `Ujian selesai dikumpulkan: ${payload.student.nama} [${studentPkg}] (Skor ${scoreSummary.normalizedScore}/100)`
     );
   }
 
@@ -1468,6 +1510,7 @@ export async function submitStudentExamCbt(payload: {
     kategori: scoreSummary.kategoriNilai,
     rawEarned: scoreSummary.rawEarned,
     rawMax: scoreSummary.rawMax,
+    canonicalAnswers,
   };
 }
 
@@ -1477,18 +1520,35 @@ export async function generateAiAnalysisCbt(payload: {
   questions: QuestionItem[];
   jawaban_siswa: Record<string, string[]>;
   existingResult?: ResultItem;
+  student?: StudentItem | null;
+  exam?: ExamItem | null;
 }): Promise<AnalisisAI> {
-  const answeredKeys = Object.keys(payload.jawaban_siswa || {}).filter(
-    (k) =>
-      Array.isArray(payload.jawaban_siswa[k]) &&
-      payload.jawaban_siswa[k].length > 0
-  );
-  const preScore = calculateExamScore(
-    payload.questions,
-    payload.jawaban_siswa || {}
-  );
+  // Synchronize answers with Bank Soal questions (supporting both new canonical & historical results)
+  const syncedAnswers = resolveSyncedStudentAnswersForExam({
+    questions: payload.questions,
+    jawabanSiswa: payload.jawaban_siswa,
+    student: payload.student,
+    exam: payload.exam,
+    recordedScore: payload.existingResult?.skor_angka ?? null,
+  });
 
-  if (answeredKeys.length === 0 || preScore.rawEarned === 0) {
+  const answeredKeys = Object.keys(syncedAnswers || {}).filter(
+    (k) => Array.isArray(syncedAnswers[k]) && syncedAnswers[k].length > 0
+  );
+  const preScore = calculateExamScore(payload.questions, syncedAnswers || {});
+
+  // Lock authoritative final score: never let AI evaluation alter a recorded >0 score
+  const lockedScore =
+    payload.existingResult && typeof payload.existingResult.skor_angka === 'number' && payload.existingResult.skor_angka > 0
+      ? payload.existingResult.skor_angka
+      : preScore.normalizedScore;
+
+  let lockedKategori: ExamScoreSummary['kategoriNilai'] = 'Perlu Bimbingan (D)';
+  if (lockedScore >= 85) lockedKategori = 'Sangat Baik (A)';
+  else if (lockedScore >= 70) lockedKategori = 'Baik (B)';
+  else if (lockedScore >= 55) lockedKategori = 'Cukup (C)';
+
+  if (answeredKeys.length === 0 || (lockedScore === 0 && preScore.rawEarned === 0)) {
     throw new Error(
       'Skor 0: Analisis AI tidak tersedia untuk ujian kosong atau belum ada jawaban benar.'
     );
@@ -1503,7 +1563,7 @@ export async function generateAiAnalysisCbt(payload: {
         resultId: payload.resultId,
         nama_siswa: payload.nama_siswa,
         questions: payload.questions,
-        jawaban_siswa: payload.jawaban_siswa,
+        jawaban_siswa: syncedAnswers,
       }),
     }
   );
@@ -1511,9 +1571,12 @@ export async function generateAiAnalysisCbt(payload: {
   let aiAnalysis: AnalisisAI;
 
   if (apiRes.ok && apiRes.data && apiRes.data.analisis_kompetensi) {
-    aiAnalysis = apiRes.data;
+    aiAnalysis = {
+      ...apiRes.data,
+      skor_akhir: lockedScore,
+      kategori_nilai: lockedKategori,
+    };
   } else {
-    // Structured cognitive LOTS vs HOTS evaluation rubric when running on static Vercel without backend server
     const scoreSummary = preScore;
     const detailItems = payload.questions.map((q, idx) => {
       const qId = String(q.id);
@@ -1540,8 +1603,8 @@ export async function generateAiAnalysisCbt(payload: {
 
     aiAnalysis = {
       nama_siswa: payload.nama_siswa,
-      skor_akhir: scoreSummary.normalizedScore,
-      kategori_nilai: scoreSummary.kategoriNilai,
+      skor_akhir: lockedScore,
+      kategori_nilai: lockedKategori,
       analisis_kompetensi: {
         kekuatan:
           benarItems.length > 0
@@ -1576,9 +1639,9 @@ export async function generateAiAnalysisCbt(payload: {
               ],
       },
       evaluasi_hots:
-        scoreSummary.normalizedScore >= 80
+        lockedScore >= 80
           ? 'Kemampuan berpikir tingkat tinggi (HOTS - Analisis & Evaluasi) sangat kuat. Siswa mampu mengintegrasikan informasi wacana dengan tepat pada soal Pilihan Ganda Kompleks.'
-          : scoreSummary.normalizedScore >= 60
+          : lockedScore >= 60
             ? 'Kemampuan kognitif LOTS (mengingat & memahami) sudah baik, namun pada soal HOTS (Pilihan Ganda Kompleks multi-opsi) siswa cenderung hanya mengidentifikasi sebagian faktor kunci.'
             : 'Siswa masih berfokus pada hafalan fakta tunggal (LOTS) dan memerlukan bimbingan terstruktur untuk menganalisis wacana kasus kompleks (HOTS).',
       rekomendasi_belajar: [
@@ -1597,8 +1660,8 @@ export async function generateAiAnalysisCbt(payload: {
         id: Number(payload.resultId),
         student_id: Number(baseResult.student_id),
         exam_id: Number(baseResult.exam_id),
-        skor_angka: aiAnalysis.skor_akhir,
-        jawaban_siswa: baseResult.jawaban_siswa || payload.jawaban_siswa,
+        skor_angka: lockedScore,
+        jawaban_siswa: syncedAnswers,
         analisis_ai: aiAnalysis,
         pelanggaran_tab: Number(baseResult.pelanggaran_tab) || 0,
         created_at: baseResult.created_at || nowIso,
@@ -1607,7 +1670,7 @@ export async function generateAiAnalysisCbt(payload: {
       });
     }
     await updateFirestorePulse(
-      `Evaluasi AI selesai untuk ${payload.nama_siswa} (${aiAnalysis.skor_akhir}/100)`
+      `Evaluasi selesai untuk ${payload.nama_siswa} (${lockedScore}/100)`
     );
   }
 

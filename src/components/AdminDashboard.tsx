@@ -587,11 +587,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsDistributingPackages(true);
     setStudentFeedback(null);
     try {
-      const assigned = assignPackageVariantsToStudents(targetPool, 2);
+      const assigned = assignPackageVariantsToStudents(
+        targetPool,
+        2,
+        ['PAKET-A', 'PAKET-B', 'PAKET-C', 'PAKET-D'],
+        exams
+      );
       await batchAssignPackageVariantsCbt(assigned);
       setStudentFeedback({
         type: 'success',
-        message: `Berhasil mendistribusikan kode soal berselang-seling (PAKET-A & PAKET-B) untuk ${assigned.length} siswa sekelas / satu angkatan!`,
+        message: `Berhasil mendistribusikan kode paket soal secara proporsional untuk ${assigned.length} siswa pada setiap kelas & angkatan!`,
       });
       await onRefreshData();
     } catch (err: any) {
@@ -1594,7 +1599,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // --- AI Evaluation Handler (Single & Batch Class) ---
   const handleGenerateAiAnalysis = async (result: ResultItem) => {
     const student = students.find((s) => s.id === result.student_id);
-    const examForResult = questions.filter((q) => q.exam_id === result.exam_id);
+    const examObj = exams.find((e) => Number(e.id) === Number(result.exam_id));
+    const examForResult = questions.filter((q) => Number(q.exam_id) === Number(result.exam_id));
     if (!student) return;
 
     const answeredCount = Object.keys(result.jawaban_siswa || {}).filter(
@@ -1620,6 +1626,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         questions: examForResult,
         jawaban_siswa: result.jawaban_siswa,
         existingResult: result,
+        student,
+        exam: examObj,
       });
       await onRefreshData();
       setSelectedAiModal({
@@ -1658,8 +1666,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       for (const resItem of validTargets) {
         const student = students.find((s) => s.id === resItem.student_id);
+        const examObj = exams.find((e) => Number(e.id) === Number(resItem.exam_id));
         const examForResult = questions.filter(
-          (q) => q.exam_id === resItem.exam_id
+          (q) => Number(q.exam_id) === Number(resItem.exam_id)
         );
         if (!student) continue;
         await generateAiAnalysisCbt({
@@ -1668,6 +1677,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           questions: examForResult,
           jawaban_siswa: resItem.jawaban_siswa,
           existingResult: resItem,
+          student,
+          exam: examObj,
         });
       }
       await onRefreshData();

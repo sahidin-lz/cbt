@@ -15,6 +15,7 @@ import {
   generateExamToken,
   isExamMatchedForStudentClass,
   calculateExamScore,
+  resolveProportionalStudentExamPackage,
 } from '../utils/cbtLogic.ts';
 
 export async function getOrCreateAdminUser(uid: string, email: string, name?: string) {
@@ -466,27 +467,28 @@ export async function verifyStudentTokenForExam(
       };
     }
 
-    // Filter exams that match this student's grade level / target rombel and are active
-    const matchedExams = allExams.filter((ex) =>
-      isExamMatchedForStudentClass(ex, student.kelas, { requireActive: true })
-    );
+    // Fetch all students and questions so proportional allocation across the class/grade is 100% consistent
+    const allStudents = await db.select().from(students);
+    const allQuestions = await db.select().from(questions).orderBy(questions.id);
 
-    if (matchedExams.length === 0) {
+    const proportionalAlloc = resolveProportionalStudentExamPackage({
+      student,
+      allStudents,
+      exams: allExams,
+      questions: allQuestions,
+      preferredExamId: examIdInput,
+    });
+
+    if (!proportionalAlloc.exam || proportionalAlloc.matchedExams.length === 0) {
       return {
         error: `Belum ada sesi ujian Sosiologi berstatus AKTIF untuk kelas Anda (${student.kelas}). Paket ujian mungkin masih berstatus DRAF atau telah ditutup oleh Guru Sosiologi.`,
       };
     }
 
-    const activeExam =
-      (examIdInput
-        ? matchedExams.find((e) => e.id === examIdInput)
-        : matchedExams[0]) || matchedExams[0];
-
-    const examQuestions = await db
-      .select()
-      .from(questions)
-      .where(eq(questions.exam_id, activeExam.id))
-      .orderBy(questions.id);
+    const activeExam = proportionalAlloc.exam;
+    const examQuestions = allQuestions.filter(
+      (q) => Number(q.exam_id) === Number(activeExam.id)
+    );
 
     if (examQuestions.length === 0) {
       return {
@@ -504,9 +506,13 @@ export async function verifyStudentTokenForExam(
       .returning();
 
     return {
-      student: updatedStudent,
+      student: {
+        ...updatedStudent,
+        kode_soal: proportionalAlloc.packageCode,
+        variasi_paket: proportionalAlloc.variantLetter,
+      },
       exam: activeExam,
-      availableExams: matchedExams,
+      availableExams: proportionalAlloc.matchedExams,
       questions: examQuestions,
     };
   } catch (error) {
@@ -558,11 +564,25 @@ export async function submitStudentExamResult(
 
 export async function saveAiAnalysisToResult(resultId: number, analisisAi: AnalisisAI) {
   try {
+    const existingRows = await db
+      .select()
+      .from(results)
+      .where(eq(results.id, resultId));
+    const existingScore =
+      existingRows.length > 0 && typeof existingRows[0].skor_angka === 'number' && existingRows[0].skor_angka > 0
+        ? existingRows[0].skor_angka
+        : analisisAi.skor_akhir;
+
+    const lockedAi: AnalisisAI = {
+      ...analisisAi,
+      skor_akhir: existingScore,
+    };
+
     const [updated] = await db
       .update(results)
       .set({
-        analisis_ai: analisisAi,
-        skor_angka: analisisAi.skor_akhir,
+        analisis_ai: lockedAi,
+        skor_angka: existingScore,
       })
       .where(eq(results.id, resultId))
       .returning();

@@ -40,6 +40,7 @@ import {
   isExamMatchedForStudentClass,
   calculateExamScore,
   prepareStudentExamQuestions,
+  resolveProportionalStudentExamPackage,
 } from '../utils/cbtLogic';
 import { downloadSingleStudentResultPdf } from '../utils/cbtPdfGenerator';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
@@ -239,6 +240,20 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     );
   }, [exams, selectedKelas]);
 
+  // Proportional & deterministic package allocation per student, class (rombel), and grade (angkatan)
+  const studentProportionalAllocation = useMemo(() => {
+    if (!selectedStudentObj || exams.length === 0) return null;
+    return resolveProportionalStudentExamPackage({
+      student: selectedStudentObj,
+      allStudents: students,
+      exams,
+      questions,
+    });
+  }, [selectedStudentObj, students, exams, questions]);
+
+  // Comfortable enlarged font scale for questions & options so students' eyes don't get tired
+  const [fontScale, setFontScale] = useState<'normal' | 'large' | 'xlarge'>('large');
+
   // Attempt to restore active session on mount (so if student reloads, they stay in the exam without logging in again!)
   const initialSession = useMemo(() => {
     return getActiveStudentSession();
@@ -368,12 +383,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   ]);
 
   useEffect(() => {
-    if (matchedExamsForSelectedClass.length > 0) {
+    if (studentProportionalAllocation?.exam) {
+      setSelectedExamId(String(studentProportionalAllocation.exam.id));
+    } else if (matchedExamsForSelectedClass.length > 0) {
       setSelectedExamId(String(matchedExamsForSelectedClass[0].id));
     } else if (exams.length > 0 && !selectedExamId) {
       setSelectedExamId(String(exams[0].id));
     }
-  }, [exams, matchedExamsForSelectedClass, selectedExamId]);
+  }, [exams, matchedExamsForSelectedClass, studentProportionalAllocation, selectedExamId]);
 
   const requestExamFullscreen = useCallback(async () => {
     try {
@@ -459,19 +476,33 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
     setIsLoggingIn(true);
     try {
+      const targetExamIdToLoad = selectedExamId
+        ? Number(selectedExamId)
+        : studentProportionalAllocation?.exam?.id;
+
       const session = await loginStudentExamCbt(
         targetNama,
         cleanToken,
-        selectedExamId ? Number(selectedExamId) : undefined
+        targetExamIdToLoad
       );
 
       const savedProgress = getLocalProgress(cleanToken, session.exam?.id);
 
-      // Prepare questions with deterministic question & option shuffling + multi-package routing
+      const syncedPackageCode =
+        session.student.kode_soal ||
+        studentProportionalAllocation?.packageCode ||
+        session.exam?.kode_paket ||
+        'PAKET-A';
+
+      // Prepare questions with deterministic question & option shuffling + synchronized package routing
       const prepared = prepareStudentExamQuestions({
         questions: session.questions || [],
-        student: session.student,
+        student: {
+          ...session.student,
+          kode_soal: syncedPackageCode,
+        },
         exam: session.exam,
+        forcedPackageCode: syncedPackageCode,
       });
 
       const updatedStudent: StudentItem = {
@@ -1001,6 +1032,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         nama_siswa: activeStudent.nama,
         questions: examQuestions,
         jawaban_siswa: answers,
+        student: activeStudent,
+        exam: activeExam || undefined,
       });
       setSubmittedSummary((prev) =>
         prev ? { ...prev, aiResult: aiData } : null
@@ -1016,7 +1049,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   // 1. RENDER COMPLETED EXAM SUMMARY SCREEN
   if (activeStudent && submittedSummary) {
     return (
-      <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6">
+      <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6">
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
           {/* Colorful Top Celebration Strip */}
           <div className="h-2 w-full bg-gradient-to-r from-emerald-500 via-blue-600 to-indigo-600" />
@@ -1195,7 +1228,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       : null;
 
     return (
-      <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 space-y-5">
+      <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 space-y-5">
         {/* Vibrant & Inspiring Institutional Student Login Card */}
         <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
           {/* Colorful Educational Illustration Banner */}
@@ -1413,19 +1446,28 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
                 {/* Selected Student Confirmation Card */}
                 {selectedStudentObj && (
-                  <div className="mt-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <div>
-                      <span className="text-slate-500">Peserta Terpilih: </span>
-                      <strong className="text-slate-900">
+                  <div className="mt-2.5 p-3.5 rounded-xl bg-gradient-to-r from-blue-50/80 via-indigo-50/60 to-emerald-50/60 border border-indigo-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-slate-600">Peserta Terpilih: </span>
+                      <strong className="text-slate-900 font-bold">
                         {selectedStudentObj.nama}
                       </strong>
-                      <span className="mx-1.5 text-slate-300">·</span>
-                      <span className="text-slate-600">
-                        {selectedStudentObj.kelas}
+                      <span className="text-slate-300">·</span>
+                      <span className="font-semibold text-indigo-800">
+                        Kelas {selectedStudentObj.kelas}
                       </span>
+                      {studentProportionalAllocation && (
+                        <>
+                          <span className="text-slate-300">·</span>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-[11px] font-extrabold bg-indigo-600 text-white shadow-2xs">
+                            <Shuffle className="w-3 h-3 shrink-0" />
+                            <span>{studentProportionalAllocation.packageCode}</span>
+                          </span>
+                        </>
+                      )}
                     </div>
                     <span
-                      className={`font-semibold ${
+                      className={`font-bold ${
                         selectedStudentObj.status_ujian === 'Diblokir'
                           ? 'text-red-700'
                           : selectedStudentObj.status_ujian === 'Selesai'
@@ -1439,7 +1481,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 )}
               </div>
 
-              {/* PILIHAN SESI UJIAN AKTIF JIKA ADA LEBIH DARI 1 UJIAN / INFO UJIAN TUNGGAL */}
+              {/* SINKRONISASI PAKET SOAL PROPORISONAL PER KELAS & ANGKATAN */}
               {step1Done && (
                 <div className="space-y-2">
                   {matchedExamsForSelectedClass.length === 0 ? (
@@ -1452,39 +1494,31 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                         </p>
                       </div>
                     </div>
-                  ) : matchedExamsForSelectedClass.length > 1 ? (
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-semibold text-slate-800">
-                        Pilih Sesi Ujian Sosiologi yang Anda Ikuti:
-                      </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {matchedExamsForSelectedClass.map((ex) => {
-                          const isSelected = String(selectedExamId) === String(ex.id);
-                          return (
-                            <button
-                              key={ex.id}
-                              type="button"
-                              onClick={() => setSelectedExamId(String(ex.id))}
-                              className={`p-3 rounded-lg border text-left cursor-pointer transition-all ${
-                                isSelected
-                                  ? 'border-blue-600 bg-blue-50/70 shadow-xs ring-1 ring-blue-500'
-                                  : 'border-slate-200 bg-white hover:border-slate-300'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-1">
-                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
-                                  {ex.kategori_ujian || 'Ujian Sosiologi'}
-                                </span>
-                                <span className="text-[10px] text-slate-500 font-mono font-medium">
-                                  {ex.durasi_menit} Menit
-                                </span>
-                              </div>
-                              <div className="font-bold text-xs text-slate-900 mt-1 line-clamp-1">
-                                {ex.judul_ujian}
-                              </div>
-                            </button>
-                          );
-                        })}
+                  ) : studentProportionalAllocation?.exam ? (
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 text-white border border-indigo-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider bg-amber-400 text-slate-950">
+                            {studentProportionalAllocation.packageCode} · Terdistribusi Proporsional
+                          </span>
+                          <span className="text-[11px] text-blue-200 font-medium">
+                            {studentProportionalAllocation.exam.kategori_ujian || 'Ujian Sosiologi'}
+                          </span>
+                        </div>
+                        <div className="font-extrabold text-sm sm:text-base text-white">
+                          {studentProportionalAllocation.exam.judul_ujian}
+                        </div>
+                        <div className="text-[11px] text-blue-200/90">
+                          Sinkron Otomatis: Soal yang tampil, dikerjakan, dan dinilai terkunci pada paket ini ({questions.filter((q) => Number(q.exam_id) === Number(studentProportionalAllocation.exam?.id)).length || 40} Butir Soal).
+                        </div>
+                      </div>
+                      <div className="flex sm:flex-col items-center sm:items-end justify-between gap-1 shrink-0 bg-white/10 border border-white/15 rounded-lg px-3.5 py-2">
+                        <span className="text-[10px] uppercase tracking-wider text-blue-200 font-semibold">
+                          Durasi Ujian
+                        </span>
+                        <span className="text-sm font-mono font-extrabold text-amber-300">
+                          {studentProportionalAllocation.exam.durasi_menit} Menit
+                        </span>
                       </div>
                     </div>
                   ) : (
@@ -1494,7 +1528,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                           {matchedExamsForSelectedClass[0].kategori_ujian || 'Ujian Sosiologi'}
                         </span>
                         <span className="font-semibold text-slate-900 line-clamp-1">
-                          {matchedExamsForSelectedClass[0].judul_ujian}
+                          {matchedExamsForSelectedClass[0].judul_ujian} ({matchedExamsForSelectedClass.length} Paket Aktif)
                         </span>
                       </div>
                       <span className="text-[11px] font-mono font-bold text-slate-600 shrink-0">
@@ -1587,7 +1621,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   ).length;
 
   return (
-    <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 space-y-4 select-none">
+    <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 space-y-4 select-none">
       {/* Clean Institutional Exam Status Header */}
       <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-2xs">
         <div className="space-y-1">
@@ -1783,23 +1817,60 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             </div>
 
             <div className="p-6 sm:p-8 space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-200">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-bold font-mono tabular-nums shadow-2xs">
+                  <span className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs sm:text-sm font-extrabold font-mono tabular-nums shadow-2xs">
                     SOAL NO. {currentIndex + 1} / {examQuestions.length}
                   </span>
-                  <span className="text-slate-300">·</span>
-                  <span className="font-mono text-xs font-bold text-indigo-700">
+                  <span className="px-2.5 py-1 rounded-md bg-indigo-50 border border-indigo-200 font-mono text-xs font-extrabold text-indigo-800">
                     {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
                   </span>
-                  <span className="text-slate-300">·</span>
-                  <span className="text-xs font-semibold text-slate-600">
+                  <span className="text-xs sm:text-sm font-semibold text-slate-600">
                     {isKompleks
                       ? 'PG Kompleks (Pilih >1 Jawaban · Bobot Maks 3)'
                       : 'PG Biasa (Pilih 1 Jawaban · Bobot 2)'}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
+                <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-500">
+                  {/* Ergonomic Font Size Controls so students don't get eye strain */}
+                  <div
+                    className="inline-flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-lg p-0.5"
+                    title="Atur Ukuran Huruf Soal & Opsi Jawaban"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setFontScale('normal')}
+                      className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                        fontScale === 'normal'
+                          ? 'bg-white text-blue-700 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFontScale('large')}
+                      className={`px-2 py-1 rounded-md text-xs font-extrabold transition-all cursor-pointer ${
+                        fontScale === 'large'
+                          ? 'bg-white text-blue-700 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      A+
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFontScale('xlarge')}
+                      className={`px-2 py-1 rounded-md text-sm font-extrabold transition-all cursor-pointer ${
+                        fontScale === 'xlarge'
+                          ? 'bg-white text-blue-700 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      A++
+                    </button>
+                  </div>
                   <span className="text-emerald-700 font-semibold flex items-center gap-1">
                     <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                     <span>Tersimpan Otomatis</span>
@@ -1812,22 +1883,38 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               </div>
 
               {currentQuestion.data_opsi?.wacana && (
-                <div className="bg-gradient-to-br from-indigo-50/60 via-blue-50/40 to-amber-50/30 border border-indigo-200/80 rounded-xl p-4 sm:p-5 space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-indigo-800">
+                <div className="bg-gradient-to-br from-indigo-50/60 via-blue-50/40 to-amber-50/30 border border-indigo-200/80 rounded-xl p-5 sm:p-6 space-y-2.5">
+                  <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold uppercase tracking-wider text-indigo-800">
                     <BookOpen className="w-4 h-4 text-indigo-600" />
                     <span>Wacana &amp; Stimulus Sosiologi</span>
                   </div>
-                  <div className="text-sm text-slate-800 leading-relaxed">
+                  <div
+                    className={`text-slate-800 leading-relaxed ${
+                      fontScale === 'xlarge'
+                        ? 'text-lg sm:text-xl'
+                        : fontScale === 'large'
+                          ? 'text-base sm:text-lg'
+                          : 'text-sm sm:text-base'
+                    }`}
+                  >
                     <MathAndTableRenderer content={currentQuestion.data_opsi.wacana} />
                   </div>
                 </div>
               )}
 
-              <div className="text-base sm:text-lg font-semibold text-slate-900 leading-relaxed">
+              <div
+                className={`font-bold text-slate-900 leading-relaxed tracking-normal ${
+                  fontScale === 'xlarge'
+                    ? 'text-xl sm:text-2xl md:text-[26px]'
+                    : fontScale === 'large'
+                      ? 'text-lg sm:text-xl md:text-2xl'
+                      : 'text-base sm:text-lg'
+                }`}
+              >
                 <MathAndTableRenderer content={currentQuestion.teks_soal} />
               </div>
 
-              <div className="space-y-3 pt-1">
+              <div className="space-y-3.5 pt-2">
                 {(['A', 'B', 'C', 'D', 'E'] as const).map((optKey) => {
                   const optText = currentQuestion.data_opsi?.opsi?.[optKey];
                   if (!optText) return null;
@@ -1844,9 +1931,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   return (
                     <label
                       key={optKey}
-                      className={`flex items-start gap-3.5 p-4 rounded-xl border-2 transition-all cursor-pointer select-none ${
+                      className={`flex items-start gap-4 p-4 sm:p-5 rounded-xl border-2 transition-all cursor-pointer select-none ${
                         isSelected
-                          ? 'bg-blue-50/90 border-blue-600 text-slate-900 shadow-2xs'
+                          ? 'bg-blue-50/90 border-blue-600 text-slate-900 shadow-xs'
                           : 'bg-white border-slate-200 hover:border-blue-300 hover:bg-slate-50/80 text-slate-800'
                       }`}
                     >
@@ -1866,7 +1953,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                         className="sr-only"
                       />
                       <span
-                        className={`w-7 h-7 rounded-lg font-mono text-xs font-extrabold flex items-center justify-center shrink-0 border transition-colors ${
+                        className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl font-mono text-sm sm:text-base font-extrabold flex items-center justify-center shrink-0 border transition-colors ${
                           isSelected
                             ? 'bg-blue-600 text-white border-blue-600'
                             : badgeColors[optKey] || 'bg-slate-100 text-slate-700 border-slate-300'
@@ -1874,7 +1961,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                       >
                         {optKey}
                       </span>
-                      <div className="flex-1 text-sm leading-relaxed pt-0.5">
+                      <div
+                        className={`flex-1 font-medium leading-relaxed pt-1 ${
+                          fontScale === 'xlarge'
+                            ? 'text-lg sm:text-xl'
+                            : fontScale === 'large'
+                              ? 'text-base sm:text-lg'
+                              : 'text-sm sm:text-base'
+                        }`}
+                      >
                         <MathAndTableRenderer content={optText} inline />
                       </div>
                     </label>

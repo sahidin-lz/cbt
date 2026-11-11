@@ -1710,7 +1710,8 @@ export function getDeterministicStudentPackage(
 }
 
 /**
- * Assigns alternating package variants (A, B, C, D) to students in a class or grade.
+ * Assigns alternating package variants (A, B, C, D...) to students proportionally
+ * within every class (rombel) and grade level (angkatan).
  */
 export function assignPackageVariantsToStudents<T extends {
   id: number | string;
@@ -1721,30 +1722,84 @@ export function assignPackageVariantsToStudents<T extends {
 }>(
   students: T[],
   numVariants = 2,
-  variantLabels: string[] = ['PAKET-A', 'PAKET-B', 'PAKET-C', 'PAKET-D']
+  variantLabels: string[] = ['PAKET-A', 'PAKET-B', 'PAKET-C', 'PAKET-D'],
+  activeExams?: {
+    id: number | string;
+    judul_ujian: string;
+    target_tingkat?: string;
+    target_kelas?: string;
+    target_rombel?: string[];
+    status_ujian?: string;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+  }[]
 ): T[] {
-  // Sort students stably by class and then by name
+  // Sort students stably by grade, class, and then by name
   const sorted = [...students].sort((a, b) => {
+    const tA = extractTingkatFromKelas(a.kelas);
+    const tB = extractTingkatFromKelas(b.kelas);
+    if (tA !== tB) return tA.localeCompare(tB);
     const cComp = a.kelas.localeCompare(b.kelas, undefined, { numeric: true });
     if (cComp !== 0) return cComp;
-    return a.nama.localeCompare(b.nama);
+    return a.nama.localeCompare(b.nama, 'id');
   });
 
   const assignedMap = new Map<number | string, { kode_soal: string; variasi_paket: string }>();
-  // Group by class so every class has alternating A, B, A, B...
   const classGroups: Record<string, T[]> = {};
   for (const s of sorted) {
-    const k = s.kelas || 'DEFAULT';
+    const k = (s.kelas || 'DEFAULT').trim();
     if (!classGroups[k]) classGroups[k] = [];
     classGroups[k].push(s);
   }
 
-  for (const k of Object.keys(classGroups)) {
+  const sortedClassKeys = Object.keys(classGroups).sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true })
+  );
+
+  // Track running index per angkatan so odd-sized classes still balance across the grade
+  const angkatanRunningCounter: Record<string, number> = {};
+
+  for (const k of sortedClassKeys) {
     const group = classGroups[k];
-    group.forEach((s, idx) => {
-      const vIdx = idx % Math.max(1, Math.min(numVariants, variantLabels.length));
-      const code = variantLabels[vIdx];
-      const letter = code.replace(/[^A-D]/g, '') || String.fromCharCode(65 + vIdx);
+    const tingkat = extractTingkatFromKelas(k);
+    if (angkatanRunningCounter[tingkat] === undefined) {
+      angkatanRunningCounter[tingkat] = 0;
+    }
+
+    // Check if activeExams are provided for this class
+    const matchedForClass = (activeExams || [])
+      .filter((ex) => isExamMatchedForStudentClass(ex, k, { requireActive: true }))
+      .sort((a, b) => Number(a.id) - Number(b.id));
+
+    const effectiveCount =
+      matchedForClass.length > 1
+        ? matchedForClass.length
+        : matchedForClass.length === 1 && matchedForClass[0].mode_multi_paket
+          ? Math.max(2, matchedForClass[0].jumlah_paket || numVariants)
+          : Math.max(1, Math.min(numVariants, variantLabels.length));
+
+    const distinctExamCodes =
+      matchedForClass.length > 1
+        ? new Set(
+            matchedForClass
+              .map((e) => (e.kode_paket || '').trim().toUpperCase())
+              .filter(Boolean)
+          ).size === matchedForClass.length
+        : false;
+
+    group.forEach((s) => {
+      const counter = angkatanRunningCounter[tingkat]++;
+      const vIdx = counter % effectiveCount;
+      let code = variantLabels[vIdx] || `PAKET-${String.fromCharCode(65 + (vIdx % 26))}`;
+      if (matchedForClass.length > 1 && distinctExamCodes) {
+        code = (matchedForClass[vIdx].kode_paket || code).trim().toUpperCase();
+      } else if (matchedForClass.length > 1) {
+        code = `PAKET-${String.fromCharCode(65 + (vIdx % 26))}`;
+      }
+      const letter =
+        code.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z0-9]/gi, '') ||
+        String.fromCharCode(65 + (vIdx % 26));
       assignedMap.set(s.id, {
         kode_soal: code,
         variasi_paket: letter,
@@ -1764,8 +1819,180 @@ export function assignPackageVariantsToStudents<T extends {
 }
 
 /**
- * Filters or subsets questions for a specific student's package code
- * when mode_multi_paket is enabled.
+ * Proportionally and deterministically resolves which Exam Package (ExamItem) and
+ * Package Code (`kode_soal`) a student receives based on the student's position
+ * within their class (`kelas`) and grade level (`angkatan`).
+ * Guarantees 100% synchronization between Login preview, Active Exam session, and Scoring.
+ */
+export function resolveProportionalStudentExamPackage<
+  TExam extends {
+    id: number | string;
+    judul_ujian: string;
+    target_tingkat?: string;
+    target_kelas?: string;
+    target_rombel?: string[];
+    status_ujian?: string;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+    durasi_menit?: number;
+    kategori_ujian?: string;
+  },
+  TStudent extends {
+    id: number | string;
+    nama: string;
+    kelas: string;
+    token_ujian?: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  }
+>(params: {
+  student: TStudent;
+  allStudents: TStudent[];
+  exams: TExam[];
+  questions?: { exam_id: number | string }[];
+  preferredExamId?: number | string | null;
+}): {
+  exam: TExam | null;
+  matchedExams: TExam[];
+  packageCode: string;
+  variantLetter: string;
+  proportionalIndex: number;
+  totalPackagesInPool: number;
+  studentRankInClass: number;
+  classTotalStudents: number;
+} {
+  const { student, allStudents, exams, questions, preferredExamId } = params;
+  const studentKelas = (student?.kelas || '').trim();
+
+  // 1. Filter all active exams matching this student's class/grade
+  let matched = (exams || []).filter((ex) =>
+    isExamMatchedForStudentClass(ex, studentKelas, { requireActive: true })
+  );
+
+  // If questions array is available and some matched exams have questions while others are empty,
+  // prioritize active exams that actually have questions loaded so no student gets an empty exam.
+  if (questions && questions.length > 0 && matched.length > 1) {
+    const withQuestions = matched.filter((ex) =>
+      questions.some((q) => Number(q.exam_id) === Number(ex.id))
+    );
+    if (withQuestions.length > 0) {
+      matched = withQuestions;
+    }
+  }
+
+  // Sort matched exams deterministically by ID ascending
+  const sortedMatched = [...matched].sort((a, b) => Number(a.id) - Number(b.id));
+
+  // 2. Compute student's exact rank in their class and angkatan
+  const allStudentsList = allStudents || [];
+  const normStudentKelas = studentKelas.toLowerCase();
+  const classStudents = allStudentsList
+    .filter((s) => (s.kelas || '').trim().toLowerCase() === normStudentKelas)
+    .sort((a, b) => (a.nama || '').localeCompare(b.nama || '', 'id'));
+  const rankInClass = Math.max(
+    0,
+    classStudents.findIndex((s) => String(s.id) === String(student?.id))
+  );
+
+  const studentTingkat = extractTingkatFromKelas(studentKelas);
+  const allClassesInAngkatan = getStudentLoginClasses(allStudentsList)
+    .filter((c) => c.tingkat === studentTingkat)
+    .map((c) => c.kelas.trim().toUpperCase());
+
+  // Calculate cumulative student offset before this class in the same angkatan for exact grade-wide proportionality
+  let cumulativeBeforeClass = 0;
+  for (const clsName of allClassesInAngkatan) {
+    if (clsName === studentKelas.toUpperCase()) break;
+    const normCls = clsName.toLowerCase();
+    cumulativeBeforeClass += allStudentsList.filter(
+      (s) => (s.kelas || '').trim().toLowerCase() === normCls
+    ).length;
+  }
+
+  const proportionalSeed = cumulativeBeforeClass + rankInClass;
+
+  if (sortedMatched.length === 0) {
+    return {
+      exam: null,
+      matchedExams: [],
+      packageCode: student?.kode_soal || 'PAKET-A',
+      variantLetter: 'A',
+      proportionalIndex: 0,
+      totalPackagesInPool: 0,
+      studentRankInClass: rankInClass + 1,
+      classTotalStudents: classStudents.length || 1,
+    };
+  }
+
+  // 3. If multiple active ExamItems exist for this class/angkatan, distribute students proportionally across them
+  if (sortedMatched.length > 1) {
+    let chosenIdx = proportionalSeed % sortedMatched.length;
+
+    // Only honor preferredExamId if explicitly requested AND valid in sortedMatched
+    if (preferredExamId !== undefined && preferredExamId !== null && String(preferredExamId) !== '') {
+      const prefIdx = sortedMatched.findIndex(
+        (e) => String(e.id) === String(preferredExamId)
+      );
+      if (prefIdx >= 0) {
+        chosenIdx = prefIdx;
+      }
+    }
+
+    const chosenExam = sortedMatched[chosenIdx];
+    const uniqueKodePakets = new Set(
+      sortedMatched
+        .map((e) => (e.kode_paket || '').trim().toUpperCase())
+        .filter(Boolean)
+    );
+    const hasDistinctKodePaket = uniqueKodePakets.size === sortedMatched.length;
+
+    const letter = String.fromCharCode(65 + (chosenIdx % 26));
+    const packageCode =
+      hasDistinctKodePaket && chosenExam.kode_paket
+        ? chosenExam.kode_paket.trim().toUpperCase()
+        : `PAKET-${letter}`;
+
+    return {
+      exam: chosenExam,
+      matchedExams: sortedMatched,
+      packageCode,
+      variantLetter: letter,
+      proportionalIndex: chosenIdx,
+      totalPackagesInPool: sortedMatched.length,
+      studentRankInClass: rankInClass + 1,
+      classTotalStudents: classStudents.length || 1,
+    };
+  }
+
+  // 4. Single active ExamItem for this class/angkatan
+  const singleExam = sortedMatched[0];
+  const numVariants = singleExam.mode_multi_paket
+    ? Math.max(2, singleExam.jumlah_paket || 2)
+    : 1;
+  const variantIdx = proportionalSeed % numVariants;
+  const letter = String.fromCharCode(65 + (variantIdx % 26));
+  const packageCode = singleExam.mode_multi_paket
+    ? `PAKET-${letter}`
+    : (singleExam.kode_paket || student?.kode_soal || 'PAKET-A').trim().toUpperCase();
+
+  return {
+    exam: singleExam,
+    matchedExams: sortedMatched,
+    packageCode,
+    variantLetter: letter,
+    proportionalIndex: variantIdx,
+    totalPackagesInPool: numVariants,
+    studentRankInClass: rankInClass + 1,
+    classTotalStudents: classStudents.length || 1,
+  };
+}
+
+/**
+ * Returns the complete question set for the assigned exam package without
+ * truncating or dropping questions (ensuring a 40-question exam always delivers 40 questions).
+ * Only filters by explicit variant tag if the question bank is a combined multi-set (>50 questions)
+ * where every variant has a complete >=35 question set.
  */
 export function filterQuestionsForPackageVariant<T extends {
   id: number | string;
@@ -1776,54 +2003,85 @@ export function filterQuestionsForPackageVariant<T extends {
 }>(
   questions: T[],
   packageCode: string,
-  numVariants = 2
+  _numVariants = 2
 ): T[] {
-  if (questions.length === 0) return questions;
+  if (!questions || questions.length === 0) return questions;
 
-  const letter = packageCode.replace(/[^A-D]/gi, '').toUpperCase() || 'A';
-  const variantIndex = Math.max(0, letter.charCodeAt(0) - 65) % Math.max(1, numVariants);
-
-  // Check if questions have explicit variant tagging in data_opsi or id_soal_csv
-  const hasTaggedQuestions = questions.some(
-    (q) =>
-      q.data_opsi?.variasi_paket ||
-      /\[(PAKET[-_]?[A-D]|VAR[-_]?[A-D])\]/i.test(q.data_opsi?.id_soal_csv || '')
-  );
-
-  if (hasTaggedQuestions) {
-    const matched = questions.filter((q) => {
-      const explicit = (q.data_opsi?.variasi_paket || '').toUpperCase();
-      if (explicit === letter || explicit === packageCode.toUpperCase() || explicit === 'SEMUA') {
-        return true;
-      }
-      const matchCsv = (q.data_opsi?.id_soal_csv || '').toUpperCase();
-      if (
-        matchCsv.includes(`PAKET-${letter}`) ||
-        matchCsv.includes(`PAKET ${letter}`) ||
-        matchCsv.includes(`[${letter}]`)
-      ) {
-        return true;
-      }
-      return false;
-    });
-    if (matched.length > 0) return matched;
+  // Never slice or drop questions on a standard exam bank (e.g. <= 50 questions such as a 40-question exam)
+  if (questions.length <= 50) {
+    return questions;
   }
 
-  // Interleaved / Alternating distribution across pool so each package gets balanced questions:
-  // For 2 packages (A & B):
-  // If pool has >= 6 questions: Paket A gets even indexes (0, 2, 4...), Paket B gets odd indexes (1, 3, 5...)
-  if (questions.length >= 6) {
-    const subset = questions.filter((_, idx) => idx % numVariants === variantIndex);
-    if (subset.length >= 3) return subset;
+  const letter = packageCode.replace(/[^A-D]/gi, '').toUpperCase() || 'A';
+  const matched = questions.filter((q) => {
+    const explicit = (q.data_opsi?.variasi_paket || '').toUpperCase();
+    if (explicit === letter || explicit === packageCode.toUpperCase() || explicit === 'SEMUA') {
+      return true;
+    }
+    const matchCsv = (q.data_opsi?.id_soal_csv || '').toUpperCase();
+    if (
+      matchCsv.includes(`PAKET-${letter}`) ||
+      matchCsv.includes(`PAKET ${letter}`) ||
+      matchCsv.includes(`[${letter}]`)
+    ) {
+      return true;
+    }
+    return false;
+  });
+
+  // Only use the tagged subset if it contains a full exam set (>= 35 questions)
+  if (matched.length >= 35) {
+    return matched;
   }
 
   return questions;
 }
 
 /**
+ * Maps student answers from shuffled display option keys (A-E) back to
+ * the original canonical Bank Soal option keys (A-E) using `opsi_original_map`.
+ * This guarantees that saved `jawaban_siswa` in the database matches the Bank Soal 1-to-1.
+ */
+export function mapStudentAnswersToCanonicalKeys(
+  questions: {
+    id: number | string;
+    data_opsi?: {
+      opsi_original_map?: Record<string, string>;
+    } | null;
+  }[],
+  studentAnswers: Record<string, string[]>
+): Record<string, string[]> {
+  if (!studentAnswers || typeof studentAnswers !== 'object') return {};
+  const mapById = new Map<string, Record<string, string>>();
+  for (const q of questions || []) {
+    if (q.data_opsi?.opsi_original_map) {
+      mapById.set(String(q.id), q.data_opsi.opsi_original_map);
+    }
+  }
+
+  const canonical: Record<string, string[]> = {};
+  for (const [qId, chosen] of Object.entries(studentAnswers)) {
+    if (!Array.isArray(chosen)) continue;
+    const origMap = mapById.get(String(qId));
+    if (origMap) {
+      canonical[qId] = chosen
+        .map((k) => {
+          const clean = String(k || '').toUpperCase().trim();
+          return origMap[clean] || clean;
+        })
+        .filter(Boolean)
+        .sort();
+    } else {
+      canonical[qId] = normalizeAnswerKeys(chosen);
+    }
+  }
+  return canonical;
+}
+
+/**
  * Prepares the final question set for a student, orchestrating:
- * 1. Package Code / Variant determination (Beda Soal / Beda Kode Soal)
- * 2. Multi-Package Question Subsetting (if multi_paket mode active)
+ * 1. Synchronized Package Code determination (never mismatched with activeExam)
+ * 2. Full Question Set preservation (all 40 questions preserved)
  * 3. Seeded Question Shuffling (Acak Soal - if enabled)
  * 4. Seeded Option Shuffling with Recalculated Answer Keys (Acak Opsi - if enabled)
  */
@@ -1860,6 +2118,7 @@ export function prepareStudentExamQuestions<T extends {
     mode_multi_paket?: boolean;
     jumlah_paket?: number;
   };
+  forcedPackageCode?: string;
 }): {
   questions: T[];
   studentPackageCode: string;
@@ -1867,34 +2126,59 @@ export function prepareStudentExamQuestions<T extends {
   isOptionShuffled: boolean;
   originalQuestionCount: number;
 } {
-  const { questions, student, exam } = params;
-  if (!questions || questions.length === 0) {
+  const { questions, student, exam, forcedPackageCode } = params;
+  // Filter to only questions belonging to this exam_id if exam_id is populated
+  const examSpecificQuestions = (questions || []).filter(
+    (q) => q.exam_id === undefined || Number(q.exam_id) === Number(exam.id)
+  );
+  const baseQuestions =
+    examSpecificQuestions.length > 0 ? examSpecificQuestions : questions || [];
+
+  if (baseQuestions.length === 0) {
     return {
       questions: [],
-      studentPackageCode: student.kode_soal || exam.kode_paket || 'PAKET-A',
+      studentPackageCode:
+        forcedPackageCode || exam.kode_paket || student.kode_soal || 'PAKET-A',
       isQuestionShuffled: false,
       isOptionShuffled: false,
       originalQuestionCount: 0,
     };
   }
 
-  // 1. Determine student package code
+  // 1. Determine synchronized student package code
   const numVariants = exam.jumlah_paket || 2;
-  const packageCode =
-    student.kode_soal && student.kode_soal.trim()
-      ? student.kode_soal.trim().toUpperCase()
-      : exam.kode_paket && exam.kode_paket.trim()
-        ? exam.kode_paket.trim().toUpperCase()
+  let packageCode: string;
+  if (forcedPackageCode && forcedPackageCode.trim()) {
+    packageCode = forcedPackageCode.trim().toUpperCase();
+  } else if (exam.mode_multi_paket) {
+    packageCode =
+      student.kode_soal && student.kode_soal.trim()
+        ? student.kode_soal.trim().toUpperCase()
         : getDeterministicStudentPackage(student, numVariants);
-
-  // 2. Subset questions if mode_multi_paket is enabled
-  let workingQuestions = [...questions];
-  if (exam.mode_multi_paket) {
-    workingQuestions = filterQuestionsForPackageVariant(questions, packageCode, numVariants);
+  } else if (exam.kode_paket && exam.kode_paket.trim()) {
+    packageCode = exam.kode_paket.trim().toUpperCase();
+  } else if (student.kode_soal && student.kode_soal.trim()) {
+    packageCode = student.kode_soal.trim().toUpperCase();
+  } else {
+    packageCode = getDeterministicStudentPackage(student, numVariants);
   }
 
-  // 3. Deterministic Seed
-  const studentSeed = hashStudentSeed(student.id, student.token_ujian, exam.id);
+  // 2. Keep full question set for the package
+  let workingQuestions = [...baseQuestions];
+  if (exam.mode_multi_paket) {
+    workingQuestions = filterQuestionsForPackageVariant(
+      baseQuestions,
+      packageCode,
+      numVariants
+    );
+  }
+
+  // 3. Deterministic Seed (incorporates student, token, exam.id, and packageCode)
+  const studentSeed = hashStudentSeed(
+    `${student.id}_${packageCode}`,
+    student.token_ujian,
+    exam.id
+  );
   const qRng = createSeededRandom(studentSeed);
 
   // 4. Acak Urutan Soal (Shuffle Questions) - default true unless explicitly false
@@ -1918,9 +2202,113 @@ export function prepareStudentExamQuestions<T extends {
     studentPackageCode: packageCode,
     isQuestionShuffled: shouldShuffleQuestions,
     isOptionShuffled: shouldShuffleOptions,
-    originalQuestionCount: questions.length,
+    originalQuestionCount: baseQuestions.length,
   };
 }
+
+/**
+ * Ensures a student's saved `jawaban_siswa` is 100% synchronized with the canonical
+ * Bank Soal `questions`. If a historical result was saved with shuffled option keys,
+ * this deterministically reconstructs the student's option map and translates the answers
+ * so that `calculateExamScore(questions, syncedAnswers)` matches the recorded score and keys.
+ */
+export function resolveSyncedStudentAnswersForExam<
+  TQuestion extends {
+    id: number | string;
+    exam_id: number | string;
+    teks_soal: string;
+    tipe_soal: 'PG' | 'Kompleks' | string;
+    data_opsi: {
+      id_soal_csv?: string;
+      wacana?: string;
+      opsi: { A: string; B: string; C: string; D: string; E: string };
+      opsi_original_map?: Record<string, string>;
+      variasi_paket?: string;
+    };
+    kunci_jawaban: string[];
+    bobot: number;
+  }
+>(params: {
+  questions: TQuestion[];
+  jawabanSiswa?: Record<string, string[]> | null;
+  student?: {
+    id: number | string;
+    nama: string;
+    kelas: string;
+    token_ujian: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  } | null;
+  exam?: {
+    id: number | string;
+    judul_ujian: string;
+    acak_soal?: boolean;
+    acak_opsi?: boolean;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+  } | null;
+  recordedScore?: number | null;
+}): Record<string, string[]> {
+  const rawAnswers = params.jawabanSiswa || {};
+  if (
+    !params.questions ||
+    params.questions.length === 0 ||
+    Object.keys(rawAnswers).length === 0
+  ) {
+    return rawAnswers;
+  }
+
+  if (
+    params.student &&
+    params.exam &&
+    params.exam.acak_opsi !== false &&
+    typeof params.recordedScore === 'number'
+  ) {
+    const directScore = calculateExamScore(params.questions, rawAnswers);
+    if (directScore.normalizedScore !== params.recordedScore) {
+      // Try both default seed and packageCode seed to match any historical session
+      const candidateSeeds = [
+        hashStudentSeed(params.student.id, params.student.token_ujian, params.exam.id),
+        hashStudentSeed(
+          `${params.student.id}_${params.student.kode_soal || params.exam.kode_paket || 'PAKET-A'}`,
+          params.student.token_ujian,
+          params.exam.id
+        ),
+      ];
+
+      let bestRemapped = rawAnswers;
+      let bestDiff = Math.abs(directScore.normalizedScore - params.recordedScore);
+
+      for (const seed of candidateSeeds) {
+        const qRng = createSeededRandom(seed);
+        let working = [...params.questions];
+        if (params.exam.acak_soal !== false && working.length > 1) {
+          working = shuffleArrayDeterministic(working, qRng);
+        }
+        working = working.map((q, idx) => {
+          const optSeed = (seed + Number(q.id) * 37 + idx * 13) >>> 0;
+          const optRng = createSeededRandom(optSeed);
+          return shuffleQuestionOptions(q, optRng);
+        });
+
+        const remapped = mapStudentAnswersToCanonicalKeys(working, rawAnswers);
+        const remappedScore = calculateExamScore(params.questions, remapped);
+        const diff = Math.abs(remappedScore.normalizedScore - params.recordedScore);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestRemapped = remapped;
+        }
+        if (diff === 0) break;
+      }
+
+      return bestRemapped;
+    }
+  }
+
+  return rawAnswers;
+}
+
 
 
 

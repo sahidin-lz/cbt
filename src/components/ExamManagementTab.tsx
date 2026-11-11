@@ -22,7 +22,12 @@ import {
   Download,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
-import { classifyQuestionCognitiveLevel, isExamMatchedForStudentClass } from '../utils/cbtLogic';
+import {
+  classifyQuestionCognitiveLevel,
+  isExamMatchedForStudentClass,
+  resolveSyncedStudentAnswersForExam,
+  resolveProportionalStudentExamPackage,
+} from '../utils/cbtLogic';
 import { downloadStudentTokenCardsPdf } from '../utils/cbtPdfGenerator';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
 
@@ -129,24 +134,50 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     return questions.filter((q) => Number(q.exam_id) === Number(activeExam.id));
   }, [questions, activeExam]);
 
-  // Results for students in this class
+  // Results for students in this class (including all distributed packages in the class)
   const classResults = useMemo(() => {
     const classStudentIds = new Set(classStudents.map((s) => s.id));
-    return results.filter((r) => {
-      const matchStudent = classStudentIds.has(r.student_id);
-      const matchExam = activeExam ? Number(r.exam_id) === Number(activeExam.id) : true;
-      return matchStudent && matchExam;
-    });
-  }, [results, classStudents, activeExam]);
+    return results.filter((r) => classStudentIds.has(r.student_id));
+  }, [results, classStudents]);
 
-  // Map student ID to their result
+  // Map student ID to their result (preferring activeExam match if student has multiple results)
   const studentResultMap = useMemo(() => {
     const map = new Map<number, ResultItem>();
     classResults.forEach((r) => {
-      map.set(r.student_id, r);
+      const existing = map.get(r.student_id);
+      if (!existing) {
+        map.set(r.student_id, r);
+      } else if (activeExam && Number(r.exam_id) === Number(activeExam.id)) {
+        map.set(r.student_id, r);
+      }
     });
     return map;
-  }, [classResults]);
+  }, [classResults, activeExam]);
+
+  // Pre-compute synced canonical answers per student for accurate item analysis & matrix
+  const syncedStudentAnswersMap = useMemo(() => {
+    const map = new Map<number, Record<string, string[]>>();
+    classStudents.forEach((student) => {
+      const res = studentResultMap.get(student.id);
+      if (!res || !res.jawaban_siswa) return;
+      const studentExam =
+        exams.find((e) => Number(e.id) === Number(res.exam_id)) || activeExam;
+      const studentExamQuestions = questions.filter(
+        (q) => Number(q.exam_id) === Number(res.exam_id)
+      );
+      const targetQuestions =
+        studentExamQuestions.length > 0 ? studentExamQuestions : examQuestions;
+      const synced = resolveSyncedStudentAnswersForExam({
+        questions: targetQuestions,
+        jawabanSiswa: res.jawaban_siswa,
+        student,
+        exam: studentExam || undefined,
+        recordedScore: res.skor_angka,
+      });
+      map.set(student.id, synced);
+    });
+    return map;
+  }, [classStudents, studentResultMap, exams, activeExam, questions, examQuestions]);
 
   // Class KPI Summary
   const kpiStats = useMemo(() => {
@@ -237,8 +268,13 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       classStudents.forEach((student) => {
         const res = studentResultMap.get(student.id);
         if (!res || !res.jawaban_siswa) return;
+        // Only include in this exam's item analysis if the student worked on this exam (or if questions match)
+        if (activeExam && Number(res.exam_id) !== Number(activeExam.id) && res.jawaban_siswa[qIdStr] === undefined) {
+          return;
+        }
 
-        const studentAns = res.jawaban_siswa[qIdStr];
+        const syncedAnswers = syncedStudentAnswersMap.get(student.id) || res.jawaban_siswa;
+        const studentAns = syncedAnswers[qIdStr];
         if (studentAns && Array.isArray(studentAns) && studentAns.length > 0) {
           totalAnswered++;
 
@@ -305,7 +341,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
         incorrectStudentDetails,
       };
     });
-  }, [examQuestions, classStudents, studentResultMap]);
+  }, [examQuestions, classStudents, studentResultMap, syncedStudentAnswersMap, activeExam]);
 
   // Toggle question accordion in analysis
   const toggleQuestionExpand = (qId: number) => {
@@ -748,6 +784,17 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                       const isBlocked = st.status_ujian === 'Diblokir';
                       const isOngoing = st.status_ujian === 'Sedang Ujian';
                       const isFinished = st.status_ujian === 'Selesai';
+                      const allocPkg = resolveProportionalStudentExamPackage({
+                        student: st,
+                        allStudents: students,
+                        exams,
+                        questions,
+                      });
+                      const displayKodePaket =
+                        res?.kode_soal ||
+                        st.kode_soal ||
+                        allocPkg.packageCode ||
+                        'PAKET-A';
 
                       return (
                         <tr
@@ -769,7 +816,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                           <td className="py-3 px-4 text-center">
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
                               <Layers className="w-3 h-3 text-blue-600 shrink-0" />
-                              <span>{st.kode_soal || st.variasi_paket || 'PAKET-A'}</span>
+                              <span>{displayKodePaket}</span>
                             </span>
                           </td>
                           <td className="py-3 px-4 text-center">
@@ -1252,7 +1299,8 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                       {examQuestions.map((q) => {
                         const qIdStr = String(q.id);
                         const correctKeys = q.kunci_jawaban || [];
-                        const studentAns = res?.jawaban_siswa?.[qIdStr];
+                        const syncedAnswers = syncedStudentAnswersMap.get(st.id) || res?.jawaban_siswa;
+                        const studentAns = syncedAnswers?.[qIdStr];
 
                         if (!res || !studentAns || studentAns.length === 0) {
                           return (
@@ -1426,99 +1474,110 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
               </div>
             </div>
 
-            {selectedStudentForModal.result ? (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-slate-500">Kategori Nilai:</span>
-                    <div className="font-bold text-slate-800 mt-0.5">
-                      {selectedStudentForModal.result.analisis_ai?.kategori_nilai || 'Selesai'}
-                    </div>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-slate-500">Pelanggaran Tab:</span>
-                    <div className="font-bold text-slate-800 mt-0.5">
-                      {selectedStudentForModal.result.pelanggaran_tab || 0} kali
-                    </div>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-slate-500">Waktu Selesai:</span>
-                    <div className="font-bold text-slate-800 mt-0.5">
-                      {selectedStudentForModal.result.created_at
-                        ? new Date(selectedStudentForModal.result.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-                        : '-'}
-                    </div>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                    <span className="text-slate-500">Total Soal:</span>
-                    <div className="font-bold text-slate-800 mt-0.5">
-                      {examQuestions.length} Soal
-                    </div>
-                  </div>
-                </div>
+            {selectedStudentForModal.result ? (() => {
+              const modalExamQuestions = questions.filter(
+                (q) => Number(q.exam_id) === Number(selectedStudentForModal.result?.exam_id)
+              );
+              const questionsToDisplay =
+                modalExamQuestions.length > 0 ? modalExamQuestions : examQuestions;
+              const modalSyncedAnswers =
+                syncedStudentAnswersMap.get(selectedStudentForModal.student.id) ||
+                selectedStudentForModal.result.jawaban_siswa ||
+                {};
 
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider pt-2">
-                  Daftar Jawaban per Butir Soal:
-                </h4>
-
-                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                  {examQuestions.map((q, idx) => {
-                    const qIdStr = String(q.id);
-                    const correctKeys = q.kunci_jawaban || [];
-                    const studentAns =
-                      selectedStudentForModal.result?.jawaban_siswa?.[qIdStr] || [];
-                    const isCorrect =
-                      studentAns.length === correctKeys.length &&
-                      studentAns.every((ans) => correctKeys.includes(ans));
-
-                    return (
-                      <div
-                        key={q.id}
-                        className={`p-3 rounded-lg border text-xs space-y-1.5 ${
-                          isCorrect
-                            ? 'bg-emerald-50/50 border-emerald-200'
-                            : 'bg-rose-50/50 border-rose-200'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-slate-900">
-                            Soal #{idx + 1}
-                          </span>
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              isCorrect
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-rose-100 text-rose-800'
-                            }`}
-                          >
-                            {isCorrect ? 'Benar (+poin)' : 'Salah (0 poin)'}
-                          </span>
-                        </div>
-
-                        <div className="text-slate-700">
-                          <MathAndTableRenderer content={q.teks_soal} />
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 text-[11px]">
-                          <div>
-                            <span className="text-slate-500">Jawaban Siswa: </span>
-                            <strong className="font-mono text-slate-900">
-                              {studentAns.length > 0 ? studentAns.join(', ') : '(Kosong)'}
-                            </strong>
-                          </div>
-                          <div>
-                            <span className="text-slate-500">Kunci Jawaban: </span>
-                            <strong className="font-mono text-emerald-700">
-                              {correctKeys.join(', ')}
-                            </strong>
-                          </div>
-                        </div>
+              return (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                    <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                      <span className="text-slate-500">Kategori Nilai:</span>
+                      <div className="font-bold text-slate-800 mt-0.5">
+                        {selectedStudentForModal.result.analisis_ai?.kategori_nilai || 'Selesai'}
                       </div>
-                    );
-                  })}
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                      <span className="text-slate-500">Pelanggaran Tab:</span>
+                      <div className="font-bold text-slate-800 mt-0.5">
+                        {selectedStudentForModal.result.pelanggaran_tab || 0} kali
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                      <span className="text-slate-500">Waktu Selesai:</span>
+                      <div className="font-bold text-slate-800 mt-0.5">
+                        {selectedStudentForModal.result.created_at
+                          ? new Date(selectedStudentForModal.result.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+                          : '-'}
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                      <span className="text-slate-500">Total Soal Paket:</span>
+                      <div className="font-bold text-slate-800 mt-0.5">
+                        {questionsToDisplay.length} Soal
+                      </div>
+                    </div>
+                  </div>
+
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider pt-2">
+                    Daftar Jawaban per Butir Soal:
+                  </h4>
+
+                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                    {questionsToDisplay.map((q, idx) => {
+                      const qIdStr = String(q.id);
+                      const correctKeys = q.kunci_jawaban || [];
+                      const studentAns = modalSyncedAnswers[qIdStr] || [];
+                      const isCorrect =
+                        studentAns.length === correctKeys.length &&
+                        studentAns.every((ans) => correctKeys.includes(ans));
+
+                      return (
+                        <div
+                          key={q.id}
+                          className={`p-3 rounded-lg border text-xs space-y-1.5 ${
+                            isCorrect
+                              ? 'bg-emerald-50/50 border-emerald-200'
+                              : 'bg-rose-50/50 border-rose-200'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900">
+                              Soal #{idx + 1}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                isCorrect
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {isCorrect ? 'Benar (+poin)' : 'Salah (0 poin)'}
+                            </span>
+                          </div>
+
+                          <div className="text-slate-700">
+                            <MathAndTableRenderer content={q.teks_soal} />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200/60 text-[11px]">
+                            <div>
+                              <span className="text-slate-500">Jawaban Siswa: </span>
+                              <strong className="font-mono text-slate-900">
+                                {studentAns.length > 0 ? studentAns.join(', ') : '(Kosong)'}
+                              </strong>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">Kunci Jawaban: </span>
+                              <strong className="font-mono text-emerald-700">
+                                {correctKeys.join(', ')}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ) : (
+              );
+            })() : (
               <div className="py-8 text-center text-slate-400 text-xs">
                 Siswa ini belum menyelesaikan ujian atau jawaban belum masuk ke sistem.
               </div>
