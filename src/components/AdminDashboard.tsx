@@ -349,6 +349,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [copyTargetExamId, setCopyTargetExamId] = useState<number | null>(null);
   const [isCopyingQuestions, setIsCopyingQuestions] = useState(false);
 
+  // Structured Per-Package Bank Soal Display & Pagination State (UI Display Logic Only)
+  const [bankSoalMapelFilter, setBankSoalMapelFilter] = useState<string>('SEMUA');
+  const [bankSoalTingkatFilter, setBankSoalTingkatFilter] = useState<string>('SEMUA');
+  const [questionViewMode, setQuestionViewMode] = useState<
+    'ringkas' | 'per_soal' | 'lengkap'
+  >('ringkas');
+  const [expandedQuestionIds, setExpandedQuestionIds] = useState<number[]>([]);
+  const [focusedQuestionIdx, setFocusedQuestionIdx] = useState<number>(0);
+  const [questionPage, setQuestionPage] = useState<number>(1);
+  const [questionsPerPage, setQuestionsPerPage] = useState<number>(10);
+
+  const toggleExpandQuestion = (qId: number) => {
+    setExpandedQuestionIds((prev) =>
+      prev.includes(qId) ? prev.filter((id) => id !== qId) : [...prev, qId]
+    );
+  };
+
   const [csvText, setCsvText] = useState('');
   const [replaceExistingQuestions, setReplaceExistingQuestions] =
     useState(false);
@@ -394,18 +411,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const currentExam =
     exams.find((e) => e.id === selectedExamId) || exams[0] || null;
-  const currentExamQuestions = questions.filter(
-    (q) => currentExam && q.exam_id === currentExam.id
-  );
+  const currentExamQuestions = questions
+    .filter((q) => currentExam && Number(q.exam_id) === Number(currentExam.id))
+    .sort((a, b) => Number(a.id) - Number(b.id));
   const filteredExamQuestions = currentExamQuestions.filter((q) => {
     const matchType =
       filterQuestionType === 'SEMUA' || q.tipe_soal === filterQuestionType;
-    const qText = `${q.teks_soal} ${q.data_opsi?.wacana || ''}`.toLowerCase();
+    const qText = `${q.teks_soal} ${q.data_opsi?.wacana || ''} ${q.data_opsi?.id_soal_csv || ''}`.toLowerCase();
     const matchSearch =
       !searchQuestionQuery.trim() ||
       qText.includes(searchQuestionQuery.trim().toLowerCase());
     return matchType && matchSearch;
   });
+
+  // Reset pagination & focused index when switching exam package or filtering questions
+  useEffect(() => {
+    setQuestionPage(1);
+    setFocusedQuestionIdx(0);
+  }, [selectedExamId, filterQuestionType, searchQuestionQuery]);
 
   // Helper to format Target Distribusi badge label
   const formatDistribusiLabel = (tingkat: string, kelas: string) => {
@@ -3090,7 +3113,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   type="button"
                                   onClick={() => {
                                     setSelectedExamId(ex.id);
-                                    setShowUploadPanel(true);
+                                    setShowUploadPanel(qCount === 0);
                                     setActiveTab('soal');
                                     setIsBankSoalDetailOpen(true);
                                   }}
@@ -4230,13 +4253,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                    Repositori Instrumen Ujian Sosiologi
+                    Repositori Instrumen Ujian Terstruktur Per Paket Soal
                   </div>
                   <h2 className="text-lg font-extrabold text-white mt-0.5">
-                    Daftar Bank Soal Ujian ({exams.length} Paket Bank Soal · Total {questions.length} Butir Soal)
+                    Daftar Paket Bank Soal ({exams.length} Paket Ujian · Total {questions.length} Butir Soal)
                   </h2>
                   <p className="text-xs text-blue-200/90 mt-0.5">
-                    Pilih atau klik salah satu <strong className="text-amber-300">Bank Soal</strong> di bawah ini untuk melihat seluruh daftar butir soal, kunci jawaban, menambah/upload soal, atau menghapus bank soal.
+                    Soal dikelompokkan secara rapi <strong className="text-amber-300">per Paket Soal &amp; Mata Pelajaran</strong> (tidak dicampur semuanya). Klik salah satu paket untuk mengelola atau mengunggah butir soal.
                   </p>
                 </div>
                 <button
@@ -4249,117 +4272,224 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               </div>
 
-              <div className="p-6">
-              <div className="overflow-x-auto border border-indigo-100 rounded-xl">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-indigo-50/80 border-b border-indigo-100 text-xs font-bold text-indigo-950">
-                      <th className="py-3.5 px-4">Nama Bank Soal / Paket Ujian</th>
-                      <th className="py-3.5 px-4">Target Distribusi Kelas</th>
-                      <th className="py-3.5 px-4 text-right">Durasi</th>
-                      <th className="py-3.5 px-4 text-right">Jumlah Butir Soal</th>
-                      <th className="py-3.5 px-4">Komposisi Tipe &amp; Kognitif</th>
-                      <th className="py-3.5 px-4 text-right">Aksi &amp; Hapus Bank Soal</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 text-sm">
-                    {exams.map((ex) => {
-                      const exQuestions = questions.filter(
-                        (q) => Number(q.exam_id) === Number(ex.id)
-                      );
-                      const pgKompleksCount = exQuestions.filter(
-                        (q) => q.tipe_soal === 'Kompleks'
+              {/* Filter Bar: Mata Pelajaran & Tingkatan Kelas */}
+              <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-indigo-950">
+                    Filter Mata Pelajaran:
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1 p-1 bg-white rounded-lg border border-indigo-200">
+                    <button
+                      type="button"
+                      onClick={() => setBankSoalMapelFilter('SEMUA')}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                        bankSoalMapelFilter === 'SEMUA'
+                          ? 'bg-indigo-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50'
+                      }`}
+                    >
+                      Semua Mapel ({exams.length})
+                    </button>
+                    {Array.from(
+                      new Set(exams.map((ex) => getEffectiveMataPelajaran(ex)))
+                    ).map((mapel) => {
+                      const countMapel = exams.filter(
+                        (ex) => getEffectiveMataPelajaran(ex) === mapel
                       ).length;
-                      const pgBiasaCount = exQuestions.length - pgKompleksCount;
-                      const hotsCount = exQuestions.filter(
-                        (q) => classifyQuestionCognitiveLevel(q) === 'HOTS'
-                      ).length;
-                      const lotsCount = exQuestions.length - hotsCount;
-
                       return (
-                        <tr
-                          key={ex.id}
-                          onClick={() => {
-                            setSelectedExamId(ex.id);
-                            setShowUploadPanel(exQuestions.length === 0);
-                            setIsBankSoalDetailOpen(true);
-                          }}
-                          className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                        <button
+                          key={mapel}
+                          type="button"
+                          onClick={() => setBankSoalMapelFilter(mapel)}
+                          className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                            bankSoalMapelFilter === mapel
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50'
+                          }`}
                         >
-                          <td className="py-4 px-4">
-                            <div className="font-bold text-slate-900 group-hover:text-blue-700 transition-colors">
-                              {ex.judul_ujian}
-                            </div>
-                            <div className="text-[11px] text-slate-500 mt-0.5">
-                              Klik untuk membuka daftar seluruh soal pada bank soal ini
-                            </div>
-                          </td>
-                          <td className="py-4 px-4 text-xs font-medium text-blue-700">
-                            {formatDistribusiLabel(
-                              ex.target_tingkat,
-                              ex.target_kelas
-                            )}
-                          </td>
-                          <td className="py-4 px-4 text-right font-mono tabular-nums text-xs text-slate-700">
-                            {ex.durasi_menit} Menit
-                          </td>
-                          <td className="py-4 px-4 text-right">
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold font-mono tabular-nums bg-blue-50 text-blue-800 border border-blue-200">
-                              {exQuestions.length} Soal
-                            </span>
-                          </td>
-                          <td className="py-4 px-4 text-xs text-slate-600">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">
-                                PG Biasa: {pgBiasaCount}
-                              </span>
-                              <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 font-medium">
-                                PG Kompleks: {pgKompleksCount}
-                              </span>
-                              <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 font-medium">
-                                LOTS: {lotsCount} · HOTS: {hotsCount}
-                              </span>
-                            </div>
-                          </td>
-                          <td
-                            className="py-4 px-4 text-right"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <div className="inline-flex items-center justify-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedExamId(ex.id);
-                                  setShowUploadPanel(exQuestions.length === 0);
-                                  setIsBankSoalDetailOpen(true);
-                                }}
-                                className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-                              >
-                                Buka Bank Soal ({exQuestions.length} Soal)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setBankSoalDeleteModal({
-                                    examId: ex.id,
-                                    title: ex.judul_ujian,
-                                    questionCount: exQuestions.length,
-                                  })
-                                }
-                                aria-label={`Hapus Bank Soal ${ex.judul_ujian}`}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                Hapus Bank Soal
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                          {mapel} ({countMapel})
+                        </button>
                       );
                     })}
-                  </tbody>
-                </table>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-white rounded-lg border border-indigo-200">
+                  {(
+                    [
+                      ['SEMUA', 'Semua Tingkat'],
+                      ['10', 'Kelas X'],
+                      ['11', 'Kelas XI'],
+                      ['12', 'Kelas XII'],
+                    ] as const
+                  ).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setBankSoalTingkatFilter(val)}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                        bankSoalTingkatFilter === val
+                          ? 'bg-blue-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-blue-900 hover:bg-blue-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              <div className="p-6">
+                <div className="overflow-x-auto border border-indigo-100 rounded-xl">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-indigo-50/80 border-b border-indigo-100 text-xs font-bold text-indigo-950">
+                        <th className="py-3.5 px-4">Paket Bank Soal &amp; Mata Pelajaran</th>
+                        <th className="py-3.5 px-4">Kode Paket &amp; Distribusi</th>
+                        <th className="py-3.5 px-4 text-right">Durasi</th>
+                        <th className="py-3.5 px-4 text-right">Isi Paket Soal</th>
+                        <th className="py-3.5 px-4">Komposisi Tipe &amp; Kognitif</th>
+                        <th className="py-3.5 px-4 text-right">Aksi Kelola Paket Soal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 text-sm">
+                      {exams
+                        .filter((ex) => {
+                          const matchMapel =
+                            bankSoalMapelFilter === 'SEMUA' ||
+                            getEffectiveMataPelajaran(ex) === bankSoalMapelFilter;
+                          const matchTingkat =
+                            bankSoalTingkatFilter === 'SEMUA' ||
+                            ex.target_tingkat === bankSoalTingkatFilter ||
+                            ex.target_tingkat === 'SEMUA';
+                          return matchMapel && matchTingkat;
+                        })
+                        .map((ex) => {
+                          const exQuestions = questions.filter(
+                            (q) => Number(q.exam_id) === Number(ex.id)
+                          );
+                          const pgKompleksCount = exQuestions.filter(
+                            (q) => q.tipe_soal === 'Kompleks'
+                          ).length;
+                          const pgBiasaCount = exQuestions.length - pgKompleksCount;
+                          const hotsCount = exQuestions.filter(
+                            (q) => classifyQuestionCognitiveLevel(q) === 'HOTS'
+                          ).length;
+                          const lotsCount = exQuestions.length - hotsCount;
+
+                          return (
+                            <tr
+                              key={ex.id}
+                              onClick={() => {
+                                setSelectedExamId(ex.id);
+                                setShowUploadPanel(exQuestions.length === 0);
+                                setIsBankSoalDetailOpen(true);
+                              }}
+                              className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                            >
+                              <td className="py-4 px-4">
+                                <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                                  <span className="text-[11px] font-bold text-indigo-700">
+                                    {getEffectiveMataPelajaran(ex)}
+                                  </span>
+                                  <span className="text-slate-300">·</span>
+                                  <span className="text-[11px] font-medium text-slate-600">
+                                    {ex.kategori_ujian || 'Penilaian Harian'}
+                                  </span>
+                                </div>
+                                <div className="font-bold text-slate-900 group-hover:text-blue-700 transition-colors">
+                                  {ex.judul_ujian}
+                                </div>
+                                <div className="text-[11px] text-slate-500 mt-0.5">
+                                  Klik untuk mengelola soal khusus pada paket ini
+                                </div>
+                              </td>
+                              <td className="py-4 px-4 text-xs">
+                                <div className="font-mono font-bold text-indigo-900">
+                                  {ex.kode_paket || 'PAKET-A'}
+                                  {ex.mode_multi_paket
+                                    ? ` (${ex.jumlah_paket || 2} Varian Ganjil/Genap)`
+                                    : ''}
+                                </div>
+                                <div className="font-medium text-blue-700 mt-0.5">
+                                  {formatDistribusiLabel(
+                                    ex.target_tingkat,
+                                    ex.target_kelas
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-4 px-4 text-right font-mono tabular-nums text-xs text-slate-700">
+                                {ex.durasi_menit} Menit
+                              </td>
+                              <td className="py-4 px-4 text-right">
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold font-mono tabular-nums bg-blue-50 text-blue-800 border border-blue-200">
+                                  {exQuestions.length} Soal
+                                </span>
+                              </td>
+                              <td className="py-4 px-4 text-xs text-slate-600">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span>PG: <strong>{pgBiasaCount}</strong></span>
+                                  <span className="text-slate-300">·</span>
+                                  <span>Kompleks: <strong>{pgKompleksCount}</strong></span>
+                                  <span className="text-slate-300">·</span>
+                                  <span>
+                                    LOTS: <strong>{lotsCount}</strong> / HOTS:{' '}
+                                    <strong>{hotsCount}</strong>
+                                  </span>
+                                </div>
+                              </td>
+                              <td
+                                className="py-4 px-4 text-right"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedExamId(ex.id);
+                                      setShowUploadPanel(exQuestions.length === 0);
+                                      setIsBankSoalDetailOpen(true);
+                                    }}
+                                    className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                                  >
+                                    Kelola Soal ({exQuestions.length})
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedExamId(ex.id);
+                                      setQuestionInputMode('csv');
+                                      setShowUploadPanel(true);
+                                      setIsBankSoalDetailOpen(true);
+                                    }}
+                                    className="px-2.5 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                                    title="Upload soal dari Word (.doc/.docx) atau Excel (.xls/.xlsx) ke paket ini"
+                                  >
+                                    + Upload Word/Excel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setBankSoalDeleteModal({
+                                        examId: ex.id,
+                                        title: ex.judul_ujian,
+                                        questionCount: exQuestions.length,
+                                      })
+                                    }
+                                    aria-label={`Hapus Bank Soal ${ex.judul_ujian}`}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    Hapus
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           ) : (
@@ -4369,52 +4499,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => setIsBankSoalDetailOpen(false)}
+                      onClick={() => {
+                        setIsBankSoalDetailOpen(false);
+                        setShowUploadPanel(false);
+                      }}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                     >
-                      ← Kembali ke Daftar Bank Soal
+                      ← Kembali ke Daftar Paket Soal
                     </button>
                     <div>
                       <div className="text-sm font-bold text-slate-900">
-                        Bank Soal: {currentExam?.judul_ujian || 'Paket Ujian'}
+                        Paket Soal: {currentExam?.judul_ujian || 'Paket Ujian'}{' '}
+                        <span className="font-mono text-xs text-indigo-700">
+                          [{currentExam?.kode_paket || 'PAKET-A'}]
+                        </span>
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        Menampilkan {currentExamQuestions.length} butir soal pada paket bank soal ini
+                        Mapel: {currentExam ? getEffectiveMataPelajaran(currentExam) : 'Sosiologi'} · {currentExamQuestions.length} butir soal pada paket ini
                       </div>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setShowUploadPanel((prev) => !prev)}
-                      aria-label={
-                        showUploadPanel
-                          ? 'Sembunyikan Panel Upload (Mode Layar Penuh)'
-                          : 'Buka Panel Upload / Tambah Soal'
-                      }
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all shadow-xs cursor-pointer ${
-                        showUploadPanel
-                          ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border-indigo-200'
-                          : 'text-white bg-blue-600 hover:bg-blue-700 border-blue-600'
+                      onClick={() => {
+                        setQuestionInputMode('manual');
+                        setShowUploadPanel((prev) =>
+                          prev && questionInputMode === 'manual' ? false : true
+                        );
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
+                        showUploadPanel && questionInputMode === 'manual'
+                          ? 'text-white bg-blue-600 border-blue-600 shadow-xs'
+                          : 'text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-200'
                       }`}
                     >
-                      {showUploadPanel ? (
-                        <>
-                          <Maximize2 className="w-3.5 h-3.5" />
-                          <span>Layar Penuh (Sembunyikan Upload)</span>
-                        </>
-                      ) : (
-                        <>
-                          <PanelLeftOpen className="w-3.5 h-3.5" />
-                          <span>+ Buka Panel Upload / Form Soal</span>
-                        </>
-                      )}
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Soal Manual</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuestionInputMode('csv');
+                        setShowUploadPanel((prev) =>
+                          prev && questionInputMode === 'csv' ? false : true
+                        );
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
+                        showUploadPanel && questionInputMode === 'csv'
+                          ? 'text-white bg-indigo-600 border-indigo-600 shadow-xs'
+                          : 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border-indigo-200'
+                      }`}
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload Word / Excel</span>
                     </button>
                     <label
                       htmlFor="quick-switch-bank-soal"
                       className="text-xs font-medium text-slate-600"
                     >
-                      Ganti Bank Soal:
+                      Pindah Paket:
                     </label>
                     <select
                       id="quick-switch-bank-soal"
@@ -4428,7 +4572,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         ).length;
                         return (
                           <option key={ex.id} value={ex.id}>
-                            {ex.judul_ujian} ({cnt} Soal)
+                            [{getEffectiveMataPelajaran(ex)}] {ex.judul_ujian} ({cnt} Soal)
                           </option>
                         );
                       })}
@@ -4446,7 +4590,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        Hapus Bank Soal Ini
+                        Hapus Paket
                       </button>
                     )}
                   </div>
@@ -4454,22 +4598,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                {/* Left 5 Cols: Input Soal Manual atau Upload Excel/CSV */}
+                {/* Left 5 Cols: Input Soal Manual atau Upload Word/Excel/CSV */}
                 {showUploadPanel && (
                   <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
                     <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                       <div className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                         <Upload className="w-4 h-4 text-blue-600" />
-                        <span>Form Input & Upload Soal</span>
+                        <span>Form Input &amp; Upload Soal Paket Ini</span>
                       </div>
                       <button
                         type="button"
                         onClick={() => setShowUploadPanel(false)}
                         className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer"
-                        title="Sembunyikan panel upload untuk memperluas tinjauan soal"
+                        title="Tutup panel form untuk melihat daftar soal secara penuh"
                       >
                         <PanelLeftClose className="w-3.5 h-3.5" />
-                        <span>Sembunyikan</span>
+                        <span>Tutup Form</span>
                       </button>
                     </div>
             <div>
@@ -4477,12 +4621,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 htmlFor="select-active-exam-soal"
                 className="block text-xs font-semibold text-slate-700 mb-1"
               >
-                Pilih Paket Ujian & Target Tingkatan Kelas
+                Paket Ujian Tujuan Input / Upload
               </label>
               {exams.length === 0 ? (
                 <div className="p-3.5 rounded-lg bg-blue-50/70 border border-blue-200 space-y-2.5">
                   <div className="text-xs font-semibold text-blue-900">
-                    Paket Ujian Otomatis (Langsung Buat & Upload Soal)
+                    Paket Ujian Otomatis (Langsung Buat &amp; Upload Soal)
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
@@ -4566,24 +4710,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               >
                 Upload Word / Excel / CSV
               </button>
-            </div>
-
-            {/* Info Card Logika Penilaian CBT */}
-            <div className="p-3 rounded-lg bg-blue-50/70 border border-blue-200 text-xs text-slate-700 space-y-1">
-              <div className="font-bold text-blue-900">
-                Logika Penilaian Soal CBT (Otomatis & Konsisten):
-              </div>
-              <ul className="list-disc list-inside space-y-0.5 text-[11px]">
-                <li>
-                  <strong>PG Biasa (1 Jawaban Benar):</strong> Benar ={' '}
-                  <strong>2 Poin</strong>, Salah = 0 Poin.
-                </li>
-                <li>
-                  <strong>PG Kompleks (&gt;1 Jawaban Benar):</strong> Benar Semua
-                  = <strong>3 Poin</strong>, Benar Sebagian ={' '}
-                  <strong>1–2 Poin</strong>, Salah = 0 Poin.
-                </li>
-              </ul>
             </div>
 
             {questionInputMode === 'manual' ? (
@@ -4785,7 +4911,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               >
                 <div className="space-y-2.5">
                   <span className="block text-xs font-bold text-slate-800">
-                    1. Unduh Template Microsoft Word (.doc), Excel (.xls), atau CSV (Dilengkapi Contoh Gambar &amp; Rumus Matematika · Fisika · Kimia):
+                    1. Unduh Template Word Fit 1 Halaman A4 (.doc), Excel (.xls), atau CSV:
                   </span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <button
@@ -4794,7 +4920,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       className="py-2.5 px-3 text-xs font-bold text-white bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
                     >
                       <Download className="w-3.5 h-3.5 shrink-0" />
-                      <span>Template Word Tabel (.doc)</span>
+                      <span>Word Tabel 4 Kolom (Fit 1 Hal A4)</span>
                     </button>
                     <button
                       type="button"
@@ -4802,7 +4928,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       className="py-2.5 px-3 text-xs font-bold text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5 shrink-0 text-indigo-700" />
-                      <span>Template Word Nomor Soal (.doc)</span>
+                      <span>Word Nomor Soal (Fit 1 Hal A4)</span>
                     </button>
                     <button
                       type="button"
@@ -4810,7 +4936,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       className="py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5 shrink-0" />
-                      <span>Template Excel 11 Kolom (.xls)</span>
+                      <span>Template Excel (.xls)</span>
                     </button>
                     <button
                       type="button"
@@ -4825,14 +4951,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <div className="text-[11px] text-slate-700 bg-indigo-50/70 p-3 rounded-lg border border-indigo-200 space-y-1">
                   <div className="font-bold text-indigo-950">
-                    Keunggulan Template Word &amp; Pembaca Rumus/Gambar Otomatis:
+                    Desain Baru Template Word Fit 1 Halaman A4 (Tidak Menjorok 11 Kolom):
                   </div>
                   <ul className="list-disc list-inside space-y-0.5 text-[11px] text-slate-700">
                     <li>
-                      <strong>Gambar Terbaca Otomatis:</strong> Cukup <em>Copy-Paste</em> atau <em>Insert Picture</em> gambar/diagram di dalam file Word (baik format Tabel maupun Soal Bernomor), sistem otomatis mengekstrak &amp; menampilkan gambarnya!
+                      <strong>Tabel Ringkas 4 Kolom Proporsional:</strong> Hanya 4 kolom (<code>No &amp; Tipe</code> | <code>Wacana &amp; Pertanyaan</code> | <code>Pilihan A–E</code> | <code>Kunci &amp; Bobot</code>) sehingga muat 1 halaman A4 Portrait dan sangat mudah diketik di Word.
                     </li>
                     <li>
-                      <strong>Rumus Matematika, Fisika &amp; Kimia:</strong> Mendukung rumus LaTeX <code>$...$</code> (contoh: <code>{'$\\sum \\vec{F} = m \\cdot \\vec{a}$'}</code>, <code>{'$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$'}</code>) serta reaksi kimia <code>{'$\\ce{2H2 + O2 -> 2H2O}$'}</code> dan pangkat/indeks Word (<code>x²</code>, <code>H₂SO₄</code>).
+                      <strong>Gambar &amp; Rumus Otomatis:</strong> Mendukung <em>Copy-Paste</em> Gambar di Word serta rumus LaTeX <code>$...$</code> (contoh: <code>{'$\\sum \\vec{F} = m \\cdot \\vec{a}$'}</code>) dan reaksi kimia <code>{'$\\ce{2H2 + O2 -> 2H2O}$'}</code>.
                     </li>
                   </ul>
                 </div>
@@ -4845,7 +4971,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     2. Pilih File Soal: Word (.docx, .doc), Excel (.xlsx, .xls), CSV, atau TXT
                   </label>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    Langsung upload otomatis saat file dipilih! Mendukung dokumen Microsoft Word (Tabel 11 kolom maupun Soal Bernomor 1, 2, 3...), gambar tersemat di Word, serta equation Matematika, Fisika, dan Kimia.
+                    Langsung upload otomatis saat file dipilih! Mendukung Tabel Word 4 Kolom (Fit A4), Soal Bernomor (1, 2, 3...), maupun Tabel Excel.
                   </p>
                   <input
                     id="csv-file-upload"
@@ -4969,7 +5095,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
 
-          {/* Right Column: Manajemen & Tinjauan Soal pada Ujian Terpilih */}
+          {/* Right Column: Manajemen & Tinjauan Soal Terstruktur pada Paket Ujian Terpilih */}
           <div
             className={`${
               showUploadPanel ? 'lg:col-span-7' : 'lg:col-span-12'
@@ -4980,26 +5106,64 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-base font-extrabold text-white">
-                      Manajemen &amp; Tinjauan Soal:{' '}
-                      {currentExam ? currentExam.judul_ujian : 'Belum Ada Ujian'} (
-                      {currentExamQuestions.length} Butir)
+                      Manajemen Soal Paket:{' '}
+                      {currentExam ? currentExam.judul_ujian : 'Belum Ada Paket'} (
+                      {currentExamQuestions.length} Soal)
                     </h2>
-                    {!showUploadPanel && (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold text-amber-950 bg-amber-300 rounded-full">
-                        <Maximize2 className="w-3 h-3" />
-                        Mode Tinjau Layar Penuh (12 Kolom)
-                      </span>
-                    )}
                   </div>
                   {currentExam && (
                     <p className="text-xs text-blue-200 font-medium mt-0.5">
-                      Distribusi:{' '}
+                      Mapel: {getEffectiveMataPelajaran(currentExam)} · Kode:{' '}
+                      {currentExam.kode_paket || 'PAKET-A'} · Distribusi:{' '}
                       {formatDistribusiLabel(
                         currentExam.target_tingkat,
                         currentExam.target_kelas
                       )}
                     </p>
                   )}
+                </div>
+
+                {/* Mode Tampilan Soal Switcher (Ringkas vs Per Nomor vs Lengkap) */}
+                <div className="flex items-center gap-1 p-1 bg-slate-900/70 border border-white/15 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setQuestionViewMode('ringkas')}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                      questionViewMode === 'ringkas'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'text-blue-100 hover:text-white'
+                    }`}
+                    title="Tampilan daftar ringkas per soal (klik soal untuk membuka detail) agar halaman rapi dan tidak memanjang"
+                  >
+                    Daftar Ringkas (Rapi)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuestionViewMode('per_soal');
+                      setFocusedQuestionIdx(0);
+                    }}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                      questionViewMode === 'per_soal'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'text-blue-100 hover:text-white'
+                    }`}
+                    title="Tinjau 1 soal per layar dilengkapi navigasi nomor soal 1 s/d N"
+                  >
+                    Fokus Per 1 Soal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuestionViewMode('lengkap')}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                      questionViewMode === 'lengkap'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'text-blue-100 hover:text-white'
+                    }`}
+                    title="Buka seluruh detail wacana dan opsi jawaban per halaman"
+                  >
+                    Detail Lengkap
+                  </button>
                 </div>
               </div>
 
@@ -5016,57 +5180,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {showUploadPanel ? (
                     <>
                       <Maximize2 className="w-3.5 h-3.5" />
-                      <span>Sembunyikan Panel Upload</span>
+                      <span>Tutup Panel Form Input</span>
                     </>
                   ) : (
                     <>
                       <PanelLeftOpen className="w-3.5 h-3.5" />
-                      <span>+ Buka Panel Upload / Form Soal</span>
+                      <span>+ Tambah / Upload Soal ke Paket Ini</span>
                     </>
                   )}
                 </button>
                 <button
                   type="button"
                   onClick={handleExportQuestionsWord}
-                  disabled={questions.length === 0}
+                  disabled={currentExamQuestions.length === 0}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Download Soal Word (.doc)
+                  Download Word 4 Kolom (.doc)
                 </button>
                 <button
                   type="button"
                   onClick={() => handleExportQuestionsExcel(false)}
-                  disabled={questions.length === 0}
+                  disabled={currentExamQuestions.length === 0}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Download Soal Paket (.xls)
+                  Download Paket (.xls)
                 </button>
                 <button
                   type="button"
                   onClick={handleExportQuestionsCsv}
-                  disabled={questions.length === 0}
+                  disabled={currentExamQuestions.length === 0}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
                   Download CSV (.csv)
                 </button>
-                {exams.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => handleExportQuestionsExcel(true)}
-                    disabled={questions.length === 0}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-white/10 hover:bg-white/20 border border-white/20 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Semua Paket (.xls)
-                  </button>
-                )}
               </div>
             </div>
 
-            {/* Toolbar Filter, Pencarian, Salin Antar Paket & Kosongkan Soal */}
+            {/* Toolbar Filter, Pencarian, Jumlah Per Halaman & Kosongkan Paket */}
             <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
               <div className="flex flex-wrap items-center gap-2 flex-1">
                 <input
@@ -5074,7 +5227,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   aria-label="Cari butir soal"
                   value={searchQuestionQuery}
                   onChange={(e) => setSearchQuestionQuery(e.target.value)}
-                  placeholder="Cari kata kunci soal / wacana..."
+                  placeholder="Cari nomor kode / kata kunci soal / wacana..."
                   className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-md flex-1 min-w-[160px]"
                 />
                 <select
@@ -5087,10 +5240,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   }
                   className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
                 >
-                  <option value="SEMUA">Semua Tipe Soal</option>
-                  <option value="PG">PG Biasa (2 Poin)</option>
-                  <option value="Kompleks">PG Kompleks (3 Poin)</option>
+                  <option value="SEMUA">Semua Tipe ({currentExamQuestions.length})</option>
+                  <option value="PG">PG Biasa</option>
+                  <option value="Kompleks">PG Kompleks</option>
                 </select>
+                {questionViewMode !== 'per_soal' && (
+                  <select
+                    aria-label="Jumlah soal per halaman"
+                    value={questionsPerPage}
+                    onChange={(e) => {
+                      setQuestionsPerPage(Number(e.target.value));
+                      setQuestionPage(1);
+                    }}
+                    className="px-2.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-md text-slate-700"
+                  >
+                    <option value={10}>Tampilkan 10 Soal / Hal</option>
+                    <option value={20}>Tampilkan 20 Soal / Hal</option>
+                    <option value={50}>Tampilkan 50 Soal / Hal</option>
+                    <option value={999}>Tampilkan Semua</option>
+                  </select>
+                )}
               </div>
 
               {currentExamQuestions.length > 0 && (
@@ -5109,7 +5278,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {exams.length > 1 && currentExamQuestions.length > 0 && (
               <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-blue-50/60 border border-blue-200 text-xs">
                 <span className="font-semibold text-slate-800">
-                  Salin {currentExamQuestions.length} Soal ke Paket Ujian Kelas Lain:
+                  Salin {currentExamQuestions.length} Soal Paket Ini ke Paket Ujian Lain:
                 </span>
                 <div className="flex items-center gap-2">
                   <select
@@ -5127,7 +5296,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       .filter((ex) => ex.id !== currentExam?.id)
                       .map((ex) => (
                         <option key={ex.id} value={ex.id}>
-                          {ex.judul_ujian} ({ex.target_tingkat})
+                          [{getEffectiveMataPelajaran(ex)}] {ex.judul_ujian} ({ex.target_tingkat})
                         </option>
                       ))}
                   </select>
@@ -5146,85 +5315,118 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {filteredExamQuestions.length === 0 ? (
               <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
                 <p className="text-sm font-semibold text-slate-700">
-                  Belum Ada Butir Soal pada Paket / Filter Ini
+                  Belum Ada Butir Soal pada Paket Ujian Ini
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
                   {showUploadPanel
-                    ? 'Tambahkan soal secara manual atau gunakan fitur Upload Massal Excel/CSV di panel sebelah kiri.'
-                    : 'Buka panel upload atau tambahkan soal secara manual untuk mengisi paket ujian ini.'}
+                    ? 'Silakan tambahkan soal secara manual atau upload file Word (.doc/.docx) / Excel (.xls/.xlsx) pada formulir di samping.'
+                    : 'Klik tombol di bawah untuk mengunggah soal dari Word/Excel atau menambahkan soal baru ke paket ini.'}
                 </p>
                 {!showUploadPanel && (
-                  <button
-                    type="button"
-                    onClick={() => setShowUploadPanel(true)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs transition-colors cursor-pointer mt-2"
-                  >
-                    <PanelLeftOpen className="w-3.5 h-3.5" />
-                    Buka Panel Upload / Tambah Soal
-                  </button>
+                  <div className="flex items-center justify-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuestionInputMode('csv');
+                        setShowUploadPanel(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs transition-colors cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      Upload Soal Word / Excel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuestionInputMode('manual');
+                        setShowUploadPanel(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Input Soal Manual
+                    </button>
+                  </div>
                 )}
               </div>
-            ) : (
-              <div
-                className={`space-y-4 pr-1 ${
-                  showUploadPanel ? 'max-h-[580px] overflow-y-auto' : 'overflow-visible'
-                }`}
-              >
-                {filteredExamQuestions.map((q, idx) => {
-                  const cogLevel = classifyQuestionCognitiveLevel(q);
-                  return (
-                    <div
-                      key={q.id}
-                      className={`p-5 border rounded-xl space-y-3 transition-shadow ${
-                        editingQuestionId === q.id
-                          ? 'border-blue-600 bg-blue-50/30 ring-1 ring-blue-600 shadow-xs'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-xs'
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 pb-2 border-b border-slate-100">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2.5 py-1 rounded-md">
-                            Soal #{idx + 1}
-                          </span>
-                          <span
-                            className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
-                              cogLevel === 'HOTS'
-                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                                : 'bg-blue-50 text-blue-800 border border-blue-200'
+            ) : questionViewMode === 'per_soal' ? (
+              /* MODE 2: FOKUS PER 1 SOAL DENGAN NAVIGASI NOMOR SOAL 1..N */
+              (() => {
+                const safeIdx = Math.min(
+                  Math.max(0, focusedQuestionIdx),
+                  filteredExamQuestions.length - 1
+                );
+                const q = filteredExamQuestions[safeIdx];
+                const cogLevel = classifyQuestionCognitiveLevel(q);
+                return (
+                  <div className="space-y-4">
+                    {/* Nomor Soal Navigation Bar */}
+                    <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-700">
+                          Pilih Nomor Butir Soal (1 s/d {filteredExamQuestions.length}):
+                        </span>
+                        <span className="text-slate-500 font-mono">
+                          Menampilkan Soal #{safeIdx + 1} dari {filteredExamQuestions.length}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {filteredExamQuestions.map((item, idx) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setFocusedQuestionIdx(idx)}
+                            className={`w-8 h-8 rounded-lg font-mono text-xs font-bold border transition-colors cursor-pointer ${
+                              idx === safeIdx
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                                : 'bg-white text-slate-700 border-slate-200 hover:border-blue-400 hover:bg-blue-50'
                             }`}
                           >
-                            {cogLevel} (
-                            {cogLevel === 'HOTS' ? 'C4–C6 / Analitis' : 'C1–C3 / Dasar'}
-                            )
+                            {idx + 1}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Single Question Focused Card */}
+                    <div className="p-5 border border-blue-200 bg-white rounded-xl space-y-4 shadow-2xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 pb-3 border-b border-slate-100">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono font-bold text-white bg-blue-600 px-2.5 py-1 rounded-md">
+                            Soal #{safeIdx + 1}
                           </span>
-                          <span className="text-slate-600 font-medium">
-                            {q.tipe_soal === 'Kompleks'
-                              ? 'PG Kompleks (Maks 3 Poin)'
-                              : 'PG Biasa (2 Poin)'}
+                          <span className="font-mono font-semibold text-slate-700">
+                            {q.data_opsi?.id_soal_csv || `SOAL-${String(safeIdx + 1).padStart(2, '0')}`}
+                          </span>
+                          <span className="text-slate-300">·</span>
+                          <span className="font-semibold text-indigo-800">
+                            {cogLevel} ({cogLevel === 'HOTS' ? 'C4–C6' : 'C1–C3'})
+                          </span>
+                          <span className="text-slate-300">·</span>
+                          <span className="text-slate-700 font-medium">
+                            {q.tipe_soal === 'Kompleks' ? 'PG Kompleks' : 'PG Biasa'}
                           </span>
                         </div>
-                        <div className="flex items-center gap-2.5">
-                          <span className="font-mono bg-slate-50 px-2.5 py-1 rounded border border-slate-200">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-slate-800">
                             Kunci:{' '}
                             <strong className="text-emerald-700 font-bold">
                               {q.kunci_jawaban.join(', ')}
                             </strong>{' '}
-                            · Bobot: {q.bobot} Poin
+                            · Bobot: <strong>{q.bobot} Poin</strong>
                           </span>
                           <button
                             type="button"
                             onClick={() => handleStartEditQuestion(q)}
-                            aria-label={`Edit soal nomor ${idx + 1}`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md cursor-pointer"
                           >
                             <Edit3 className="w-3 h-3" />
-                            Edit
+                            Edit Soal Ini
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDeleteQuestion(q.id)}
-                            aria-label={`Hapus soal nomor ${idx + 1}`}
-                            className="text-slate-400 hover:text-red-600 cursor-pointer p-1 transition-colors"
+                            className="text-slate-400 hover:text-red-600 cursor-pointer p-1"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -5235,11 +5437,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div className="text-xs text-slate-700 bg-slate-50/80 p-3.5 rounded-lg border border-slate-200">
                           <div className="font-bold text-slate-800 mb-1.5 flex items-center gap-1.5 uppercase tracking-wide text-[11px]">
                             <Layers className="w-3.5 h-3.5 text-blue-600" />
-                            Stimulus / Wacana / Narasi Soal:
+                            Stimulus / Wacana Soal:
                           </div>
-                          <div className="prose prose-xs max-w-none">
-                            <MathAndTableRenderer content={q.data_opsi.wacana} />
-                          </div>
+                          <MathAndTableRenderer content={q.data_opsi.wacana} />
                         </div>
                       )}
 
@@ -5247,13 +5447,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <MathAndTableRenderer content={q.teks_soal} />
                       </div>
 
-                      <div
-                        className={`grid gap-2 text-xs pt-1.5 ${
-                          showUploadPanel
-                            ? 'grid-cols-1 sm:grid-cols-2'
-                            : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-                        }`}
-                      >
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
                         {(['A', 'B', 'C', 'D', 'E'] as const).map((k) =>
                           q.data_opsi?.opsi?.[k] ? (
                             <div
@@ -5279,19 +5473,311 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   inline
                                 />
                               </div>
-                              {q.kunci_jawaban.includes(k) && (
-                                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded shrink-0">
-                                  Kunci
-                                </span>
-                              )}
                             </div>
                           ) : null
                         )}
                       </div>
+
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                        <button
+                          type="button"
+                          disabled={safeIdx <= 0}
+                          onClick={() => setFocusedQuestionIdx((p) => Math.max(0, p - 1))}
+                          className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 rounded-lg cursor-pointer"
+                        >
+                          ← Soal Sebelumnya
+                        </button>
+                        <button
+                          type="button"
+                          disabled={safeIdx >= filteredExamQuestions.length - 1}
+                          onClick={() =>
+                            setFocusedQuestionIdx((p) =>
+                              Math.min(filteredExamQuestions.length - 1, p + 1)
+                            )
+                          }
+                          className="px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 rounded-lg cursor-pointer"
+                        >
+                          Soal Berikutnya →
+                        </button>
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                );
+              })()
+            ) : (
+              /* MODE 1 (DEFAULT: RINGKAS & RAPI) & MODE 3 (DETAIL LENGKAP) DENGAN PAGINASI */
+              (() => {
+                const totalItems = filteredExamQuestions.length;
+                const totalPages = Math.max(
+                  1,
+                  Math.ceil(totalItems / questionsPerPage)
+                );
+                const safePage = Math.min(Math.max(1, questionPage), totalPages);
+                const startIdx = (safePage - 1) * questionsPerPage;
+                const pageItems = filteredExamQuestions.slice(
+                  startIdx,
+                  startIdx + questionsPerPage
+                );
+
+                return (
+                  <div className="space-y-3">
+                    {/* Info & Pagination Header Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 bg-slate-50/70 px-3.5 py-2 rounded-lg border border-slate-200/80">
+                      <div>
+                        Menampilkan soal{' '}
+                        <strong className="font-mono text-slate-900">
+                          {startIdx + 1}–{Math.min(startIdx + pageItems.length, totalItems)}
+                        </strong>{' '}
+                        dari <strong className="font-mono text-slate-900">{totalItems}</strong> butir soal pada paket ini
+                        {questionViewMode === 'ringkas' && (
+                          <span className="text-slate-500 ml-1.5">
+                            (Klik baris soal untuk melihat rincian wacana &amp; opsi A–E)
+                          </span>
+                        )}
+                      </div>
+                      {totalPages > 1 && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={safePage <= 1}
+                            onClick={() => setQuestionPage((p) => Math.max(1, p - 1))}
+                            className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-300 rounded disabled:opacity-40 hover:bg-slate-100 cursor-pointer"
+                          >
+                            ← Hal Sebelumnya
+                          </button>
+                          <span className="px-2 font-mono font-bold text-slate-800">
+                            Hal {safePage}/{totalPages}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={safePage >= totalPages}
+                            onClick={() =>
+                              setQuestionPage((p) => Math.min(totalPages, p + 1))
+                            }
+                            className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-300 rounded disabled:opacity-40 hover:bg-slate-100 cursor-pointer"
+                          >
+                            Hal Berikutnya →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-2.5">
+                      {pageItems.map((q, localIdx) => {
+                        const globalIdx = startIdx + localIdx;
+                        const cogLevel = classifyQuestionCognitiveLevel(q);
+                        const isExpanded =
+                          questionViewMode === 'lengkap' ||
+                          expandedQuestionIds.includes(q.id) ||
+                          editingQuestionId === q.id;
+                        const cleanSnippet = String(q.teks_soal || '')
+                          .replace(/\[IMG:[^\]]+\]/g, '[Gambar] ')
+                          .replace(/\s+/g, ' ')
+                          .trim();
+                        const hasMediaOrWacana =
+                          Boolean(q.data_opsi?.wacana) ||
+                          /\[IMG:/i.test(q.teks_soal || '') ||
+                          /\[IMG:/i.test(q.data_opsi?.wacana || '');
+
+                        return (
+                          <div
+                            key={q.id}
+                            className={`border rounded-xl transition-all ${
+                              editingQuestionId === q.id
+                                ? 'border-blue-600 bg-blue-50/30 ring-1 ring-blue-600'
+                                : isExpanded
+                                ? 'border-indigo-200 bg-white shadow-2xs'
+                                : 'border-slate-200 bg-white hover:border-slate-300'
+                            }`}
+                          >
+                            {/* Compact Row Header (Always Visible, Clickable to Toggle Detail) */}
+                            <div
+                              onClick={() => {
+                                if (questionViewMode === 'ringkas') {
+                                  toggleExpandQuestion(q.id);
+                                }
+                              }}
+                              className={`px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                                questionViewMode === 'ringkas' ? 'cursor-pointer' : ''
+                              }`}
+                            >
+                              <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+                                <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2.5 py-1 rounded-md shrink-0">
+                                  #{globalIdx + 1}
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                                    <span className="font-mono font-semibold text-slate-700">
+                                      {q.data_opsi?.id_soal_csv ||
+                                        `SOAL-${String(globalIdx + 1).padStart(2, '0')}`}
+                                    </span>
+                                    <span>·</span>
+                                    <span className="font-semibold text-indigo-700">
+                                      {q.tipe_soal === 'Kompleks'
+                                        ? 'PG Kompleks'
+                                        : 'PG Biasa'}
+                                    </span>
+                                    <span>·</span>
+                                    <span
+                                      className={
+                                        cogLevel === 'HOTS'
+                                          ? 'font-bold text-purple-700'
+                                          : 'font-medium text-blue-700'
+                                      }
+                                    >
+                                      {cogLevel}
+                                    </span>
+                                    {hasMediaOrWacana && (
+                                      <>
+                                        <span>·</span>
+                                        <span className="text-emerald-700 font-medium">
+                                          + Wacana/Gambar
+                                        </span>
+                                      </>
+                                    )}
+                                  </div>
+                                  {!isExpanded && (
+                                    <div className="text-xs font-semibold text-slate-800 truncate mt-0.5">
+                                      {cleanSnippet || 'Butir Soal'}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div
+                                className="flex items-center gap-2 shrink-0"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <span className="text-xs font-mono text-slate-700">
+                                  Kunci:{' '}
+                                  <strong className="text-emerald-700 font-bold">
+                                    {q.kunci_jawaban.join(', ')}
+                                  </strong>{' '}
+                                  ({q.bobot}p)
+                                </span>
+                                {questionViewMode === 'ringkas' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleExpandQuestion(q.id)}
+                                    className="px-2.5 py-1 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer"
+                                  >
+                                    {isExpanded ? 'Tutup Detail' : 'Lihat Detail'}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditQuestion(q)}
+                                  aria-label={`Edit soal nomor ${globalIdx + 1}`}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors cursor-pointer"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteQuestion(q.id)}
+                                  aria-label={`Hapus soal nomor ${globalIdx + 1}`}
+                                  className="text-slate-400 hover:text-red-600 cursor-pointer p-1 transition-colors"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Collapsible Full Question Body (Wacana, Teks Soal, & Opsi A-E) */}
+                            {isExpanded && (
+                              <div className="px-4 pb-4 pt-2 border-t border-slate-100 space-y-3">
+                                {q.data_opsi?.wacana && (
+                                  <div className="text-xs text-slate-700 bg-slate-50/80 p-3 rounded-lg border border-slate-200">
+                                    <div className="font-bold text-slate-800 mb-1 flex items-center gap-1.5 uppercase tracking-wide text-[11px]">
+                                      <Layers className="w-3.5 h-3.5 text-blue-600" />
+                                      Stimulus / Wacana Soal:
+                                    </div>
+                                    <div className="prose prose-xs max-w-none">
+                                      <MathAndTableRenderer content={q.data_opsi.wacana} />
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="text-sm font-semibold text-slate-900 leading-relaxed">
+                                  <MathAndTableRenderer content={q.teks_soal} />
+                                </div>
+
+                                <div
+                                  className={`grid gap-2 text-xs pt-1 ${
+                                    showUploadPanel
+                                      ? 'grid-cols-1 sm:grid-cols-2'
+                                      : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                                  }`}
+                                >
+                                  {(['A', 'B', 'C', 'D', 'E'] as const).map((k) =>
+                                    q.data_opsi?.opsi?.[k] ? (
+                                      <div
+                                        key={k}
+                                        className={`p-2.5 rounded-lg border text-xs break-words flex items-start gap-2 ${
+                                          q.kunci_jawaban.includes(k)
+                                            ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950 font-medium'
+                                            : 'bg-white border-slate-200 text-slate-700'
+                                        }`}
+                                      >
+                                        <span
+                                          className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold font-mono shrink-0 mt-0.5 ${
+                                            q.kunci_jawaban.includes(k)
+                                              ? 'bg-emerald-600 text-white'
+                                              : 'bg-slate-200 text-slate-700'
+                                          }`}
+                                        >
+                                          {k}
+                                        </span>
+                                        <div className="flex-1 overflow-x-auto min-w-0">
+                                          <MathAndTableRenderer
+                                            content={q.data_opsi?.opsi?.[k] || ''}
+                                            inline
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : null
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Bottom Pagination Controls */}
+                    {totalPages > 1 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 text-xs text-slate-600">
+                        <span>
+                          Halaman <strong>{safePage}</strong> dari{' '}
+                          <strong>{totalPages}</strong>
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={safePage <= 1}
+                            onClick={() => setQuestionPage((p) => Math.max(1, p - 1))}
+                            className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-lg disabled:opacity-40 hover:bg-slate-50 cursor-pointer"
+                          >
+                            ← Halaman Sebelumnya
+                          </button>
+                          <button
+                            type="button"
+                            disabled={safePage >= totalPages}
+                            onClick={() =>
+                              setQuestionPage((p) => Math.min(totalPages, p + 1))
+                            }
+                            className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-40 cursor-pointer"
+                          >
+                            Halaman Berikutnya →
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
             )}
           </div>
               </div>

@@ -318,7 +318,165 @@ function cleanHtmlFragmentPreservingMediaAndMath(htmlFragment: string): string {
 }
 
 /**
- * Parses a 2D grid of cell values (from XLSX, HTML tables, Word tables, etc.) into CsvQuestionRow[]
+ * Helper to parse stacked options (A. ... B. ... C. ... D. ... E. ...) inside a single Word table cell
+ */
+function parseStackedOptionsCell(rawCell: string): {
+  A: string;
+  B: string;
+  C: string;
+  D: string;
+  E: string;
+  detectedKunci: string[];
+} {
+  const result = { A: '', B: '', C: '', D: '', E: '', detectedKunci: [] as string[] };
+  if (!rawCell || !rawCell.trim()) return result;
+
+  // Also support inline A. ... B. ... on same line if separated by newlines or spaces before B./C./D./E.
+  const normalized = rawCell.replace(
+    /(\s+)(?=[*]?[A-E][.)\]:-]\s+)/g,
+    '\n'
+  );
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  let currentKey: 'A' | 'B' | 'C' | 'D' | 'E' | null = null;
+  for (const line of lines) {
+    const match = line.match(/^([*]?)\s*([A-Ea-e])[.)\]:-]+\s*(.*)$/);
+    if (match) {
+      const starred = match[1] === '*';
+      const letter = match[2].toUpperCase() as 'A' | 'B' | 'C' | 'D' | 'E';
+      currentKey = letter;
+      result[letter] = match[3].trim();
+      if (starred && !result.detectedKunci.includes(letter)) {
+        result.detectedKunci.push(letter);
+      }
+    } else if (currentKey) {
+      result[currentKey] += (result[currentKey] ? ' ' : '') + line;
+    }
+  }
+  return result;
+}
+
+/**
+ * Helper to split combined "Wacana & Pertanyaan Soal" cell into { wacana, teks_soal }
+ */
+function parseCombinedWacanaAndSoalCell(rawCell: string): {
+  wacana: string;
+  teks_soal: string;
+} {
+  if (!rawCell || !rawCell.trim()) return { wacana: '', teks_soal: '' };
+  const text = rawCell.trim();
+
+  // Check if explicit "Soal:" / "Pertanyaan:" marker exists after a "Wacana:" / "Stimulus:" marker
+  const explicitSplit = text.match(
+    /^(?:wacana|stimulus|bacaan|narasi)\s*[:=-]\s*([\s\S]*?)\n+(?:soal|pertanyaan|butir\s+soal)\s*[:=-]\s*([\s\S]+)$/i
+  );
+  if (explicitSplit) {
+    return {
+      wacana: explicitSplit[1].trim(),
+      teks_soal: explicitSplit[2].trim(),
+    };
+  }
+
+  // Or if there is a line starting with "Soal:" / "Pertanyaan:"
+  const lines = text.split(/\r?\n/);
+  const soalLineIdx = lines.findIndex((l) =>
+    /^(?:soal|pertanyaan|butir\s+soal)\s*[:=-]\s*/i.test(l.trim())
+  );
+  if (soalLineIdx > 0) {
+    const wacanaPart = lines
+      .slice(0, soalLineIdx)
+      .join('\n')
+      .replace(/^(?:wacana|stimulus|bacaan|narasi)\s*[:=-]\s*/i, '')
+      .trim();
+    const soalPart = lines
+      .slice(soalLineIdx)
+      .join('\n')
+      .replace(/^(?:soal|pertanyaan|butir\s+soal)\s*[:=-]\s*/i, '')
+      .trim();
+    return {
+      wacana: wacanaPart,
+      teks_soal: soalPart || text,
+    };
+  }
+
+  // Strip optional leading "Soal:" if there was no wacana
+  const cleanedSoal = text.replace(/^(?:soal|pertanyaan|butir\s+soal)\s*[:=-]\s*/i, '').trim();
+  return { wacana: '', teks_soal: cleanedSoal };
+}
+
+/**
+ * Helper to parse combined "No / Kode & Jenis" cell
+ */
+function parseCombinedIdAndJenisCell(
+  rawCell: string,
+  fallbackIndex: number
+): {
+  id_soal: string;
+  jenis_soal: 'PG' | 'Kompleks';
+} {
+  const fallbackId = `SOAL-${String(fallbackIndex).padStart(2, '0')}`;
+  if (!rawCell || !rawCell.trim()) {
+    return { id_soal: fallbackId, jenis_soal: 'PG' };
+  }
+  const lower = rawCell.toLowerCase();
+  const jenis_soal: 'PG' | 'Kompleks' = lower.includes('kompleks') ? 'Kompleks' : 'PG';
+  const lines = rawCell
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  let idCandidate = lines[0] || '';
+  idCandidate = idCandidate
+    .replace(/\b(?:pg\s*kompleks|kompleks|pilihan\s*ganda|pg)\b/gi, '')
+    .replace(/[()[\]]/g, '')
+    .trim();
+  if (/^\d+$/.test(idCandidate)) {
+    idCandidate = `SOAL-${idCandidate.padStart(2, '0')}`;
+  }
+  return {
+    id_soal: idCandidate || fallbackId,
+    jenis_soal,
+  };
+}
+
+/**
+ * Helper to parse combined "Kunci & Bobot" cell
+ */
+function parseCombinedKunciAndBobotCell(rawCell: string): {
+  rawKunci: string;
+  bobot: number | null;
+} {
+  if (!rawCell || !rawCell.trim()) {
+    return { rawKunci: 'A', bobot: null };
+  }
+  let bobot: number | null = null;
+  const bobotMatch = rawCell.match(/(?:bobot|poin|skor|nilai)\s*[:=-]?\s*(\d+)/i);
+  if (bobotMatch) {
+    bobot = Number(bobotMatch[1]) || null;
+  }
+
+  let kunciPart = rawCell
+    .replace(/(?:bobot|poin|skor|nilai)\s*[:=-]?\s*\d+/gi, '')
+    .replace(/(?:kunci(?:\s+jawaban)?|jawaban(?:\s+benar)?|key)\s*[:=-]?/gi, '')
+    .trim();
+
+  // If second line is just a number (e.g. line 1: "A", line 2: "2")
+  const lines = kunciPart
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length >= 2 && /^\d+$/.test(lines[lines.length - 1])) {
+    if (!bobot) bobot = Number(lines[lines.length - 1]) || null;
+    kunciPart = lines.slice(0, -1).join(' ');
+  }
+
+  return { rawKunci: kunciPart.trim(), bobot };
+}
+
+/**
+ * Parses a 2D grid of cell values (from XLSX, HTML tables, Word 4-column Fit-Page tables, or 11-column tables) into CsvQuestionRow[]
  */
 export function parseGridToQuestionRows(
   grid: (string | number | boolean | null | undefined)[][]
@@ -344,28 +502,87 @@ export function parseGridToQuestionRows(
   const colMap: Record<string, number> = {};
 
   const HEADER_PATTERNS: Record<string, string[]> = {
-    id_soal: ['id_soal', 'id', 'no', 'nomor', 'no_soal', 'nomor_soal', 'kode', 'kode_soal'],
+    id_soal: [
+      'id_soal',
+      'id',
+      'no',
+      'nomor',
+      'no_soal',
+      'nomor_soal',
+      'kode',
+      'kode_soal',
+      'no_tipe',
+      'no_jenis',
+      'no_kode',
+      'no_dan_jenis',
+      'kode_tipe',
+    ],
     jenis_soal: ['jenis_soal', 'tipe_soal', 'jenis', 'tipe', 'bentuk_soal', 'model_soal', 'kategori'],
     wacana: ['wacana', 'stimulus', 'bacaan', 'teks_bacaan', 'pengantar', 'cerita', 'narasi', 'kasus'],
-    teks_soal: ['teks_soal', 'soal', 'pertanyaan', 'butir_soal', 'pokok_soal', 'question', 'text', 'stem'],
+    teks_soal: [
+      'teks_soal',
+      'soal',
+      'pertanyaan',
+      'butir_soal',
+      'pokok_soal',
+      'question',
+      'text',
+      'stem',
+      'wacana_pertanyaan_soal',
+      'wacana_dan_pertanyaan',
+      'wacana_soal',
+      'pertanyaan_soal',
+      'wacana_pertanyaan',
+    ],
+    opsi_gabungan: [
+      'pilihan_jawaban',
+      'pilihan_jawaban_a_e',
+      'opsi_jawaban',
+      'opsi_jawaban_a_e',
+      'opsi_a_e',
+      'pilihan_a_e',
+      'pilihan_a_sd_e',
+      'opsi',
+      'pilihan',
+    ],
     opsi_a: ['opsi_a', 'pilihan_a', 'option_a', 'jawaban_a', 'jawab_a', 'a'],
     opsi_b: ['opsi_b', 'pilihan_b', 'option_b', 'jawaban_b', 'jawab_b', 'b'],
     opsi_c: ['opsi_c', 'pilihan_c', 'option_c', 'jawaban_c', 'jawab_c', 'c'],
     opsi_d: ['opsi_d', 'pilihan_d', 'option_d', 'jawaban_d', 'jawab_d', 'd'],
     opsi_e: ['opsi_e', 'pilihan_e', 'option_e', 'jawaban_e', 'jawab_e', 'e'],
-    kunci_jawaban: ['kunci_jawaban', 'kunci', 'jawaban', 'jawaban_benar', 'kunci_jawab', 'answer', 'key', 'correct'],
+    kunci_jawaban: [
+      'kunci_jawaban',
+      'kunci',
+      'jawaban',
+      'jawaban_benar',
+      'kunci_jawab',
+      'answer',
+      'key',
+      'correct',
+      'kunci_bobot',
+      'kunci_dan_bobot',
+      'kunci_poin',
+    ],
     bobot: ['bobot', 'poin', 'skor', 'nilai', 'bobot_nilai', 'score', 'points', 'weight'],
   };
 
   for (let r = 0; r < Math.min(strGrid.length, 15); r++) {
     const row = strGrid[r];
     const normTokens = row.map(normalizeColHeader);
-    const hasSoal = normTokens.some((t) => HEADER_PATTERNS.teks_soal.includes(t));
-    const hasKunci = normTokens.some((t) => HEADER_PATTERNS.kunci_jawaban.includes(t));
+    const hasSoal = normTokens.some(
+      (t) =>
+        HEADER_PATTERNS.teks_soal.includes(t) ||
+        t.includes('pertanyaan') ||
+        t.includes('teks_soal')
+    );
+    const hasKunci = normTokens.some(
+      (t) => HEADER_PATTERNS.kunci_jawaban.includes(t) || t.includes('kunci')
+    );
     const hasOpsi = normTokens.some(
       (t) =>
         HEADER_PATTERNS.opsi_a.includes(t) ||
         HEADER_PATTERNS.opsi_b.includes(t) ||
+        HEADER_PATTERNS.opsi_gabungan.includes(t) ||
         t.includes('opsi') ||
         t.includes('pilihan')
     );
@@ -377,6 +594,16 @@ export function parseGridToQuestionRows(
           if (aliases.includes(tok) && colMap[key] === undefined) {
             colMap[key] = idx;
           }
+        }
+        // Fuzzy fallback for compact 4-column Word headers
+        if (colMap.teks_soal === undefined && (tok.includes('pertanyaan') || tok.includes('soal')) && !tok.includes('no') && !tok.includes('id') && !tok.includes('jenis')) {
+          colMap.teks_soal = idx;
+        }
+        if (colMap.opsi_gabungan === undefined && colMap.opsi_a === undefined && (tok.includes('pilihan') || tok.includes('opsi'))) {
+          colMap.opsi_gabungan = idx;
+        }
+        if (colMap.kunci_jawaban === undefined && tok.includes('kunci')) {
+          colMap.kunci_jawaban = idx;
         }
       });
       break;
@@ -402,7 +629,63 @@ export function parseGridToQuestionRows(
     let rawKunci = '';
     let bobot = 2;
 
-    if (headerIdx >= 0 && colMap.teks_soal !== undefined) {
+    // CASE 1: Compact 4-Column or 5-Column Word Table (with combined stacked options cell)
+    const isCompactWordTableRow =
+      (headerIdx >= 0 && colMap.opsi_gabungan !== undefined && colMap.opsi_a === undefined) ||
+      (cells.length >= 3 &&
+        cells.length <= 5 &&
+        cells.some((c) => /(?:^|\n)\s*A[.)\]:-]\s+.+(?:\n|\s+)B[.)\]:-]\s+/is.test(c)));
+
+    if (isCompactWordTableRow) {
+      const idCell =
+        colMap.id_soal !== undefined ? cells[colMap.id_soal] || '' : cells[0] || '';
+      const parsedIdJenis = parseCombinedIdAndJenisCell(idCell, parsedRows.length + 1);
+      id_soal = parsedIdJenis.id_soal;
+      jenis_soal = parsedIdJenis.jenis_soal;
+
+      if (colMap.jenis_soal !== undefined && cells[colMap.jenis_soal]) {
+        if (cells[colMap.jenis_soal].toLowerCase().includes('kompleks')) {
+          jenis_soal = 'Kompleks';
+        }
+      }
+
+      const rawSoalCell =
+        colMap.teks_soal !== undefined
+          ? cells[colMap.teks_soal] || ''
+          : cells[1] || '';
+      const splitSoal = parseCombinedWacanaAndSoalCell(rawSoalCell);
+      wacana =
+        colMap.wacana !== undefined && cells[colMap.wacana]
+          ? cells[colMap.wacana]
+          : splitSoal.wacana;
+      teks_soal = splitSoal.teks_soal;
+
+      const rawOpsiCell =
+        colMap.opsi_gabungan !== undefined
+          ? cells[colMap.opsi_gabungan] || ''
+          : cells.find((c) => /(?:^|\n)\s*A[.)\]:-]\s+/i.test(c)) || cells[2] || '';
+      const stacked = parseStackedOptionsCell(rawOpsiCell);
+      opsi_a = stacked.A;
+      opsi_b = stacked.B;
+      opsi_c = stacked.C;
+      opsi_d = stacked.D;
+      opsi_e = stacked.E;
+
+      const rawKunciCell =
+        colMap.kunci_jawaban !== undefined
+          ? cells[colMap.kunci_jawaban] || ''
+          : cells[cells.length - 1] || '';
+      const parsedKB = parseCombinedKunciAndBobotCell(rawKunciCell);
+      rawKunci =
+        parsedKB.rawKunci ||
+        (stacked.detectedKunci.length > 0 ? stacked.detectedKunci.join(',') : 'A');
+      if (parsedKB.bobot && parsedKB.bobot > 0) {
+        bobot = parsedKB.bobot;
+      } else if (colMap.bobot !== undefined && cells[colMap.bobot]) {
+        bobot = Number(cells[colMap.bobot]) || (jenis_soal === 'Kompleks' ? 3 : 2);
+      }
+    } else if (headerIdx >= 0 && colMap.teks_soal !== undefined) {
+      // CASE 2: Standard Header-Mapped Table (11-column Excel / Word / CSV)
       id_soal = colMap.id_soal !== undefined ? cells[colMap.id_soal] || '' : '';
       const rawJenis = colMap.jenis_soal !== undefined ? cells[colMap.jenis_soal] || '' : '';
       wacana = colMap.wacana !== undefined ? cells[colMap.wacana] || '' : '';
@@ -423,6 +706,7 @@ export function parseGridToQuestionRows(
         if (!isNaN(num) && num > 0) bobot = num;
       }
     } else {
+      // CASE 3: Headerless positional table
       if (cells.length >= 10) {
         id_soal = cells[0];
         const rawJenis = cells[1];
@@ -948,36 +1232,29 @@ export const SAMPLE_PHYSICS_DIAGRAM_DATA_URL =
   );
 
 /**
- * Generates a Microsoft Word (.doc) Template using the 11-Column Table Format,
- * strictly fitted to 100% of the Word page width (table-layout: fixed, WordSection1 page bounds,
- * percentage column widths, and compact cell images so it never overflows horizontally).
+ * Generates a Microsoft Word (.doc) Template using a 4-Column Compact Table Format on A4 Portrait
+ * (No & Tipe | Wacana & Pertanyaan Soal | Pilihan Jawaban A–E | Kunci & Bobot)
+ * so it NEVER juts out 11 columns horizontally and fits 100% cleanly on ONE single A4 Word page!
  */
 export function generateWordQuestionTemplateTableDoc(): string {
-  const colWidths = ['5%', '6%', '16%', '18%', '9%', '9%', '9%', '9%', '9%', '5%', '5%'];
+  const colWidths = ['10%', '44%', '34%', '12%'];
   const headers = [
-    'id_soal',
-    'jenis_soal',
-    'wacana',
-    'teks_soal',
-    'opsi_a',
-    'opsi_b',
-    'opsi_c',
-    'opsi_d',
-    'opsi_e',
-    'kunci_jawaban',
-    'bobot',
+    'No & Tipe',
+    'Wacana & Pertanyaan Soal',
+    'Pilihan Jawaban (A – E)',
+    'Kunci & Bobot',
   ];
 
   const colgroupHtml = colWidths.map((w) => `<col style="width:${w};" width="${w}" />`).join('');
   const thHtml = headers
     .map(
       (h, i) =>
-        `<th width="${colWidths[i]}" style="width:${colWidths[i]}; background-color:#1e3a8a; color:#ffffff; font-weight:bold; border:1px solid #334155; padding:3.5pt 4pt; text-align:left; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word;">${h}</th>`
+        `<th width="${colWidths[i]}" style="width:${colWidths[i]}; background-color:#1e3a8a; color:#ffffff; font-weight:bold; border:1px solid #334155; padding:4pt 5pt; text-align:left; font-size:9pt; word-wrap:break-word; overflow-wrap:break-word;">${h}</th>`
     )
     .join('');
 
   const tdStyle = (idx: number) =>
-    `width="${colWidths[idx]}" style="width:${colWidths[idx]}; border:1px solid #94a3b8; padding:3.5pt 4pt; vertical-align:top; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word; word-break:break-word;"`;
+    `width="${colWidths[idx]}" style="width:${colWidths[idx]}; border:1px solid #94a3b8; padding:4pt 5pt; vertical-align:top; font-size:9pt; line-height:1.35; word-wrap:break-word; overflow-wrap:break-word; word-break:break-word;"`;
 
   return `<!DOCTYPE html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -985,150 +1262,7 @@ export function generateWordQuestionTemplateTableDoc(): string {
       xmlns="http://www.w3.org/TR/REC-html40">
 <head>
   <meta charset="utf-8" />
-  <title>Template Word Tabel Bank Soal CBT (Fit Halaman Word)</title>
-  <!--[if gte mso 9]>
-  <xml>
-    <w:WordDocument>
-      <w:View>Print</w:View>
-      <w:Zoom>100</w:Zoom>
-      <w:DoNotOptimizeForBrowser/>
-    </w:WordDocument>
-  </xml>
-  <![endif]-->
-  <style>
-    @page WordSection1 {
-      size: 841.9pt 595.3pt;
-      mso-page-orientation: landscape;
-      margin: 28.35pt 28.35pt 28.35pt 28.35pt;
-    }
-    div.WordSection1 {
-      page: WordSection1;
-      width: 100%;
-    }
-    body {
-      font-family: Calibri, Arial, sans-serif;
-      font-size: 9.5pt;
-      color: #0f172a;
-      margin: 0;
-      padding: 0;
-    }
-    h1 {
-      font-size: 13pt;
-      color: #1e3a8a;
-      margin: 0 0 4pt 0;
-    }
-    .guide {
-      background: #eff6ff;
-      border: 1px solid #93c5fd;
-      padding: 6pt 8pt;
-      margin-bottom: 8pt;
-      font-size: 8.5pt;
-      line-height: 1.35;
-      width: 100%;
-      box-sizing: border-box;
-    }
-    table.cbt-fit-table {
-      border-collapse: collapse;
-      width: 100.0%;
-      max-width: 100.0%;
-      table-layout: fixed;
-      mso-table-layout-alt: fixed;
-      mso-FitToPage: yes;
-      font-size: 8.5pt;
-    }
-    img {
-      max-width: 100%;
-      height: auto;
-    }
-  </style>
-</head>
-<body>
-<div class="WordSection1">
-  <h1>TEMPLATE MICROSOFT WORD (TABEL 11 KOLOM FIT HALAMAN) — BANK SOAL CBT</h1>
-  <div class="guide">
-    <strong>PANDUAN CEPAT (UKURAN TABEL SUDAH FIT 100% DENGAN HALAMAN WORD):</strong><br/>
-    1. Tabel di bawah sudah dikunci proporsional (<em>AutoFit to Window</em>) agar tidak melebar keluar halaman Word.<br/>
-    2. <strong>Sisipkan Gambar:</strong> Langsung <em>Copy-Paste</em> atau <em>Insert &rarr; Pictures</em> gambar ke dalam sel <code>wacana</code>, <code>teks_soal</code>, atau <code>opsi_a..e</code>.<br/>
-    3. <strong>Rumus Matematika / Fisika / Kimia:</strong> Gunakan tanda dolar <code>$...$</code> atau <code>\\ce{...}</code>, contoh: <code>$\\sum \\vec{F} = m \\cdot \\vec{a}$</code>, <code>$E_k = \\frac{1}{2}mv^2$</code>, <code>$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$</code>, <code>$\\ce{N2(g) + 3H2(g) <=> 2NH3(g)}$</code>.
-  </div>
-
-  <table class="cbt-fit-table" width="100%">
-    <colgroup>${colgroupHtml}</colgroup>
-    <thead>
-      <tr>${thHtml}</tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td ${tdStyle(0)}>FIS-01</td>
-        <td ${tdStyle(1)}>PG</td>
-        <td ${tdStyle(2)}>Perhatikan diagram balok bermassa $m = 4\\text{ kg}$ yang ditarik gaya mendatar $F = 24\\text{ N}$ di atas bidang datar licin berikut:<br/><img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="115" height="40" style="width:115px; height:auto; max-width:100%;" /></td>
-        <td ${tdStyle(3)}>Berdasarkan Hukum II Newton $\\sum \\vec{F} = m \\cdot \\vec{a}$, berapakah percepatan $a$ dan energi kinetik $E_k = \\frac{1}{2}mv^2$ balok setelah bergerak selama $t = 2\\text{ s}$ dari keadaan diam?</td>
-        <td ${tdStyle(4)}>$a = 6\\text{ m/s}^2$ dan $E_k = 288\\text{ J}$</td>
-        <td ${tdStyle(5)}>$a = 4\\text{ m/s}^2$ dan $E_k = 128\\text{ J}$</td>
-        <td ${tdStyle(6)}>$a = 6\\text{ m/s}^2$ dan $E_k = 144\\text{ J}$</td>
-        <td ${tdStyle(7)}>$a = 8\\text{ m/s}^2$ dan $E_k = 256\\text{ J}$</td>
-        <td ${tdStyle(8)}>$a = 12\\text{ m/s}^2$ dan $E_k = 576\\text{ J}$</td>
-        <td ${tdStyle(9)}>A</td>
-        <td ${tdStyle(10)}>2</td>
-      </tr>
-      <tr>
-        <td ${tdStyle(0)}>MAT-02</td>
-        <td ${tdStyle(1)}>PG</td>
-        <td ${tdStyle(2)}>Diketahui persamaan kuadrat $x^2 - 5x + 6 = 0$ dengan rumus akar-akar $x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$.</td>
-        <td ${tdStyle(3)}>Nilai dari integral tentu $\\int_{1}^{3} (3x^2 - 4x + 1)\\,dx$ adalah...</td>
-        <td ${tdStyle(4)}>$10$</td>
-        <td ${tdStyle(5)}>$12$</td>
-        <td ${tdStyle(6)}>$14$</td>
-        <td ${tdStyle(7)}>$16$</td>
-        <td ${tdStyle(8)}>$18$</td>
-        <td ${tdStyle(9)}>B</td>
-        <td ${tdStyle(10)}>2</td>
-      </tr>
-      <tr>
-        <td ${tdStyle(0)}>KIM-03</td>
-        <td ${tdStyle(1)}>PG</td>
-        <td ${tdStyle(2)}>Reaksi kesetimbangan pembentukan amonia (Proses Haber-Bosch): $$\\ce{N2(g) + 3H2(g) <=> 2NH3(g)} \\quad \\Delta H = -92\\text{ kJ/mol}$$</td>
-        <td ${tdStyle(3)}>Ungkapan tetapan kesetimbangan konsentrasi $K_c$ yang tepat untuk reaksi di atas adalah...</td>
-        <td ${tdStyle(4)}>$K_c = \\frac{[\\text{NH}_3]^2}{[\\text{N}_2][\\text{H}_2]^3}$</td>
-        <td ${tdStyle(5)}>$K_c = \\frac{[\\text{N}_2][\\text{H}_2]^3}{[\\text{NH}_3]^2}$</td>
-        <td ${tdStyle(6)}>$K_c = \\frac{[\\text{NH}_3]}{[\\text{N}_2][\\text{H}_2]}$</td>
-        <td ${tdStyle(7)}>$K_c = \\frac{2[\\text{NH}_3]}{[\\text{N}_2] + 3[\\text{H}_2]}$</td>
-        <td ${tdStyle(8)}>$K_c = [\\text{NH}_3]^2 [\\text{N}_2] [\\text{H}_2]^3$</td>
-        <td ${tdStyle(9)}>A</td>
-        <td ${tdStyle(10)}>2</td>
-      </tr>
-      <tr>
-        <td ${tdStyle(0)}>SOS-04</td>
-        <td ${tdStyle(1)}>Kompleks</td>
-        <td ${tdStyle(2)}>Transformasi digital mempercepat perubahan sosial di masyarakat perkotaan maupun perdesaan.</td>
-        <td ${tdStyle(3)}>Manakah pernyataan berikut yang merupakan dampak positif modernisasi teknologi informasi? (Pilih &gt;1 jawaban benar)</td>
-        <td ${tdStyle(4)}>Terbukanya akses pendidikan dan literasi ilmiah daring</td>
-        <td ${tdStyle(5)}>Meningkatnya efisiensi komunikasi lintas wilayah</td>
-        <td ${tdStyle(6)}>Hilangnya seluruh norma sosial tradisional secara tiba-tiba</td>
-        <td ${tdStyle(7)}>Munculnya ekosistem ekonomi kreatif berbasis digital UMKM</td>
-        <td ${tdStyle(8)}>Meningkatnya disorganisasi sosial akibat hoaks</td>
-        <td ${tdStyle(9)}>A,B,D</td>
-        <td ${tdStyle(10)}>3</td>
-      </tr>
-    </tbody>
-  </table>
-</div>
-</body>
-</html>`;
-}
-
-/**
- * Generates a Microsoft Word (.doc) Template using the Standard Numbered Question Format
- * (1. Pertanyaan... A. ... B. ... Kunci: A) strictly fitted to A4 Portrait page bounds.
- */
-export function generateWordQuestionTemplateNumberedDoc(): string {
-  return `<!DOCTYPE html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
-      xmlns:w="urn:schemas-microsoft-com:office:word"
-      xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-  <meta charset="utf-8" />
-  <title>Template Word Soal Bernomor CBT (Fit A4 Portrait)</title>
+  <title>Template Word Tabel Ringkas 4 Kolom (Fit 1 Halaman A4)</title>
   <!--[if gte mso 9]>
   <xml>
     <w:WordDocument>
@@ -1142,7 +1276,7 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
     @page WordSection1 {
       size: 595.3pt 841.9pt;
       mso-page-orientation: portrait;
-      margin: 42.5pt 42.5pt 42.5pt 42.5pt;
+      margin: 28.35pt 28.35pt 28.35pt 28.35pt;
     }
     div.WordSection1 {
       page: WordSection1;
@@ -1150,30 +1284,34 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
     }
     body {
       font-family: Calibri, Arial, sans-serif;
-      font-size: 10.5pt;
-      line-height: 1.45;
+      font-size: 9pt;
       color: #0f172a;
       margin: 0;
       padding: 0;
     }
     h1 {
-      font-size: 13.5pt;
+      font-size: 12pt;
       color: #1e3a8a;
-      margin: 0 0 6pt 0;
+      margin: 0 0 3pt 0;
     }
     .guide {
-      background: #f0fdf4;
-      border: 1px solid #86efac;
-      padding: 8pt 10pt;
-      margin-bottom: 12pt;
-      font-size: 9.5pt;
+      background: #eff6ff;
+      border: 1px solid #93c5fd;
+      padding: 4.5pt 6pt;
+      margin-bottom: 6pt;
+      font-size: 8.5pt;
+      line-height: 1.3;
       width: 100%;
       box-sizing: border-box;
     }
-    p {
-      margin: 2.5pt 0;
-      word-wrap: break-word;
-      overflow-wrap: break-word;
+    table.cbt-fit-table {
+      border-collapse: collapse;
+      width: 100.0%;
+      max-width: 100.0%;
+      table-layout: fixed;
+      mso-table-layout-alt: fixed;
+      mso-FitToPage: yes;
+      font-size: 9pt;
     }
     img {
       max-width: 100%;
@@ -1183,26 +1321,173 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
 </head>
 <body>
 <div class="WordSection1">
-  <h1>TEMPLATE WORD SOAL BERNOMOR (FIT A4 PORTRAIT) — BANK SOAL CBT</h1>
+  <h1>TEMPLATE WORD TABEL RINGKAS 4 KOLOM (FIT 1 HALAMAN A4 — TIDAK MENJOROK)</h1>
   <div class="guide">
-    <strong>PETUNJUK PENULISAN SOAL BERNOMOR DI WORD (PAS UKURAN KERTAS A4):</strong><br/>
-    &bull; Awali setiap soal dengan nomor (<code>1.</code>, <code>2.</code>, <code>3.</code> dst.), diikuti pilihan <code>A.</code> sampai <code>E.</code>, lalu baris <code>Kunci: A</code> (atau <code>Kunci: A, B, D</code> untuk PG Kompleks) dan <code>Bobot: 2</code>.<br/>
-    &bull; Jika soal memiliki bacaan/gambar pengantar, awali baris dengan <code>Wacana: ...</code>.<br/>
-    &bull; Anda bebas menyisipkan <strong>Gambar (Copy-Paste / Insert Picture)</strong> dan <strong>Rumus Matematika/Fisika/Kimia</strong> (<code>$...$</code> atau <code>\\ce{...}</code>).
+    <strong>PETUNJUK CEPAT (MUDAH DIKETIK DI WORD &amp; FIT 1 HALAMAN A4 PORTRAIT):</strong><br/>
+    &bull; Tabel ini dirancang <strong>4 kolom proporsional</strong> (bukan 11 kolom ke samping) agar pas 1 halaman A4 dan sangat mudah diketik di Microsoft Word.<br/>
+    &bull; <strong>Kolom 2 (Wacana &amp; Pertanyaan):</strong> Awali bacaan dengan <code>Wacana: ...</code> lalu baris baru <code>Soal: ...</code> (boleh langsung <em>Copy-Paste</em> Gambar &amp; Rumus <code>$...$</code> / <code>\\ce{...}</code>).<br/>
+    &bull; <strong>Kolom 3 (Pilihan A–E):</strong> Ketik pilihan <code>A.</code> s/d <code>E.</code> berurutan ke bawah di dalam satu sel.
+  </div>
+
+  <table class="cbt-fit-table" width="100%">
+    <colgroup>${colgroupHtml}</colgroup>
+    <thead>
+      <tr>${thHtml}</tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td ${tdStyle(0)}><strong>FIS-01</strong><br/>PG</td>
+        <td ${tdStyle(1)}>
+          Wacana: Perhatikan diagram balok bermassa $m = 4\\text{ kg}$ yang ditarik gaya mendatar $F = 24\\text{ N}$ di atas lantai licin:<br/>
+          <img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="160" height="55" style="width:160px; height:auto; max-width:100%;" /><br/>
+          Soal: Berdasarkan Hukum II Newton $\\sum \\vec{F} = m \\cdot \\vec{a}$, berapakah percepatan $a$ dan energi kinetik $E_k = \\frac{1}{2}mv^2$ balok setelah $t = 2\\text{ s}$?
+        </td>
+        <td ${tdStyle(2)}>
+          A. $a = 6\\text{ m/s}^2$ dan $E_k = 288\\text{ J}$<br/>
+          B. $a = 4\\text{ m/s}^2$ dan $E_k = 128\\text{ J}$<br/>
+          C. $a = 6\\text{ m/s}^2$ dan $E_k = 144\\text{ J}$<br/>
+          D. $a = 8\\text{ m/s}^2$ dan $E_k = 256\\text{ J}$<br/>
+          E. $a = 12\\text{ m/s}^2$ dan $E_k = 576\\text{ J}$
+        </td>
+        <td ${tdStyle(3)}>Kunci: <strong>A</strong><br/>Bobot: 2</td>
+      </tr>
+      <tr>
+        <td ${tdStyle(0)}><strong>MAT-02</strong><br/>PG</td>
+        <td ${tdStyle(1)}>
+          Wacana: Diketahui rumus kuadrat $x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$ dan operasi kalkulus dasar.<br/>
+          Soal: Nilai dari integral tentu $\\int_{1}^{3} (3x^2 - 4x + 1)\\,dx$ adalah...
+        </td>
+        <td ${tdStyle(2)}>
+          A. $10$<br/>
+          B. $12$<br/>
+          C. $14$<br/>
+          D. $16$<br/>
+          E. $18$
+        </td>
+        <td ${tdStyle(3)}>Kunci: <strong>B</strong><br/>Bobot: 2</td>
+      </tr>
+      <tr>
+        <td ${tdStyle(0)}><strong>KIM-03</strong><br/>PG</td>
+        <td ${tdStyle(1)}>
+          Wacana: Reaksi kesetimbangan pembentukan amonia: $\\ce{N2(g) + 3H2(g) <=> 2NH3(g)}$ dengan $\\Delta H = -92\\text{ kJ/mol}$.<br/>
+          Soal: Ungkapan tetapan kesetimbangan konsentrasi $K_c$ yang tepat untuk reaksi di atas adalah...
+        </td>
+        <td ${tdStyle(2)}>
+          A. $K_c = \\frac{[\\text{NH}_3]^2}{[\\text{N}_2][\\text{H}_2]^3}$<br/>
+          B. $K_c = \\frac{[\\text{N}_2][\\text{H}_2]^3}{[\\text{NH}_3]^2}$<br/>
+          C. $K_c = \\frac{[\\text{NH}_3]}{[\\text{N}_2][\\text{H}_2]}$<br/>
+          D. $K_c = \\frac{2[\\text{NH}_3]}{[\\text{N}_2] + 3[\\text{H}_2]}$<br/>
+          E. $K_c = [\\text{NH}_3]^2 [\\text{N}_2] [\\text{H}_2]^3$
+        </td>
+        <td ${tdStyle(3)}>Kunci: <strong>A</strong><br/>Bobot: 2</td>
+      </tr>
+      <tr>
+        <td ${tdStyle(0)}><strong>SOS-04</strong><br/>Kompleks</td>
+        <td ${tdStyle(1)}>
+          Wacana: Transformasi digital mempercepat perubahan sosial di masyarakat perkotaan maupun perdesaan.<br/>
+          Soal: Manakah pernyataan berikut yang merupakan dampak positif modernisasi teknologi informasi? (Pilih &gt;1 jawaban benar)
+        </td>
+        <td ${tdStyle(2)}>
+          A. Terbukanya akses pendidikan dan literasi ilmiah daring<br/>
+          B. Meningkatnya efisiensi komunikasi lintas wilayah<br/>
+          C. Hilangnya seluruh norma sosial tradisional secara tiba-tiba<br/>
+          D. Munculnya ekosistem ekonomi kreatif berbasis digital UMKM<br/>
+          E. Meningkatnya disorganisasi sosial akibat hoaks
+        </td>
+        <td ${tdStyle(3)}>Kunci: <strong>A, B, D</strong><br/>Bobot: 3</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>`;
+}
+
+/**
+ * Generates a Microsoft Word (.doc) Template using the Standard Numbered Question Format
+ * (1. Pertanyaan... A. ... B. ... Kunci: A) strictly fitted to a single A4 Portrait page.
+ */
+export function generateWordQuestionTemplateNumberedDoc(): string {
+  return `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta charset="utf-8" />
+  <title>Template Word Soal Bernomor CBT (Fit 1 Halaman A4)</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
+  <style>
+    @page WordSection1 {
+      size: 595.3pt 841.9pt;
+      mso-page-orientation: portrait;
+      margin: 28.35pt 34.0pt 28.35pt 34.0pt;
+    }
+    div.WordSection1 {
+      page: WordSection1;
+      width: 100%;
+    }
+    body {
+      font-family: Calibri, Arial, sans-serif;
+      font-size: 9.5pt;
+      line-height: 1.3;
+      color: #0f172a;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      font-size: 12pt;
+      color: #1e3a8a;
+      margin: 0 0 4pt 0;
+    }
+    .guide {
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+      padding: 5pt 7pt;
+      margin-bottom: 6pt;
+      font-size: 8.5pt;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    p {
+      margin: 1.5pt 0;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    .q-spacer {
+      margin-bottom: 5pt;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+<div class="WordSection1">
+  <h1>TEMPLATE WORD SOAL BERNOMOR (FIT 1 HALAMAN A4 PORTRAIT) — BANK SOAL CBT</h1>
+  <div class="guide">
+    <strong>PETUNJUK PENULISAN SOAL BERNOMOR DI WORD (FIT 1 HALAMAN A4):</strong><br/>
+    &bull; Awali soal dengan nomor (<code>1.</code>, <code>2.</code>, dst.), diikuti pilihan <code>A.</code> s/d <code>E.</code>, lalu <code>Kunci: A</code> (atau <code>Kunci: A, B, D</code>) dan <code>Bobot: 2</code>.<br/>
+    &bull; Bebas menyisipkan <strong>Gambar (Copy-Paste)</strong> dan <strong>Rumus Matematika/Fisika/Kimia</strong> (<code>$...$</code> atau <code>\\ce{...}</code>).
   </div>
 
   <p>Wacana: Perhatikan diagram balok bermassa $m = 4\text{ kg}$ yang ditarik gaya mendatar $F = 24\text{ N}$ di atas bidang datar licin berikut:</p>
-  <p><img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="210" height="72" style="width:210px; height:auto; max-width:100%;" /></p>
+  <p><img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="175" height="60" style="width:175px; height:auto; max-width:100%;" /></p>
   <p>1. Berdasarkan Hukum II Newton $\sum \vec{F} = m \cdot \vec{a}$, berapakah percepatan $a$ dan energi kinetik $E_k = \frac{1}{2}mv^2$ balok setelah bergerak selama $t = 2\text{ s}$ dari keadaan diam?</p>
   <p>A. $a = 6\text{ m/s}^2$ dan $E_k = 288\text{ J}$</p>
   <p>B. $a = 4\text{ m/s}^2$ dan $E_k = 128\text{ J}$</p>
   <p>C. $a = 6\text{ m/s}^2$ dan $E_k = 144\text{ J}$</p>
   <p>D. $a = 8\text{ m/s}^2$ dan $E_k = 256\text{ J}$</p>
   <p>E. $a = 12\text{ m/s}^2$ dan $E_k = 576\text{ J}$</p>
-  <p>Kunci: A</p>
-  <p>Bobot: 2</p>
-
-  <br/>
+  <p class="q-spacer">Kunci: A | Bobot: 2</p>
 
   <p>Wacana: Diketahui rumus kuadrat $x_{1,2} = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$ dan operasi kalkulus dasar.</p>
   <p>2. Nilai dari integral tentu $\int_{1}^{3} (3x^2 - 4x + 1)\,dx$ adalah...</p>
@@ -1211,22 +1496,16 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
   <p>C. $14$</p>
   <p>D. $16$</p>
   <p>E. $18$</p>
-  <p>Kunci: B</p>
-  <p>Bobot: 2</p>
+  <p class="q-spacer">Kunci: B | Bobot: 2</p>
 
-  <br/>
-
-  <p>Wacana: Reaksi kesetimbangan pembentukan gas amonia berlangsung menurut persamaan: $$\ce{N2(g) + 3H2(g) <=> 2NH3(g)} \quad \Delta H = -92\text{ kJ/mol}$$</p>
+  <p>Wacana: Reaksi kesetimbangan pembentukan gas amonia: $\ce{N2(g) + 3H2(g) <=> 2NH3(g)}$ dengan $\Delta H = -92\text{ kJ/mol}$.</p>
   <p>3. Ungkapan tetapan kesetimbangan konsentrasi $K_c$ yang tepat untuk reaksi di atas adalah...</p>
   <p>A. $K_c = \frac{[\text{NH}_3]^2}{[\text{N}_2][\text{H}_2]^3}$</p>
   <p>B. $K_c = \frac{[\text{N}_2][\text{H}_2]^3}{[\text{NH}_3]^2}$</p>
   <p>C. $K_c = \frac{[\text{NH}_3]}{[\text{N}_2][\text{H}_2]}$</p>
   <p>D. $K_c = \frac{2[\text{NH}_3]}{[\text{N}_2] + 3[\text{H}_2]}$</p>
   <p>E. $K_c = [\text{NH}_3]^2 [\text{N}_2] [\text{H}_2]^3$</p>
-  <p>Kunci: A</p>
-  <p>Bobot: 2</p>
-
-  <br/>
+  <p class="q-spacer">Kunci: A | Bobot: 2</p>
 
   <p>Wacana: Transformasi digital mempercepat perubahan sosial di masyarakat perkotaan maupun perdesaan.</p>
   <p>4. Manakah di antara pernyataan berikut yang merupakan dampak positif modernisasi teknologi informasi? (Pilih lebih dari satu jawaban benar)</p>
@@ -1235,46 +1514,38 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
   <p>C. Hilangnya seluruh norma sosial tradisional secara tiba-tiba</p>
   <p>D. Munculnya ekosistem ekonomi kreatif berbasis digital bagi UMKM</p>
   <p>E. Meningkatnya disorganisasi sosial akibat hoaks</p>
-  <p>Kunci: A, B, D</p>
-  <p>Bobot: 3</p>
+  <p>Kunci: A, B, D | Bobot: 3</p>
 </div>
 </body>
 </html>`;
 }
 
 /**
- * Exports an existing list of QuestionItem[] into a ready-to-edit Microsoft Word (.doc) file,
- * strictly fitted to 100% of the Word page width without overflowing.
+ * Exports an existing list of QuestionItem[] into a ready-to-edit 4-Column Compact Microsoft Word (.doc) file
+ * on A4 Portrait so it never overflows horizontally and can be edited & re-uploaded directly.
  */
 export function exportQuestionsToWordDoc(
   examTitle: string,
   questionsList: QuestionItem[]
 ): string {
-  const colWidths = ['5%', '6%', '16%', '18%', '9%', '9%', '9%', '9%', '9%', '5%', '5%'];
+  const colWidths = ['10%', '44%', '34%', '12%'];
   const headers = [
-    'id_soal',
-    'jenis_soal',
-    'wacana',
-    'teks_soal',
-    'opsi_a',
-    'opsi_b',
-    'opsi_c',
-    'opsi_d',
-    'opsi_e',
-    'kunci_jawaban',
-    'bobot',
+    'No & Tipe',
+    'Wacana & Pertanyaan Soal',
+    'Pilihan Jawaban (A – E)',
+    'Kunci & Bobot',
   ];
 
   const colgroupHtml = colWidths.map((w) => `<col style="width:${w};" width="${w}" />`).join('');
   const thHtml = headers
     .map(
       (h, i) =>
-        `<th width="${colWidths[i]}" style="width:${colWidths[i]}; background-color:#1e3a8a; color:#ffffff; font-weight:bold; border:1px solid #334155; padding:3.5pt 4pt; text-align:left; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word;">${h}</th>`
+        `<th width="${colWidths[i]}" style="width:${colWidths[i]}; background-color:#1e3a8a; color:#ffffff; font-weight:bold; border:1px solid #334155; padding:4pt 5pt; text-align:left; font-size:9pt; word-wrap:break-word; overflow-wrap:break-word;">${h}</th>`
     )
     .join('');
 
   const tdStyle = (idx: number) =>
-    `width="${colWidths[idx]}" style="width:${colWidths[idx]}; border:1px solid #94a3b8; padding:3.5pt 4pt; vertical-align:top; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word; word-break:break-word;"`;
+    `width="${colWidths[idx]}" style="width:${colWidths[idx]}; border:1px solid #94a3b8; padding:4pt 5pt; vertical-align:top; font-size:9pt; line-height:1.35; word-wrap:break-word; overflow-wrap:break-word; word-break:break-word;"`;
 
   const formatForWordHtml = (text: string | undefined | null) => {
     if (!text) return '';
@@ -1285,7 +1556,7 @@ export function exportQuestionsToWordDoc(
       .replace(/&lt;(sup|sub)&gt;([\s\S]*?)&lt;\/\1&gt;/gi, '<$1>$2</$1>')
       .replace(
         /\[IMG:([^\]]+)\]/g,
-        '<br/><img src="$1" alt="Gambar Soal" width="115" style="width:115px; height:auto; max-width:100%;" /><br/>'
+        '<br/><img src="$1" alt="Gambar Soal" width="160" style="width:160px; height:auto; max-width:100%;" /><br/>'
       )
       .replace(/\n/g, '<br/>');
   };
@@ -1294,18 +1565,19 @@ export function exportQuestionsToWordDoc(
     .map((q, idx) => {
       const idSoal = q.data_opsi?.id_soal_csv || `SOAL-${String(idx + 1).padStart(2, '0')}`;
       const isKompleks = q.tipe_soal === 'Kompleks' || q.kunci_jawaban.length > 1;
+      const wacanaHtml = q.data_opsi?.wacana
+        ? `Wacana: ${formatForWordHtml(q.data_opsi.wacana)}<br/>Soal: `
+        : 'Soal: ';
+      const opsiLines = (['A', 'B', 'C', 'D', 'E'] as const)
+        .filter((k) => Boolean(q.data_opsi?.opsi?.[k]))
+        .map((k) => `${k}. ${formatForWordHtml(q.data_opsi?.opsi?.[k] || '')}`)
+        .join('<br/>');
+
       return `<tr>
-        <td ${tdStyle(0)}>${idSoal}</td>
-        <td ${tdStyle(1)}>${isKompleks ? 'Kompleks' : 'PG'}</td>
-        <td ${tdStyle(2)}>${formatForWordHtml(q.data_opsi?.wacana || '')}</td>
-        <td ${tdStyle(3)}>${formatForWordHtml(q.teks_soal)}</td>
-        <td ${tdStyle(4)}>${formatForWordHtml(q.data_opsi?.opsi?.A || '')}</td>
-        <td ${tdStyle(5)}>${formatForWordHtml(q.data_opsi?.opsi?.B || '')}</td>
-        <td ${tdStyle(6)}>${formatForWordHtml(q.data_opsi?.opsi?.C || '')}</td>
-        <td ${tdStyle(7)}>${formatForWordHtml(q.data_opsi?.opsi?.D || '')}</td>
-        <td ${tdStyle(8)}>${formatForWordHtml(q.data_opsi?.opsi?.E || '')}</td>
-        <td ${tdStyle(9)}>${q.kunci_jawaban.join(',')}</td>
-        <td ${tdStyle(10)}>${q.bobot || (isKompleks ? 3 : 2)}</td>
+        <td ${tdStyle(0)}><strong>${idSoal}</strong><br/>${isKompleks ? 'Kompleks' : 'PG'}</td>
+        <td ${tdStyle(1)}>${wacanaHtml}${formatForWordHtml(q.teks_soal)}</td>
+        <td ${tdStyle(2)}>${opsiLines}</td>
+        <td ${tdStyle(3)}>Kunci: <strong>${q.kunci_jawaban.join(', ')}</strong><br/>Bobot: ${q.bobot || (isKompleks ? 3 : 2)}</td>
       </tr>`;
     })
     .join('\n');
@@ -1328,8 +1600,8 @@ export function exportQuestionsToWordDoc(
   <![endif]-->
   <style>
     @page WordSection1 {
-      size: 841.9pt 595.3pt;
-      mso-page-orientation: landscape;
+      size: 595.3pt 841.9pt;
+      mso-page-orientation: portrait;
       margin: 28.35pt 28.35pt 28.35pt 28.35pt;
     }
     div.WordSection1 {
@@ -1338,15 +1610,15 @@ export function exportQuestionsToWordDoc(
     }
     body {
       font-family: Calibri, Arial, sans-serif;
-      font-size: 9.5pt;
+      font-size: 9pt;
       color: #0f172a;
       margin: 0;
       padding: 0;
     }
     h1 {
-      font-size: 13pt;
+      font-size: 12pt;
       color: #1e3a8a;
-      margin: 0 0 6pt 0;
+      margin: 0 0 5pt 0;
     }
     table.cbt-fit-table {
       border-collapse: collapse;
@@ -1355,7 +1627,7 @@ export function exportQuestionsToWordDoc(
       table-layout: fixed;
       mso-table-layout-alt: fixed;
       mso-FitToPage: yes;
-      font-size: 8.5pt;
+      font-size: 9pt;
     }
   </style>
 </head>
