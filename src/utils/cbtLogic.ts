@@ -567,7 +567,8 @@ export function normalizeSpreadsheetLines(rawInput: string): {
       if (cellMatches.length === 0) continue;
       const cells = cellMatches.map((cell) =>
         cell
-          .replace(/<[^>]+>/g, '')
+          .replace(/<img\b[^>]*?\bsrc=["']([^"']+)["'][^>]*?>/gi, ' [IMG:$1] ')
+          .replace(/<(?!\/?(?:sup|sub)\b)[^>]+>/gi, '')
           .replace(/&nbsp;/gi, ' ')
           .replace(/&amp;/gi, '&')
           .replace(/&lt;/gi, '<')

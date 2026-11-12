@@ -98,8 +98,16 @@ import {
 import {
   parseQuestionsFromFile,
   parseStudentsFromFile,
+  generateWordQuestionTemplateTableDoc,
+  generateWordQuestionTemplateNumberedDoc,
+  exportQuestionsToWordDoc,
+  convertImageFileToInlineToken,
 } from '../utils/cbtFileParsers';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
+import {
+  QuestionEquationAndImageHelper,
+  QuestionTargetField,
+} from './QuestionEquationAndImageHelper';
 import { ClassPerformanceLotsHotsChart } from './ClassPerformanceLotsHotsChart';
 import { ExamManagementTab } from './ExamManagementTab';
 import { AnBusoAnalysisTab } from './AnBusoAnalysisTab';
@@ -1352,6 +1360,85 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       'Template_Soal_CBT_11_Kolom.xls',
       'application/vnd.ms-excel;charset=utf-8;'
     );
+  };
+
+  const handleDownloadWordTemplateTable = () => {
+    triggerBrowserDownload(
+      generateWordQuestionTemplateTableDoc(),
+      'Template_Word_Tabel_Soal_CBT_Rumus_Gambar.doc',
+      'application/msword;charset=utf-8;'
+    );
+  };
+
+  const handleDownloadWordTemplateNumbered = () => {
+    triggerBrowserDownload(
+      generateWordQuestionTemplateNumberedDoc(),
+      'Template_Word_Nomor_Soal_CBT_Rumus_Gambar.doc',
+      'application/msword;charset=utf-8;'
+    );
+  };
+
+  const handleExportQuestionsWord = () => {
+    const targetQuestions =
+      currentExamQuestions.length > 0 ? currentExamQuestions : questions;
+    const examTitle = currentExam?.judul_ujian || 'Semua Paket Ujian CBT';
+    const examSlug = examTitle.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 30);
+    triggerBrowserDownload(
+      exportQuestionsToWordDoc(examTitle, targetQuestions),
+      `Bank_Soal_Word_${examSlug}.doc`,
+      'application/msword;charset=utf-8;'
+    );
+  };
+
+  const handleInsertSnippetToManualField = (
+    field: QuestionTargetField,
+    snippet: string
+  ) => {
+    const appendWithSpace = (prev: string) =>
+      prev.trim() ? `${prev.trim()} ${snippet}` : snippet;
+
+    if (field === 'teks_soal') setManualTeksSoal(appendWithSpace);
+    else if (field === 'wacana') setManualWacana(appendWithSpace);
+    else if (field === 'opsi_a') setManualOpsiA(appendWithSpace);
+    else if (field === 'opsi_b') setManualOpsiB(appendWithSpace);
+    else if (field === 'opsi_c') setManualOpsiC(appendWithSpace);
+    else if (field === 'opsi_d') setManualOpsiD(appendWithSpace);
+    else if (field === 'opsi_e') setManualOpsiE(appendWithSpace);
+  };
+
+  const handleRemoveImagesFromManualField = (field: QuestionTargetField) => {
+    const stripImg = (prev: string) =>
+      prev.replace(/\[IMG:[^\]]+\]/gi, '').replace(/\s{2,}/g, ' ').trim();
+
+    if (field === 'teks_soal') setManualTeksSoal(stripImg);
+    else if (field === 'wacana') setManualWacana(stripImg);
+    else if (field === 'opsi_a') setManualOpsiA(stripImg);
+    else if (field === 'opsi_b') setManualOpsiB(stripImg);
+    else if (field === 'opsi_c') setManualOpsiC(stripImg);
+    else if (field === 'opsi_d') setManualOpsiD(stripImg);
+    else if (field === 'opsi_e') setManualOpsiE(stripImg);
+  };
+
+  const handlePasteClipboardImage = async (
+    e: React.ClipboardEvent<HTMLTextAreaElement | HTMLInputElement>,
+    field: QuestionTargetField
+  ) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) {
+          try {
+            const token = await convertImageFileToInlineToken(file);
+            handleInsertSnippetToManualField(field, token);
+          } catch {}
+        }
+        return;
+      }
+    }
   };
 
   const handleExportQuestionsExcel = (exportAllPackages = false) => {
@@ -4455,7 +4542,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* Switcher: Tambah Manual vs Upload Excel/CSV */}
+            {/* Switcher: Tambah Manual vs Upload Word/Excel/CSV */}
             <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
               <button
                 type="button"
@@ -4466,7 +4553,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Input Soal Manual
+                Input Soal Manual (+ Gambar &amp; Rumus)
               </button>
               <button
                 type="button"
@@ -4477,7 +4564,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Upload Massal Excel / CSV
+                Upload Word / Excel / CSV
               </button>
             </div>
 
@@ -4548,53 +4635,78 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
+                {/* Interactive Equation & Image Helper (Matematika, Fisika, Kimia & Gambar) */}
+                <QuestionEquationAndImageHelper
+                  wacana={manualWacana}
+                  teksSoal={manualTeksSoal}
+                  opsiA={manualOpsiA}
+                  opsiB={manualOpsiB}
+                  opsiC={manualOpsiC}
+                  opsiD={manualOpsiD}
+                  opsiE={manualOpsiE}
+                  onInsertToField={handleInsertSnippetToManualField}
+                  onRemoveImagesFromField={handleRemoveImagesFromManualField}
+                />
+
                 <div>
-                  <label
-                    htmlFor="manual-wacana"
-                    className="block text-xs font-semibold text-slate-700 mb-1"
-                  >
-                    Wacana / Stimulus (Opsional)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label
+                      htmlFor="manual-wacana"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Wacana / Stimulus / Gambar Pengantar (Opsional)
+                    </label>
+                    <span className="text-[10px] text-slate-500">
+                      Bisa Paste gambar (Ctrl+V) atau tulis rumus <code>$...$</code>
+                    </span>
+                  </div>
                   <textarea
                     id="manual-wacana"
                     rows={2}
                     value={manualWacana}
                     onChange={(e) => setManualWacana(e.target.value)}
-                    placeholder="Teks bacaan pengantar soal..."
+                    onPaste={(e) => handlePasteClipboardImage(e, 'wacana')}
+                    placeholder="Teks bacaan, tabel, gambar (Ctrl+V), atau rumus pengantar soal..."
                     className="w-full p-2.5 text-xs border border-slate-300 rounded-lg"
                   />
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="manual-teks-soal"
-                    className="block text-xs font-semibold text-slate-700 mb-1"
-                  >
-                    Pertanyaan / Teks Soal
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label
+                      htmlFor="manual-teks-soal"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Pertanyaan / Teks Soal
+                    </label>
+                    <span className="text-[10px] text-slate-500">
+                      Mendukung Gambar &amp; Rumus Matematika/Fisika/Kimia
+                    </span>
+                  </div>
                   <textarea
                     id="manual-teks-soal"
                     rows={2}
                     value={manualTeksSoal}
                     onChange={(e) => setManualTeksSoal(e.target.value)}
-                    placeholder="Tuliskan pertanyaan soal..."
+                    onPaste={(e) => handlePasteClipboardImage(e, 'teks_soal')}
+                    placeholder="Tuliskan pertanyaan soal, tempel gambar (Ctrl+V), atau klik tombol + Equation / Rumus di atas..."
                     className="w-full p-2.5 text-xs border border-slate-300 rounded-lg"
                   />
                 </div>
 
                 <div className="space-y-2">
                   <span className="block text-xs font-semibold text-slate-700">
-                    Opsi Jawaban (A – E)
+                    Opsi Jawaban (A – E) — Mendukung Teks, Rumus <code>$...$</code>, &amp; Gambar
                   </span>
                   {(
                     [
-                      ['A', manualOpsiA, setManualOpsiA],
-                      ['B', manualOpsiB, setManualOpsiB],
-                      ['C', manualOpsiC, setManualOpsiC],
-                      ['D', manualOpsiD, setManualOpsiD],
-                      ['E', manualOpsiE, setManualOpsiE],
+                      ['A', manualOpsiA, setManualOpsiA, 'opsi_a'],
+                      ['B', manualOpsiB, setManualOpsiB, 'opsi_b'],
+                      ['C', manualOpsiC, setManualOpsiC, 'opsi_c'],
+                      ['D', manualOpsiD, setManualOpsiD, 'opsi_d'],
+                      ['E', manualOpsiE, setManualOpsiE, 'opsi_e'],
                     ] as const
-                  ).map(([letter, val, setter]) => (
+                  ).map(([letter, val, setter, fieldKey]) => (
                     <div key={letter} className="flex items-center gap-2">
                       <span className="text-xs font-mono font-bold text-slate-700 w-5">
                         {letter}.
@@ -4604,7 +4716,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         aria-label={`Opsi ${letter}`}
                         value={val}
                         onChange={(e) => setter(e.target.value)}
-                        placeholder={`Teks opsi ${letter}`}
+                        onPaste={(e) => handlePasteClipboardImage(e, fieldKey)}
+                        placeholder={`Teks / rumus / gambar (Ctrl+V) opsi ${letter}`}
                         className="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-lg"
                       />
                     </div>
@@ -4670,54 +4783,74 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onSubmit={handleUploadCsvSubmit}
                 className="space-y-4"
               >
-                <div className="space-y-2">
-                  <span className="block text-xs font-semibold text-slate-700">
-                    Unduh Template Soal (11 Kolom Terpisah Rapi di Excel)
+                <div className="space-y-2.5">
+                  <span className="block text-xs font-bold text-slate-800">
+                    1. Unduh Template Microsoft Word (.doc), Excel (.xls), atau CSV (Dilengkapi Contoh Gambar &amp; Rumus Matematika · Fisika · Kimia):
                   </span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleDownloadWordTemplateTable}
+                      className="py-2.5 px-3 text-xs font-bold text-white bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+                    >
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                      <span>Template Word Tabel (.doc)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadWordTemplateNumbered}
+                      className="py-2.5 px-3 text-xs font-bold text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 shrink-0 text-indigo-700" />
+                      <span>Template Word Nomor Soal (.doc)</span>
+                    </button>
                     <button
                       type="button"
                       onClick={handleDownloadQuestionTemplateExcel}
                       className="py-2 px-3 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      Template Soal (.xls)
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                      <span>Template Excel 11 Kolom (.xls)</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleDownloadSampleCsv}
                       className="py-2 px-3 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      Template CSV (Kolom Terpisah)
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                      <span>Template CSV (.csv)</span>
                     </button>
                   </div>
                 </div>
 
-                <div className="text-[11px] font-mono text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200 space-y-1">
-                  <div className="font-sans font-semibold text-slate-800">
-                    Format Fleksibel (Otomatis Deteksi `;`, `,`, atau Tab):
+                <div className="text-[11px] text-slate-700 bg-indigo-50/70 p-3 rounded-lg border border-indigo-200 space-y-1">
+                  <div className="font-bold text-indigo-950">
+                    Keunggulan Template Word &amp; Pembaca Rumus/Gambar Otomatis:
                   </div>
-                  <div>
-                    id_soal ; jenis_soal ; wacana ; teks_soal ; opsi_a ; opsi_b
-                    ; opsi_c ; opsi_d ; opsi_e ; kunci_jawaban ; bobot
-                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-[11px] text-slate-700">
+                    <li>
+                      <strong>Gambar Terbaca Otomatis:</strong> Cukup <em>Copy-Paste</em> atau <em>Insert Picture</em> gambar/diagram di dalam file Word (baik format Tabel maupun Soal Bernomor), sistem otomatis mengekstrak &amp; menampilkan gambarnya!
+                    </li>
+                    <li>
+                      <strong>Rumus Matematika, Fisika &amp; Kimia:</strong> Mendukung rumus LaTeX <code>$...$</code> (contoh: <code>{'$\\sum \\vec{F} = m \\cdot \\vec{a}$'}</code>, <code>{'$\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$'}</code>) serta reaksi kimia <code>{'$\\ce{2H2 + O2 -> 2H2O}$'}</code> dan pangkat/indeks Word (<code>x²</code>, <code>H₂SO₄</code>).
+                    </li>
+                  </ul>
                 </div>
 
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
+                <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
                   <label
                     htmlFor="csv-file-upload"
-                    className="block text-xs font-semibold text-slate-800"
+                    className="block text-xs font-bold text-slate-800"
                   >
-                    Pilih File Soal: Excel (.xlsx, .xls), Word (.docx, .doc), CSV, atau TXT
+                    2. Pilih File Soal: Word (.docx, .doc), Excel (.xlsx, .xls), CSV, atau TXT
                   </label>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    {'Langsung upload otomatis saat file dipilih! Mendukung tabel Excel/Word, soal bernomor di Word/TXT, tabel stimulus/wacana, serta lambang matematika (LaTeX $...$, $\\sqrt{x}$, $\\frac{a}{b}$, $\\pm$, $\\pi$, dsb).'}
+                    Langsung upload otomatis saat file dipilih! Mendukung dokumen Microsoft Word (Tabel 11 kolom maupun Soal Bernomor 1, 2, 3...), gambar tersemat di Word, serta equation Matematika, Fisika, dan Kimia.
                   </p>
                   <input
                     id="csv-file-upload"
                     type="file"
-                    accept=".xlsx,.xls,.docx,.doc,.csv,.tsv,.txt,text/csv,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
+                    accept=".docx,.doc,.xlsx,.xls,.csv,.tsv,.txt,text/csv,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
                     onChange={handleFileChange}
                     className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
                   />
@@ -4729,7 +4862,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       htmlFor="csv-raw-textarea"
                       className="block text-xs font-semibold text-slate-700"
                     >
-                      Atau Tempelkan / Edit Konten CSV Soal
+                      Atau Tempelkan / Edit Konten Soal
                     </label>
                     <button
                       type="button"
@@ -4744,10 +4877,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <textarea
                     id="csv-raw-textarea"
-                    rows={5}
+                    rows={4}
                     value={csvText}
                     onChange={(e) => setCsvText(e.target.value)}
-                    placeholder="Tempelkan isi tabel Excel/CSV atau pilih file di atas untuk langsung mengupload..."
+                    placeholder="Tempelkan isi tabel Word/Excel/CSV atau pilih file di atas untuk langsung mengupload..."
                     className="w-full p-3 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
                   />
                 </div>
@@ -4756,7 +4889,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   const livePreview = parseQuestionsCsv(csvText);
                   return (
                     <div
-                      className={`p-3 rounded-lg border text-xs space-y-1.5 ${
+                      className={`p-3 rounded-lg border text-xs space-y-2 ${
                         livePreview.rows.length > 0
                           ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
                           : 'bg-amber-50 border-amber-200 text-amber-900'
@@ -4764,14 +4897,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     >
                       <div className="font-bold">
                         {livePreview.rows.length > 0
-                          ? `Terdeteksi ${livePreview.rows.length} butir soal siap diupload`
-                          : 'Format CSV belum terbaca sebagai butir soal'}
+                          ? `Terdeteksi ${livePreview.rows.length} butir soal siap diupload (Pratinjau Gambar & Rumus):`
+                          : 'Format belum terbaca sebagai butir soal'}
                       </div>
                       {livePreview.rows.slice(0, 3).map((r, i) => (
-                        <div key={i} className="text-[11px] truncate">
-                          #{i + 1} [{r.jenis_soal} · Kunci:{' '}
-                          {r.kunci_jawaban.join(',')} · {r.bobot} Poin]{' '}
-                          {r.teks_soal}
+                        <div
+                          key={i}
+                          className="p-2 rounded-md bg-white border border-emerald-200/80 text-slate-800 space-y-1"
+                        >
+                          <div className="text-[10px] font-mono font-bold text-emerald-800">
+                            #{i + 1} [{r.jenis_soal} · Kunci: {r.kunci_jawaban.join(',')} · {r.bobot} Poin]
+                          </div>
+                          {r.wacana && (
+                            <div className="text-[11px] text-slate-600">
+                              <MathAndTableRenderer content={r.wacana} />
+                            </div>
+                          )}
+                          <div className="text-xs font-semibold text-slate-900">
+                            <MathAndTableRenderer content={r.teks_soal} />
+                          </div>
                         </div>
                       ))}
                       {livePreview.errors.length > 0 && (
@@ -4880,6 +5024,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span>+ Buka Panel Upload / Form Soal</span>
                     </>
                   )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportQuestionsWord}
+                  disabled={questions.length === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Soal Word (.doc)
                 </button>
                 <button
                   type="button"
