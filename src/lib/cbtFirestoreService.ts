@@ -68,6 +68,18 @@ function buildCleanExamFirestoreDoc(ex: ExamItem, nowIso: string): Record<string
   if (ex.pengumuman !== undefined && String(ex.pengumuman).trim() !== '') {
     docObj.pengumuman = String(ex.pengumuman).trim().slice(0, 600);
   }
+  if (ex.mata_pelajaran !== undefined && String(ex.mata_pelajaran).trim() !== '') {
+    docObj.mata_pelajaran = String(ex.mata_pelajaran).trim().slice(0, 80);
+  }
+  if (ex.distribusi_paket_mode !== undefined && String(ex.distribusi_paket_mode).trim() !== '') {
+    docObj.distribusi_paket_mode = String(ex.distribusi_paket_mode).trim().slice(0, 40);
+  }
+  if (Array.isArray(ex.target_siswa_ids)) {
+    docObj.target_siswa_ids = ex.target_siswa_ids
+      .map((id) => Number(id))
+      .filter((id) => !isNaN(id) && id > 0)
+      .slice(0, 1000);
+  }
   return docObj;
 }
 
@@ -483,6 +495,12 @@ export async function loadUnifiedDashboardData(): Promise<{
         token_sesi: fsEx?.token_sesi || apiEx.token_sesi || getEffectiveExamSessionToken(apiEx),
         tampilkan_nilai: fsEx?.tampilkan_nilai ?? apiEx.tampilkan_nilai ?? true,
         pengumuman: fsEx?.pengumuman ?? apiEx.pengumuman,
+        mata_pelajaran: fsEx?.mata_pelajaran || apiEx.mata_pelajaran || 'Sosiologi',
+        distribusi_paket_mode:
+          fsEx?.distribusi_paket_mode ||
+          apiEx.distribusi_paket_mode ||
+          'OTOMATIS_GANJIL_GENAP',
+        target_siswa_ids: fsEx?.target_siswa_ids || apiEx.target_siswa_ids || [],
       };
       return combined;
     });
@@ -645,6 +663,9 @@ export async function saveExamCbt(
     token_sesi?: string;
     tampilkan_nilai?: boolean;
     pengumuman?: string;
+    mata_pelajaran?: string;
+    distribusi_paket_mode?: string;
+    target_siswa_ids?: number[];
   },
   editingExamId?: number | null
 ): Promise<ExamItem> {
@@ -687,6 +708,12 @@ export async function saveExamCbt(
     token_sesi: cleanTokenSesi,
     tampilkan_nilai: payload.tampilkan_nilai !== undefined ? Boolean(payload.tampilkan_nilai) : true,
     pengumuman: payload.pengumuman?.trim() || '',
+    mata_pelajaran: payload.mata_pelajaran?.trim() || 'Sosiologi',
+    distribusi_paket_mode:
+      payload.distribusi_paket_mode?.trim() || 'OTOMATIS_GANJIL_GENAP',
+    target_siswa_ids: Array.isArray(payload.target_siswa_ids)
+      ? payload.target_siswa_ids.map((id) => Number(id)).filter((id) => !isNaN(id))
+      : [],
   };
 
   if (db) {
@@ -695,7 +722,7 @@ export async function saveExamCbt(
       buildCleanExamFirestoreDoc(examRecord, nowIso)
     );
     await updateFirestorePulse(
-      `Paket ujian disimpan: ${examRecord.judul_ujian} [Token Sesi: ${examRecord.token_sesi}]`
+      `Paket ujian disimpan: [${examRecord.mata_pelajaran}] ${examRecord.judul_ujian} (Token: ${examRecord.token_sesi})`
     );
   }
 
@@ -722,6 +749,9 @@ export async function toggleExamStatusCbt(
     token_sesi: exam.token_sesi || getEffectiveExamSessionToken(exam),
     tampilkan_nilai: exam.tampilkan_nilai !== false,
     pengumuman: exam.pengumuman || '',
+    mata_pelajaran: exam.mata_pelajaran || 'Sosiologi',
+    distribusi_paket_mode: exam.distribusi_paket_mode || 'OTOMATIS_GANJIL_GENAP',
+    target_siswa_ids: exam.target_siswa_ids || [],
   };
   await saveExamCbt(payload, exam.id);
 }
@@ -752,6 +782,9 @@ export async function updateExamSessionTokenCbt(
       token_sesi: nextToken,
       tampilkan_nilai: exam.tampilkan_nilai !== false,
       pengumuman: exam.pengumuman || '',
+      mata_pelajaran: exam.mata_pelajaran || 'Sosiologi',
+      distribusi_paket_mode: exam.distribusi_paket_mode || 'OTOMATIS_GANJIL_GENAP',
+      target_siswa_ids: exam.target_siswa_ids || [],
     },
     exam.id
   );

@@ -31,6 +31,7 @@ import {
   Calendar,
   BookmarkCheck,
   BarChart3,
+  KeyRound,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -57,6 +58,8 @@ import {
   getEffectiveExamSessionToken,
   generateExamToken,
   SOSIOLOGI_EXAM_CATEGORIES,
+  DAFTAR_MATA_PELAJARAN_SMA,
+  getEffectiveMataPelajaran,
 } from '../utils/cbtLogic';
 import {
   downloadStudentTokenCardsPdf,
@@ -100,6 +103,7 @@ import { MathAndTableRenderer } from './MathAndTableRenderer';
 import { ClassPerformanceLotsHotsChart } from './ClassPerformanceLotsHotsChart';
 import { ExamManagementTab } from './ExamManagementTab';
 import { AnBusoAnalysisTab } from './AnBusoAnalysisTab';
+import { TokenAndDistributionTab } from './TokenAndDistributionTab';
 
 interface AdminDashboardProps {
   exams: ExamItem[];
@@ -159,15 +163,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Core Teacher Dashboard Modules (Persisted on reload)
   const [activeTab, setActiveTab] = useState<
-    'ujian' | 'manajemen' | 'siswa' | 'soal' | 'laporan' | 'anbuso'
+    | 'ujian'
+    | 'token_distribusi'
+    | 'manajemen'
+    | 'siswa'
+    | 'soal'
+    | 'laporan'
+    | 'anbuso'
   >(() => {
     try {
       const saved = localStorage.getItem('cbt_teacher_active_tab');
       if (
         saved &&
-        ['ujian', 'manajemen', 'siswa', 'soal', 'laporan', 'anbuso'].includes(
-          saved
-        )
+        [
+          'ujian',
+          'token_distribusi',
+          'manajemen',
+          'siswa',
+          'soal',
+          'laporan',
+          'anbuso',
+        ].includes(saved)
       ) {
         return saved as any;
       }
@@ -259,6 +275,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newExamTokenSesi, setNewExamTokenSesi] = useState<string>(() => generateExamToken());
   const [newExamTampilkanNilai, setNewExamTampilkanNilai] = useState<boolean>(true);
   const [newExamPengumuman, setNewExamPengumuman] = useState<string>('');
+  const [newExamMataPelajaran, setNewExamMataPelajaran] = useState<string>('Sosiologi');
+  const [newExamDistribusiMode, setNewExamDistribusiMode] = useState<string>('OTOMATIS_GANJIL_GENAP');
   const [inlineTokenEditExamId, setInlineTokenEditExamId] = useState<number | null>(null);
   const [inlineTokenEditValue, setInlineTokenEditValue] = useState<string>('');
   const [isDistributingPackages, setIsDistributingPackages] = useState(false);
@@ -561,13 +579,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       token_sesi: newExamTokenSesi.trim().toUpperCase() || generateExamToken(),
       tampilkan_nilai: newExamTampilkanNilai,
       pengumuman: newExamPengumuman.trim(),
+      mata_pelajaran: newExamMataPelajaran.trim() || 'Sosiologi',
+      distribusi_paket_mode: newExamDistribusiMode || 'OTOMATIS_GANJIL_GENAP',
     };
 
     try {
       const savedExam = await saveExamCbt(payload, editingExamId);
       if (editingExamId) {
         setExamFeedback(
-          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] berhasil diperbarui (Token Sesi Ujian: ${savedExam.token_sesi}).`
+          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.mata_pelajaran} · ${savedExam.status_ujian || 'DRAF'}] berhasil diperbarui (Token Sesi Ujian: ${savedExam.token_sesi}).`
         );
         setEditingExamId(null);
         setNewExamTitle('');
@@ -585,9 +605,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setNewExamTokenSesi(generateExamToken());
         setNewExamTampilkanNilai(true);
         setNewExamPengumuman('');
+        setNewExamMataPelajaran('Sosiologi');
+        setNewExamDistribusiMode('OTOMATIS_GANJIL_GENAP');
       } else {
         setExamFeedback(
-          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.status_ujian || 'DRAF'}] berhasil dibuat dengan Token Sesi Ujian: ${savedExam.token_sesi}.`
+          `Paket ujian "${savedExam.judul_ujian}" [${savedExam.mata_pelajaran} · ${savedExam.status_ujian || 'DRAF'}] berhasil dibuat dengan Token Sesi Ujian: ${savedExam.token_sesi}.`
         );
         setSelectedExamId(savedExam.id);
         setNewExamTitle('');
@@ -1915,25 +1937,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Second Row: Dedicated Full-Width Colorful 6-Tab Navigation Menu Bar */}
+        {/* Second Row: Dedicated Full-Width Colorful 7-Tab Navigation Menu Bar */}
         <div className="bg-gradient-to-r from-slate-100 via-blue-50/50 to-indigo-50/50 p-3 border-b border-slate-200">
           <div
             role="tablist"
             aria-label="Menu Utama Konsol Guru"
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2"
           >
             <button
               type="button"
               role="tab"
               aria-selected={activeTab === 'ujian'}
               onClick={() => setActiveTab('ujian')}
-              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
+              className={`px-3 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'ujian'
                   ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-700 shadow-xs'
                   : 'bg-white hover:bg-blue-50/70 text-slate-700 border-slate-200/90 hover:border-blue-300'
               }`}
             >
-              <span className="flex items-center gap-2 truncate">
+              <span className="flex items-center gap-1.5 truncate">
                 <ClipboardList
                   className={`w-4 h-4 shrink-0 ${
                     activeTab === 'ujian' ? 'text-amber-300' : 'text-blue-600'
@@ -1942,13 +1964,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="truncate">Distribusi Ujian</span>
               </span>
               <span
-                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
+                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
                   activeTab === 'ujian'
                     ? 'bg-white/20 text-white'
                     : 'bg-blue-50 text-blue-700 border border-blue-200/60'
                 }`}
               >
                 {exams.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'token_distribusi'}
+              onClick={() => setActiveTab('token_distribusi')}
+              className={`px-3 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
+                activeTab === 'token_distribusi'
+                  ? 'bg-gradient-to-r from-rose-600 to-amber-600 text-white border-rose-700 shadow-xs ring-2 ring-amber-300'
+                  : 'bg-amber-50/90 hover:bg-amber-100 text-amber-950 border-amber-300'
+              }`}
+            >
+              <span className="flex items-center gap-1.5 truncate">
+                <KeyRound
+                  className={`w-4 h-4 shrink-0 ${
+                    activeTab === 'token_distribusi' ? 'text-amber-200' : 'text-rose-600'
+                  }`}
+                />
+                <span className="truncate">Token Ujian &amp; Mapel</span>
+              </span>
+              <span
+                className={`px-1.5 py-0.5 text-[10px] font-mono rounded-md font-extrabold shrink-0 ${
+                  activeTab === 'token_distribusi'
+                    ? 'bg-white/25 text-white'
+                    : 'bg-rose-600 text-white'
+                }`}
+              >
+                TOKEN
               </span>
             </button>
 
@@ -2211,10 +2263,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <form onSubmit={handleSaveExam} className="space-y-4">
                 <div>
                   <label
+                    htmlFor="exam-mapel-select"
+                    className="block text-xs font-semibold text-slate-700 mb-1"
+                  >
+                    Mata Pelajaran Ujian (Multi-Mapel)
+                  </label>
+                  <select
+                    id="exam-mapel-select"
+                    value={newExamMataPelajaran}
+                    onChange={(e) => setNewExamMataPelajaran(e.target.value)}
+                    className="w-full px-3.5 py-2 text-sm font-semibold bg-indigo-50/50 border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  >
+                    {DAFTAR_MATA_PELAJARAN_SMA.map((mp) => (
+                      <option key={mp} value={mp}>
+                        Mata Pelajaran: {mp}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
                     htmlFor="exam-title-input"
                     className="block text-xs font-semibold text-slate-700 mb-1"
                   >
-                    Judul / Nama Ujian Sosiologi
+                    Judul / Nama Paket Ujian
                   </label>
                   <input
                     id="exam-title-input"
@@ -2418,6 +2491,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       placeholder="Contoh: PAKET-A, PAKET-B, UTAMA"
                       className="w-full px-3 py-1.5 text-xs font-mono font-semibold border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600"
                     />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="exam-distribusi-mode-select"
+                      className="block text-[11px] font-semibold text-slate-700 mb-1"
+                    >
+                      Aturan Distribusi Paket Soal ke Siswa
+                    </label>
+                    <select
+                      id="exam-distribusi-mode-select"
+                      value={newExamDistribusiMode}
+                      onChange={(e) => setNewExamDistribusiMode(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-md"
+                    >
+                      <option value="OTOMATIS_GANJIL_GENAP">
+                        Otomatis Ganjil-Genap per Kelas (Jika ≥2 Paket Mapel Sama)
+                      </option>
+                      <option value="KHUSUS_GANJIL">
+                        Khusus Siswa Absen GANJIL (1, 3, 5...) di Setiap Kelas
+                      </option>
+                      <option value="KHUSUS_GENAP">
+                        Khusus Siswa Absen GENAP (2, 4, 6...) di Setiap Kelas
+                      </option>
+                    </select>
                   </div>
 
                   <div className="space-y-2 pt-1 border-t border-slate-200/80">
@@ -2720,6 +2818,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         return (
                           <tr key={ex.id} className="hover:bg-slate-50/80">
                             <td className="py-3.5 px-4 font-semibold text-slate-900">
+                              <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-indigo-600 text-white">
+                                  Mapel: {getEffectiveMataPelajaran(ex)}
+                                </span>
+                                {ex.distribusi_paket_mode === 'KHUSUS_GANJIL' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-900">
+                                    Khusus Absen Ganjil
+                                  </span>
+                                )}
+                                {ex.distribusi_paket_mode === 'KHUSUS_GENAP' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-900">
+                                    Khusus Absen Genap
+                                  </span>
+                                )}
+                              </div>
                               <div>{ex.judul_ujian}</div>
                               <div className="flex flex-wrap items-center gap-1.5 mt-1">
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-blue-50 text-blue-700 border border-blue-200">
@@ -2929,6 +3042,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     );
                                     setNewExamTampilkanNilai(ex.tampilkan_nilai !== false);
                                     setNewExamPengumuman(ex.pengumuman || '');
+                                    setNewExamMataPelajaran(
+                                      getEffectiveMataPelajaran(ex)
+                                    );
+                                    setNewExamDistribusiMode(
+                                      ex.distribusi_paket_mode || 'OTOMATIS_GANJIL_GENAP'
+                                    );
                                   }}
                                   aria-label={`Edit ujian ${ex.judul_ujian}`}
                                   className="p-1.5 text-slate-500 hover:text-slate-900 rounded-md cursor-pointer"
@@ -5733,6 +5852,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* TAB TOKEN UJIAN & DISTRIBUSI PAKET SOAL MULTI-MAPEL (GANJIL-GENAP)     */}
+      {/* ===================================================================== */}
+      {activeTab === 'token_distribusi' && (
+        <TokenAndDistributionTab
+          exams={exams}
+          questions={questions}
+          students={students}
+          onRefreshData={onRefreshData}
+        />
       )}
 
       {/* ===================================================================== */}

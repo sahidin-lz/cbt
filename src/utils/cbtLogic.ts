@@ -89,6 +89,41 @@ export const SOSIOLOGI_EXAM_CATEGORIES = [
   'Try Out / Simulasi Mandiri HOTS',
 ] as const;
 
+export const DAFTAR_MATA_PELAJARAN_SMA = [
+  'Sosiologi',
+  'Sejarah',
+  'Ekonomi',
+  'Geografi',
+  'Matematika',
+  'Bahasa Indonesia',
+  'Bahasa Inggris',
+  'Pendidikan Pancasila (PKN)',
+  'PAI & Budi Pekerti',
+  'Biologi',
+  'Fisika',
+  'Kimia',
+  'Informatika',
+  'Seni Budaya',
+  'PJOK',
+  'Prakarya & Kewirausahaan',
+  'Antropologi',
+] as const;
+
+export function getEffectiveMataPelajaran(exam?: {
+  mata_pelajaran?: string;
+  judul_ujian?: string;
+} | null): string {
+  const explicit = (exam?.mata_pelajaran || '').trim();
+  if (explicit) return explicit;
+  const title = (exam?.judul_ujian || '').trim();
+  for (const mapel of DAFTAR_MATA_PELAJARAN_SMA) {
+    if (title.toLowerCase().includes(mapel.toLowerCase())) {
+      return mapel;
+    }
+  }
+  return 'Sosiologi';
+}
+
 /**
  * Checks whether an exam distributed to (target_tingkat, target_kelas, target_rombel) applies to a student's class,
  * with optional requirement for active exam status (ignoring DRAF or SELESAI).
@@ -2000,10 +2035,69 @@ export function assignPackageVariantsToStudents<T extends {
  * within their class (`kelas`) and grade level (`angkatan`).
  * Guarantees 100% synchronization between Login preview, Active Exam session, and Scoring.
  */
-export function resolveProportionalStudentExamPackage<
+export interface StudentAbsenInfo {
+  noAbsen: number; // 1-based attendance number in student's class (1, 2, 3...)
+  rankIndex: number; // 0-based index in class (0, 1, 2...)
+  totalInClass: number;
+  isGanjil: boolean; // true if noAbsen is 1, 3, 5...
+  ganjilGenapLabel: 'GANJIL' | 'GENAP';
+}
+
+export function getStudentAbsenInfoInClass<
+  TStudent extends {
+    id: number | string;
+    nama: string;
+    kelas: string;
+  }
+>(student: TStudent, allStudents: TStudent[]): StudentAbsenInfo {
+  const studentKelas = (student?.kelas || '').trim();
+  const normKelas = studentKelas.toLowerCase();
+  const classStudents = (allStudents || [])
+    .filter((s) => (s.kelas || '').trim().toLowerCase() === normKelas)
+    .sort((a, b) => (a.nama || '').localeCompare(b.nama || '', 'id'));
+
+  const idx = classStudents.findIndex((s) => String(s.id) === String(student?.id));
+  const rankIndex = idx >= 0 ? idx : 0;
+  const noAbsen = rankIndex + 1;
+  const isGanjil = noAbsen % 2 === 1;
+
+  return {
+    noAbsen,
+    rankIndex,
+    totalInClass: classStudents.length || 1,
+    isGanjil,
+    ganjilGenapLabel: isGanjil ? 'GANJIL' : 'GENAP',
+  };
+}
+
+export interface SubjectExamAllocationItem<TExam> {
+  mataPelajaran: string;
+  assignedExam: TExam;
+  allPackagesInSubject: TExam[];
+  assignedPackageCode: string;
+  variantLetter: string;
+  packageIndex: number;
+  totalPackagesForSubject: number;
+  distributionReason: string;
+  noAbsen: number;
+  ganjilGenapLabel: 'GANJIL' | 'GENAP';
+}
+
+/**
+ * Resolves the exact exam package a student receives FOR EACH SUBJECT (`mata_pelajaran`)
+ * available for their class:
+ * - Supports unlimited subjects (Sosiologi, Ekonomi, Sejarah, Matematika, etc.)
+ * - If a subject has > 1 exam packages in the student's class:
+ *    1. Honors explicit `MANUAL_SISWA` (`target_siswa_ids`), `KHUSUS_GANJIL`, or `KHUSUS_GENAP` first.
+ *    2. Otherwise automatically distributes by class attendance number (Nomor Urut Absen per Kelas):
+ *       - If 2 packages: Absen Ganjil (1, 3, 5...) -> Paket 1 (Paket A), Absen Genap (2, 4, 6...) -> Paket 2 (Paket B) in every class!
+ *       - If N packages: `(noAbsen - 1) % N` in every class!
+ */
+export function resolveStudentExamPackagesBySubject<
   TExam extends {
     id: number | string;
     judul_ujian: string;
+    mata_pelajaran?: string;
     target_tingkat?: string;
     target_kelas?: string;
     target_rombel?: string[];
@@ -2011,6 +2105,220 @@ export function resolveProportionalStudentExamPackage<
     kode_paket?: string;
     mode_multi_paket?: boolean;
     jumlah_paket?: number;
+    distribusi_paket_mode?: string;
+    target_siswa_ids?: number[];
+    durasi_menit?: number;
+    kategori_ujian?: string;
+  },
+  TStudent extends {
+    id: number | string;
+    nama: string;
+    kelas: string;
+    token_ujian?: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  }
+>(params: {
+  student: TStudent;
+  allStudents: TStudent[];
+  exams: TExam[];
+  questions?: { exam_id: number | string }[];
+  requireActive?: boolean;
+}): SubjectExamAllocationItem<TExam>[] {
+  const {
+    student,
+    allStudents,
+    exams,
+    questions,
+    requireActive = true,
+  } = params;
+  const studentKelas = (student?.kelas || '').trim();
+  const absenInfo = getStudentAbsenInfoInClass(student, allStudents);
+
+  // Filter exams matching this student's class
+  const classMatched = (exams || []).filter((ex) =>
+    isExamMatchedForStudentClass(ex, studentKelas, { requireActive })
+  );
+
+  // Group by normalized Mata Pelajaran
+  const subjectGroups = new Map<
+    string,
+    { displayName: string; exams: TExam[] }
+  >();
+
+  for (const ex of classMatched) {
+    const mapelName = getEffectiveMataPelajaran(ex);
+    const key = mapelName.toUpperCase().trim();
+    const existing = subjectGroups.get(key);
+    if (existing) {
+      existing.exams.push(ex);
+    } else {
+      subjectGroups.set(key, { displayName: mapelName, exams: [ex] });
+    }
+  }
+
+  const allocations: SubjectExamAllocationItem<TExam>[] = [];
+
+  for (const [, group] of subjectGroups.entries()) {
+    let pool = [...group.exams].sort((a, b) => {
+      const codeA = (a.kode_paket || '').trim().toUpperCase();
+      const codeB = (b.kode_paket || '').trim().toUpperCase();
+      if (codeA && codeB && codeA !== codeB) {
+        return codeA.localeCompare(codeB, undefined, { numeric: true });
+      }
+      return Number(a.id) - Number(b.id);
+    });
+
+    // If questions are provided and multiple packages exist in this subject, prefer packages that have questions
+    if (questions && questions.length > 0 && pool.length > 1) {
+      const withQs = pool.filter((ex) =>
+        questions.some((q) => Number(q.exam_id) === Number(ex.id))
+      );
+      if (withQs.length > 0) {
+        pool = withQs;
+      }
+    }
+
+    // 1. Check if any package in this subject has explicit manual student assignment (`MANUAL_SISWA` / `target_siswa_ids`)
+    const explicitManualMatch = pool.find(
+      (ex) =>
+        Array.isArray(ex.target_siswa_ids) &&
+        ex.target_siswa_ids.length > 0 &&
+        ex.target_siswa_ids.some((id) => Number(id) === Number(student.id))
+    );
+
+    // 2. Check if any package in this subject is explicitly set to KHUSUS_GANJIL or KHUSUS_GENAP
+    const explicitParityMatch = pool.find((ex) => {
+      const mode = (ex.distribusi_paket_mode || '').toUpperCase().trim();
+      if (mode === 'KHUSUS_GANJIL' && absenInfo.isGanjil) return true;
+      if (mode === 'KHUSUS_GENAP' && !absenInfo.isGanjil) return true;
+      return false;
+    });
+
+    // Filter out packages that are exclusively locked to OTHER students (e.g. MANUAL_SISWA not containing this student, or opposite parity)
+    const eligibleAutoPool = pool.filter((ex) => {
+      const mode = (ex.distribusi_paket_mode || '').toUpperCase().trim();
+      if (
+        Array.isArray(ex.target_siswa_ids) &&
+        ex.target_siswa_ids.length > 0 &&
+        !ex.target_siswa_ids.some((id) => Number(id) === Number(student.id))
+      ) {
+        return false;
+      }
+      if (mode === 'KHUSUS_GANJIL' && !absenInfo.isGanjil) return false;
+      if (mode === 'KHUSUS_GENAP' && absenInfo.isGanjil) return false;
+      return true;
+    });
+
+    let chosenExam: TExam;
+    let chosenIdx = 0;
+    let distributionReason = '';
+
+    if (explicitManualMatch) {
+      chosenExam = explicitManualMatch;
+      chosenIdx = Math.max(0, pool.findIndex((e) => e.id === explicitManualMatch.id));
+      distributionReason = `Distribusi Khusus Siswa Terpilih (No. Absen ${absenInfo.noAbsen})`;
+    } else if (explicitParityMatch) {
+      chosenExam = explicitParityMatch;
+      chosenIdx = Math.max(0, pool.findIndex((e) => e.id === explicitParityMatch.id));
+      distributionReason = `Distribusi Khusus Absen ${absenInfo.ganjilGenapLabel} (No. Urut ${absenInfo.noAbsen})`;
+    } else {
+      const activePool = eligibleAutoPool.length > 0 ? eligibleAutoPool : pool;
+      chosenIdx = absenInfo.rankIndex % activePool.length;
+      chosenExam = activePool[chosenIdx];
+      if (activePool.length === 2) {
+        distributionReason = `Otomatis Ganjil-Genap Kelas (Absen #${absenInfo.noAbsen} ${absenInfo.ganjilGenapLabel} → Paket ${chosenIdx + 1})`;
+      } else if (activePool.length > 2) {
+        distributionReason = `Otomatis Proporsional Kelas (${activePool.length} Paket · Absen #${absenInfo.noAbsen} → Paket ${chosenIdx + 1})`;
+      } else if (chosenExam.mode_multi_paket) {
+        const numV = Math.max(2, chosenExam.jumlah_paket || 2);
+        const vIdx = absenInfo.rankIndex % numV;
+        distributionReason =
+          numV === 2
+            ? `Varian Ganjil-Genap Kelas (Absen #${absenInfo.noAbsen} ${absenInfo.ganjilGenapLabel})`
+            : `Varian Proporsional Kelas (Absen #${absenInfo.noAbsen} → Varian ${String.fromCharCode(65 + vIdx)})`;
+      } else {
+        distributionReason = `Paket Utama Mapel ${group.displayName} (Kelas ${studentKelas})`;
+      }
+    }
+
+    const totalPackages =
+      pool.length > 1
+        ? pool.length
+        : chosenExam.mode_multi_paket
+          ? Math.max(2, chosenExam.jumlah_paket || 2)
+          : 1;
+
+    const variantIdx =
+      pool.length > 1
+        ? chosenIdx
+        : chosenExam.mode_multi_paket
+          ? absenInfo.rankIndex % totalPackages
+          : 0;
+
+    const letter = String.fromCharCode(65 + (variantIdx % 26));
+    const uniqueKodePakets = new Set(
+      pool
+        .map((e) => (e.kode_paket || '').trim().toUpperCase())
+        .filter(Boolean)
+    );
+    const hasDistinctKodePaket = uniqueKodePakets.size === pool.length;
+
+    let assignedPackageCode: string;
+    if (pool.length > 1) {
+      assignedPackageCode =
+        hasDistinctKodePaket && chosenExam.kode_paket
+          ? chosenExam.kode_paket.trim().toUpperCase()
+          : `PAKET-${letter}`;
+    } else if (chosenExam.mode_multi_paket) {
+      assignedPackageCode = `PAKET-${letter}`;
+    } else {
+      assignedPackageCode = (
+        chosenExam.kode_paket ||
+        student?.kode_soal ||
+        'PAKET-A'
+      )
+        .trim()
+        .toUpperCase();
+    }
+
+    allocations.push({
+      mataPelajaran: group.displayName,
+      assignedExam: chosenExam,
+      allPackagesInSubject: pool,
+      assignedPackageCode,
+      variantLetter: letter,
+      packageIndex: variantIdx,
+      totalPackagesForSubject: totalPackages,
+      distributionReason,
+      noAbsen: absenInfo.noAbsen,
+      ganjilGenapLabel: absenInfo.ganjilGenapLabel,
+    });
+  }
+
+  return allocations;
+}
+
+/**
+ * Proportionally and deterministically resolves which Exam Package (ExamItem) and
+ * Package Code (`kode_soal`) a student receives based on the student's attendance number
+ * (Ganjil/Genap or Modulo N) within their class (`kelas`) and subject (`mata_pelajaran`).
+ * Guarantees 100% synchronization between Login preview, Active Exam session, and Scoring.
+ */
+export function resolveProportionalStudentExamPackage<
+  TExam extends {
+    id: number | string;
+    judul_ujian: string;
+    mata_pelajaran?: string;
+    target_tingkat?: string;
+    target_kelas?: string;
+    target_rombel?: string[];
+    status_ujian?: string;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+    distribusi_paket_mode?: string;
+    target_siswa_ids?: number[];
     durasi_menit?: number;
     kategori_ujian?: string;
   },
@@ -2039,128 +2347,73 @@ export function resolveProportionalStudentExamPackage<
   classTotalStudents: number;
 } {
   const { student, allStudents, exams, questions, preferredExamId } = params;
-  const studentKelas = (student?.kelas || '').trim();
+  const absenInfo = getStudentAbsenInfoInClass(student, allStudents || []);
 
-  // 1. Filter all active exams matching this student's class/grade
-  let matched = (exams || []).filter((ex) =>
-    isExamMatchedForStudentClass(ex, studentKelas, { requireActive: true })
-  );
+  // Use subject-aware package allocation
+  const bySubject = resolveStudentExamPackagesBySubject({
+    student,
+    allStudents: allStudents || [],
+    exams: exams || [],
+    questions,
+    requireActive: true,
+  });
 
-  // If questions array is available and some matched exams have questions while others are empty,
-  // prioritize active exams that actually have questions loaded so no student gets an empty exam.
-  if (questions && questions.length > 0 && matched.length > 1) {
-    const withQuestions = matched.filter((ex) =>
-      questions.some((q) => Number(q.exam_id) === Number(ex.id))
-    );
-    if (withQuestions.length > 0) {
-      matched = withQuestions;
-    }
-  }
-
-  // Sort matched exams deterministically by ID ascending
-  const sortedMatched = [...matched].sort((a, b) => Number(a.id) - Number(b.id));
-
-  // 2. Compute student's exact rank in their class and angkatan
-  const allStudentsList = allStudents || [];
-  const normStudentKelas = studentKelas.toLowerCase();
-  const classStudents = allStudentsList
-    .filter((s) => (s.kelas || '').trim().toLowerCase() === normStudentKelas)
-    .sort((a, b) => (a.nama || '').localeCompare(b.nama || '', 'id'));
-  const rankInClass = Math.max(
-    0,
-    classStudents.findIndex((s) => String(s.id) === String(student?.id))
-  );
-
-  const studentTingkat = extractTingkatFromKelas(studentKelas);
-  const allClassesInAngkatan = getStudentLoginClasses(allStudentsList)
-    .filter((c) => c.tingkat === studentTingkat)
-    .map((c) => c.kelas.trim().toUpperCase());
-
-  // Calculate cumulative student offset before this class in the same angkatan for exact grade-wide proportionality
-  let cumulativeBeforeClass = 0;
-  for (const clsName of allClassesInAngkatan) {
-    if (clsName === studentKelas.toUpperCase()) break;
-    const normCls = clsName.toLowerCase();
-    cumulativeBeforeClass += allStudentsList.filter(
-      (s) => (s.kelas || '').trim().toLowerCase() === normCls
-    ).length;
-  }
-
-  const proportionalSeed = cumulativeBeforeClass + rankInClass;
-
-  if (sortedMatched.length === 0) {
+  if (bySubject.length === 0) {
     return {
       exam: null,
       matchedExams: [],
       packageCode: student?.kode_soal || 'PAKET-A',
-      variantLetter: 'A',
-      proportionalIndex: 0,
+      variantLetter: absenInfo.isGanjil ? 'A' : 'B',
+      proportionalIndex: absenInfo.rankIndex % 2,
       totalPackagesInPool: 0,
-      studentRankInClass: rankInClass + 1,
-      classTotalStudents: classStudents.length || 1,
+      studentRankInClass: absenInfo.noAbsen,
+      classTotalStudents: absenInfo.totalInClass,
     };
   }
 
-  // 3. If multiple active ExamItems exist for this class/angkatan, distribute students proportionally across them
-  if (sortedMatched.length > 1) {
-    let chosenIdx = proportionalSeed % sortedMatched.length;
-
-    // Only honor preferredExamId if explicitly requested AND valid in sortedMatched
-    if (preferredExamId !== undefined && preferredExamId !== null && String(preferredExamId) !== '') {
-      const prefIdx = sortedMatched.findIndex(
-        (e) => String(e.id) === String(preferredExamId)
-      );
-      if (prefIdx >= 0) {
-        chosenIdx = prefIdx;
-      }
-    }
-
-    const chosenExam = sortedMatched[chosenIdx];
-    const uniqueKodePakets = new Set(
-      sortedMatched
-        .map((e) => (e.kode_paket || '').trim().toUpperCase())
-        .filter(Boolean)
+  // If preferredExamId is passed, find the subject group containing that exam
+  if (
+    preferredExamId !== undefined &&
+    preferredExamId !== null &&
+    String(preferredExamId) !== ''
+  ) {
+    const matchedSubjectAlloc = bySubject.find(
+      (item) =>
+        String(item.assignedExam.id) === String(preferredExamId) ||
+        item.allPackagesInSubject.some(
+          (e) => String(e.id) === String(preferredExamId)
+        )
     );
-    const hasDistinctKodePaket = uniqueKodePakets.size === sortedMatched.length;
-
-    const letter = String.fromCharCode(65 + (chosenIdx % 26));
-    const packageCode =
-      hasDistinctKodePaket && chosenExam.kode_paket
-        ? chosenExam.kode_paket.trim().toUpperCase()
-        : `PAKET-${letter}`;
-
-    return {
-      exam: chosenExam,
-      matchedExams: sortedMatched,
-      packageCode,
-      variantLetter: letter,
-      proportionalIndex: chosenIdx,
-      totalPackagesInPool: sortedMatched.length,
-      studentRankInClass: rankInClass + 1,
-      classTotalStudents: classStudents.length || 1,
-    };
+    if (matchedSubjectAlloc) {
+      const exactExam =
+        matchedSubjectAlloc.allPackagesInSubject.find(
+          (e) => String(e.id) === String(preferredExamId)
+        ) || matchedSubjectAlloc.assignedExam;
+      return {
+        exam: exactExam,
+        matchedExams: matchedSubjectAlloc.allPackagesInSubject,
+        packageCode:
+          exactExam.kode_paket?.trim().toUpperCase() ||
+          matchedSubjectAlloc.assignedPackageCode,
+        variantLetter: matchedSubjectAlloc.variantLetter,
+        proportionalIndex: matchedSubjectAlloc.packageIndex,
+        totalPackagesInPool: matchedSubjectAlloc.totalPackagesForSubject,
+        studentRankInClass: absenInfo.noAbsen,
+        classTotalStudents: absenInfo.totalInClass,
+      };
+    }
   }
 
-  // 4. Single active ExamItem for this class/angkatan
-  const singleExam = sortedMatched[0];
-  const numVariants = singleExam.mode_multi_paket
-    ? Math.max(2, singleExam.jumlah_paket || 2)
-    : 1;
-  const variantIdx = proportionalSeed % numVariants;
-  const letter = String.fromCharCode(65 + (variantIdx % 26));
-  const packageCode = singleExam.mode_multi_paket
-    ? `PAKET-${letter}`
-    : (singleExam.kode_paket || student?.kode_soal || 'PAKET-A').trim().toUpperCase();
-
+  const primary = bySubject[0];
   return {
-    exam: singleExam,
-    matchedExams: sortedMatched,
-    packageCode,
-    variantLetter: letter,
-    proportionalIndex: variantIdx,
-    totalPackagesInPool: numVariants,
-    studentRankInClass: rankInClass + 1,
-    classTotalStudents: classStudents.length || 1,
+    exam: primary.assignedExam,
+    matchedExams: primary.allPackagesInSubject,
+    packageCode: primary.assignedPackageCode,
+    variantLetter: primary.variantLetter,
+    proportionalIndex: primary.packageIndex,
+    totalPackagesInPool: primary.totalPackagesForSubject,
+    studentRankInClass: absenInfo.noAbsen,
+    classTotalStudents: absenInfo.totalInClass,
   };
 }
 

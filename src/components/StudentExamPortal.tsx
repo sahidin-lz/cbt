@@ -41,6 +41,8 @@ import {
   calculateExamScore,
   prepareStudentExamQuestions,
   resolveProportionalStudentExamPackage,
+  getEffectiveMataPelajaran,
+  getStudentAbsenInfoInClass,
 } from '../utils/cbtLogic';
 import { downloadSingleStudentResultPdf } from '../utils/cbtPdfGenerator';
 import { MathAndTableRenderer } from './MathAndTableRenderer';
@@ -447,19 +449,122 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     }
   }, [exams, matchedExamsForSelectedClass, studentProportionalAllocation, selectedExamId]);
 
-  const requestExamFullscreen = useCallback(async () => {
+  const tabInstanceIdRef = useRef<string>(
+    `tab_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+  );
+  const [isClosedByOtherExamTab, setIsClosedByOtherExamTab] = useState(false);
+
+  const broadcastCloseOtherTabsAndApps = useCallback(
+    (studentName?: string, examTitle?: string) => {
+      const payload = {
+        type: 'CLOSE_OTHER_TABS',
+        sourceTabId: tabInstanceIdRef.current,
+        studentName: studentName || activeStudent?.nama || loggedInAccount?.nama || 'Siswa',
+        examTitle: examTitle || activeExam?.judul_ujian || 'Sesi Ujian CBT',
+        timestamp: Date.now(),
+      };
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          const channel = new BroadcastChannel('cbt_exam_kiosk_channel');
+          channel.postMessage(payload);
+          channel.close();
+        }
+      } catch {
+        // Ignore if BroadcastChannel is not supported
+      }
+      try {
+        localStorage.setItem('cbt_kiosk_close_signal', JSON.stringify(payload));
+      } catch {
+        // Ignore storage error
+      }
+    },
+    [activeStudent?.nama, loggedInAccount?.nama, activeExam?.judul_ujian]
+  );
+
+  // Listen for cross-tab auto-close signal when an exam starts in another tab
+  useEffect(() => {
+    const handleIncomingSignal = (data: any) => {
+      if (!data || data.type !== 'CLOSE_OTHER_TABS') return;
+      if (data.sourceTabId && data.sourceTabId !== tabInstanceIdRef.current) {
+        setIsClosedByOtherExamTab(true);
+        try {
+          window.opener = null;
+          window.close();
+        } catch {
+          // If browser blocks script window.close(), the tab stays locked on the closed-tab screen
+        }
+      }
+    };
+
+    let channel: BroadcastChannel | null = null;
     try {
-      if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
-        await document.documentElement.requestFullscreen();
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel('cbt_exam_kiosk_channel');
+        channel.onmessage = (event) => handleIncomingSignal(event.data);
       }
     } catch {
-      // Ignore if browser blocks automatic fullscreen
+      channel = null;
     }
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'cbt_kiosk_close_signal' && e.newValue) {
+        try {
+          handleIncomingSignal(JSON.parse(e.newValue));
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      if (channel) {
+        try {
+          channel.close();
+        } catch {}
+      }
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
+
+  const requestExamFullscreen = useCallback(async () => {
+    broadcastCloseOtherTabsAndApps();
+    const docEl = document.documentElement as HTMLElement & {
+      requestFullscreen?: (options?: FullscreenOptions) => Promise<void>;
+    };
+    try {
+      if (!document.fullscreenElement && typeof docEl.requestFullscreen === 'function') {
+        await docEl.requestFullscreen({
+          navigationUI: 'hide',
+        });
+      }
+      if (
+        typeof navigator !== 'undefined' &&
+        (navigator as any).keyboard &&
+        typeof (navigator as any).keyboard.lock === 'function'
+      ) {
+        await (navigator as any).keyboard
+          .lock(['Escape', 'F11', 'MetaLeft', 'MetaRight', 'AltLeft', 'AltRight', 'Tab'])
+          .catch(() => {});
+      }
+    } catch {
+      try {
+        if (!document.fullscreenElement && typeof docEl.requestFullscreen === 'function') {
+          await docEl.requestFullscreen();
+        }
+      } catch {
+        // Ignore if browser blocks automatic fullscreen
+      }
+    }
+  }, [broadcastCloseOtherTabsAndApps]);
 
   useEffect(() => {
     const onFsChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const fsActive = Boolean(document.fullscreenElement);
+      setIsFullscreen(fsActive);
+      if (!fsActive && typeof navigator !== 'undefined' && (navigator as any).keyboard?.unlock) {
+        try {
+          (navigator as any).keyboard.unlock();
+        } catch {}
+      }
     };
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
@@ -552,6 +657,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       );
     }
 
+    setIsClosedByOtherExamTab(false);
+    broadcastCloseOtherTabsAndApps(currentAccount.nama, targetExam.judul_ujian);
     requestExamFullscreen();
     setIsLoggingIn(true);
 
@@ -1136,6 +1243,42 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     }
   };
 
+  // 0. RENDER AUTO-CLOSED DUPLICATE TAB SCREEN (WHEN EXAM STARTS IN PRIMARY TAB)
+  if (isClosedByOtherExamTab) {
+    return (
+      <div className="min-h-[80vh] max-w-3xl mx-auto w-full py-12 px-4 sm:px-6 flex items-center justify-center select-none">
+        <div className="bg-slate-900 text-white border-2 border-red-500/80 rounded-2xl p-8 shadow-xl text-center space-y-4 w-full">
+          <div className="w-14 h-14 rounded-2xl bg-red-500/20 border border-red-400/40 flex items-center justify-center mx-auto">
+            <Lock className="w-7 h-7 text-red-400" />
+          </div>
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-red-500/20 border border-red-400/30 text-red-300 text-xs font-bold uppercase tracking-wider">
+            Isolasi Sesi Ujian CBT Aktif · Tab Lain Ditutup Otomatis
+          </div>
+          <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white">
+            Tab Ini Telah Ditutup Otomatis Karena Anda Sedang Memulai Ujian
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-xl mx-auto">
+            Demi kejujuran akademik dan keamanan ujian, sistem otomatis menutup dan menonaktifkan seluruh tab lain saat lembar soal dibuka. Silakan lanjutkan pengerjaan ujian Anda pada <strong>jendela/tab ujian utama yang sedang berada dalam Mode Layar Penuh (Fullscreen)</strong>.
+          </p>
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  window.close();
+                } catch {}
+                setIsClosedByOtherExamTab(false);
+              }}
+              className="px-5 py-2.5 text-xs font-bold text-slate-900 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors cursor-pointer"
+            >
+              Tutup Tab Ini / Kembali ke Jendela Aktif
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // 1. RENDER COMPLETED EXAM SUMMARY SCREEN
   if (activeStudent && submittedSummary) {
     return (
@@ -1711,26 +1854,36 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     (k) => answers[k] && answers[k].length > 0
   ).length;
 
+  const activeAbsenInfo = getStudentAbsenInfoInClass(activeStudent, students);
+  const activeMataPelajaran = getEffectiveMataPelajaran(activeExam);
+
   return (
     <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 space-y-4 select-none">
       {/* Clean Institutional Exam Status Header */}
       <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-2xs">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-bold text-[11px]">
+              Mapel: {activeMataPelajaran}
+            </span>
+            <span className="text-slate-300">·</span>
             <span>
               Peserta: <strong className="text-slate-900 font-semibold">{activeStudent.nama}</strong>
             </span>
             <span className="text-slate-300">·</span>
             <span>Kelas {activeStudent.kelas}</span>
             <span className="text-slate-300">·</span>
-            <span>
-              Token:{' '}
-              <span className="font-mono tabular-nums font-semibold text-blue-700">
-                {activeStudent.token_ujian}
-              </span>
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-bold ${
+                activeAbsenInfo.isGanjil
+                  ? 'bg-amber-100 text-amber-900'
+                  : 'bg-sky-100 text-sky-900'
+              }`}
+            >
+              Absen #{activeAbsenInfo.noAbsen} ({activeAbsenInfo.ganjilGenapLabel})
             </span>
             <span className="text-slate-300">·</span>
-            <span className="font-mono font-semibold text-slate-700">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-600 text-white font-mono text-[11px] font-bold">
               {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
             </span>
             {activeExam?.acak_soal !== false && (
@@ -1809,6 +1962,25 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Fullscreen & Tab/App Isolation Enforcement Banner */}
+      {!isFullscreen && !isStudentBlocked && (
+        <div className="bg-gradient-to-r from-indigo-950 via-slate-900 to-blue-950 text-white border border-indigo-500/40 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <Maximize2 className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Mode Isolasi Ujian Penuh (Auto-Close Tab &amp; Aplikasi Lain):</strong> Klik tombol di samping untuk mengunci tampilan layar penuh sehingga tab browser lain dan taskbar aplikasi tertutup selama ujian berlangsung.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={requestExamFullscreen}
+            className="px-3.5 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors cursor-pointer shrink-0"
+          >
+            Aktifkan Layar Penuh &amp; Tutup Tab Lain
+          </button>
+        </div>
+      )}
 
       {/* Resume Progress Notice Banner */}
       {resumeNotice && (

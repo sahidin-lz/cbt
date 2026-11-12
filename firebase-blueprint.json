@@ -90,6 +90,20 @@
           "description": "Announcement shown on the student dashboard.",
           "maxLength": 600
         },
+        "mata_pelajaran": {
+          "type": "string",
+          "description": "Subject name for multi-subject CBT exams (e.g. Sosiologi, Ekonomi, Sejarah).",
+          "maxLength": 80
+        },
+        "distribusi_paket_mode": {
+          "type": "string",
+          "description": "Distribution mode for exam packages (OTOMATIS_GANJIL_GENAP, KHUSUS_GANJIL, KHUSUS_GENAP, MANUAL_SISWA).",
+          "maxLength": 40
+        },
+        "target_siswa_ids": {
+          "type": "array",
+          "description": "Optional list of specific student IDs assigned to receive this exam package."
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",

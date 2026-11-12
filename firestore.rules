@@ -21,7 +21,7 @@ service cloud.firestore {
 
     function isValidExam(data) {
       return data.keys().hasAll(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'kategori_ujian', 'status_ujian', 'target_rombel', 'jadwal_mulai', 'jadwal_selesai', 'acak_soal', 'acak_opsi', 'kode_paket', 'mode_multi_paket', 'jumlah_paket', 'token_sesi', 'tampilkan_nilai', 'pengumuman', 'authorUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'kategori_ujian', 'status_ujian', 'target_rombel', 'jadwal_mulai', 'jadwal_selesai', 'acak_soal', 'acak_opsi', 'kode_paket', 'mode_multi_paket', 'jumlah_paket', 'token_sesi', 'tampilkan_nilai', 'pengumuman', 'mata_pelajaran', 'distribusi_paket_mode', 'target_siswa_ids', 'authorUid', 'updatedAt']) &&
         data.id is number && data.id >= 1 &&
         data.judul_ujian is string && data.judul_ujian.size() >= 1 && data.judul_ujian.size() <= 200 &&
         data.durasi_menit is number && data.durasi_menit >= 1 && data.durasi_menit <= 300 &&
@@ -41,6 +41,9 @@ service cloud.firestore {
         (!('token_sesi' in data) || (data.token_sesi is string && data.token_sesi.size() <= 20)) &&
         (!('tampilkan_nilai' in data) || data.tampilkan_nilai is bool) &&
         (!('pengumuman' in data) || (data.pengumuman is string && data.pengumuman.size() <= 600)) &&
+        (!('mata_pelajaran' in data) || (data.mata_pelajaran is string && data.mata_pelajaran.size() <= 80)) &&
+        (!('distribusi_paket_mode' in data) || (data.distribusi_paket_mode is string && data.distribusi_paket_mode.size() <= 40)) &&
+        (!('target_siswa_ids' in data) || (data.target_siswa_ids is list && data.target_siswa_ids.size() <= 1000)) &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 

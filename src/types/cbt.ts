@@ -49,6 +49,14 @@ export interface ExamItem {
   token_sesi?: string; // Token Sesi Ujian dinamis yang diberikan dan diatur oleh Guru setiap akan ujian
   tampilkan_nilai?: boolean; // Apakah nilai langsung ditampilkan ke siswa di menu Hasil Ujian
   pengumuman?: string; // Pengumuman dari guru/sekolah di Beranda Siswa
+  mata_pelajaran?: string; // Nama Mata Pelajaran (misal: 'Sosiologi', 'Ekonomi', 'Sejarah', 'Matematika', dll.)
+  distribusi_paket_mode?:
+    | 'OTOMATIS_GANJIL_GENAP'
+    | 'KHUSUS_GANJIL'
+    | 'KHUSUS_GENAP'
+    | 'MANUAL_SISWA'
+    | string; // Mode pembagian paket soal ke siswa
+  target_siswa_ids?: number[]; // Daftar ID siswa spesifik jika didistribusikan ke siswa tertentu
   created_at?: string;
   authorUid?: string;
   updatedAt?: string;

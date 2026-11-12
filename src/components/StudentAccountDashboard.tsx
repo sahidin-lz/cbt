@@ -34,8 +34,11 @@ import {
 } from '../types/cbt';
 import {
   extractTingkatFromKelas,
+  getEffectiveMataPelajaran,
+  getStudentAbsenInfoInClass,
   isExamMatchedForStudentClass,
   resolveProportionalStudentExamPackage,
+  resolveStudentExamPackagesBySubject,
   resolveSyncedStudentAnswersForExam,
   verifyExamSessionToken,
 } from '../utils/cbtLogic';
@@ -122,6 +125,11 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     [student.kelas]
   );
 
+  const absenInfo = useMemo(
+    () => getStudentAbsenInfoInClass(student, allStudents),
+    [student, allStudents]
+  );
+
   // Proportional package allocation for this student
   const proportionalAlloc = useMemo(() => {
     if (exams.length === 0) return null;
@@ -133,19 +141,47 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     });
   }, [student, allStudents, exams, questions]);
 
-  // All exams distributed to this student's class/grade (active & non-active)
+  // Subject-by-subject assigned packages (Active exams: each subject resolves the student's exact Ganjil/Genap or assigned package)
+  const activeSubjectAllocations = useMemo(() => {
+    return resolveStudentExamPackagesBySubject({
+      student,
+      allStudents,
+      exams,
+      questions,
+      requireActive: true,
+    });
+  }, [student, allStudents, exams, questions]);
+
+  // Subject-by-subject assigned packages (All statuses for Jadwal Ujian)
+  const allSubjectAllocations = useMemo(() => {
+    return resolveStudentExamPackagesBySubject({
+      student,
+      allStudents,
+      exams,
+      questions,
+      requireActive: false,
+    });
+  }, [student, allStudents, exams, questions]);
+
+  // All exams distributed to this student's class/grade (filtered so if multiple packages exist for a subject, the student receives their assigned Ganjil/Genap package)
   const classMatchedExams = useMemo(() => {
+    if (allSubjectAllocations.length > 0) {
+      return allSubjectAllocations.map((a) => a.assignedExam);
+    }
     return exams.filter((ex) =>
       isExamMatchedForStudentClass(ex, student.kelas, { requireActive: false })
     );
-  }, [exams, student.kelas]);
+  }, [allSubjectAllocations, exams, student.kelas]);
 
-  // Active exams available right now for this student's class
+  // Active exams available right now for this student's class (per subject)
   const activeClassExams = useMemo(() => {
+    if (activeSubjectAllocations.length > 0) {
+      return activeSubjectAllocations.map((a) => a.assignedExam);
+    }
     return exams.filter((ex) =>
       isExamMatchedForStudentClass(ex, student.kelas, { requireActive: true })
     );
-  }, [exams, student.kelas]);
+  }, [activeSubjectAllocations, exams, student.kelas]);
 
   // All submitted results belonging to this student
   const studentResults = useMemo(() => {
@@ -355,7 +391,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 <span>Akun Siswa Terverifikasi</span>
               </span>
               <span className="px-2.5 py-0.5 rounded-md font-mono font-bold bg-indigo-500/30 text-amber-300 border border-indigo-400/30">
-                Kelas {student.kelas}
+                Kelas {student.kelas} · No. Absen #{absenInfo.noAbsen} ({absenInfo.ganjilGenapLabel})
               </span>
               {student.nisn && (
                 <span className="px-2.5 py-0.5 rounded-md font-mono text-blue-200 bg-white/10 border border-white/15">
@@ -364,7 +400,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
               )}
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono font-extrabold bg-amber-400 text-slate-950">
                 <Shuffle className="w-3 h-3" />
-                <span>{assignedPackageBadge}</span>
+                <span>{assignedPackageBadge} ({absenInfo.ganjilGenapLabel})</span>
               </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white">
@@ -713,14 +749,17 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                       >
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-indigo-600 text-white">
+                              Mapel: {getEffectiveMataPelajaran(ex)}
+                            </span>
                             <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
                               AKTIF DIBUKA
                             </span>
                             <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
-                              {ex.kategori_ujian || 'Ujian Sosiologi'}
+                              {ex.kategori_ujian || 'Ujian CBT'}
                             </span>
                             <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
-                              {assignedPackageBadge}
+                              {ex.kode_paket || assignedPackageBadge} · Absen #{absenInfo.noAbsen} ({absenInfo.ganjilGenapLabel})
                             </span>
                           </div>
                           <h3 className="text-base font-extrabold text-slate-900">
@@ -844,9 +883,14 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                     >
                       <div className="space-y-2.5">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
-                            {ex.kategori_ujian || 'Penilaian Harian (PH / Kuis)'}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="px-2.5 py-0.5 rounded-md text-[11px] font-extrabold bg-indigo-600 text-white">
+                              Mapel: {getEffectiveMataPelajaran(ex)}
+                            </span>
+                            <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                              {ex.kategori_ujian || 'Penilaian Harian (PH / Kuis)'}
+                            </span>
+                          </div>
 
                           {isAktif ? (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
@@ -1594,12 +1638,23 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
               <div className="p-3.5 rounded-xl bg-blue-50/80 border border-blue-200 text-xs text-blue-950 space-y-1">
                 <div className="font-bold flex items-center gap-1.5 text-blue-900">
                   <KeyRound className="w-4 h-4 text-blue-600 shrink-0" />
-                  <span>Masukkan Token Sesi Ujian dari Guru</span>
+                  <span>
+                    Mapel {getEffectiveMataPelajaran(tokenModalExam)} · Paket{' '}
+                    {tokenModalExam.kode_paket || assignedPackageBadge} (Absen #{absenInfo.noAbsen} {absenInfo.ganjilGenapLabel})
+                  </span>
                 </div>
                 <p className="text-blue-800 leading-relaxed">
                   Ketikkan <strong>Token Sesi Ujian</strong> yang diumumkan oleh
                   Guru / Pengawas di kelas untuk membuka lembar soal ujian ini.
                 </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-[11px] text-amber-950 flex items-start gap-2">
+                <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-extrabold">Mode Isolasi Ujian Penuh (Auto-Close Tab &amp; Aplikasi Lain):</span>{' '}
+                  Begitu Anda mengklik <strong>Mulai Kerjakan Soal</strong>, sistem otomatis mengunci layar penuh (Kiosk Mode) dan menutup/memblokir akses ke seluruh tab lain maupun aplikasi lain selama ujian berlangsung.
+                </div>
               </div>
 
               <div>
