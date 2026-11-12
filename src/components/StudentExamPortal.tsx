@@ -71,6 +71,9 @@ export interface StudentExamProgress {
   kelas: string;
   token_ujian: string;
   examId: number;
+  assignedPackageCode?: string;
+  questionOrderIds?: number[];
+  preparedQuestions?: QuestionItem[];
   answers: Record<string, string[]>;
   currentIndex: number;
   remainingSeconds: number;
@@ -107,10 +110,15 @@ const HISTORY_KEY_PREFIX = 'cbt_history_student_';
 
 function saveLocalProgress(token: string, data: StudentExamProgress) {
   try {
-    localStorage.setItem(
-      PROGRESS_KEY_PREFIX + token.toUpperCase().trim(),
-      JSON.stringify(data)
-    );
+    const cleanToken = token.toUpperCase().trim();
+    const serialized = JSON.stringify(data);
+    localStorage.setItem(PROGRESS_KEY_PREFIX + cleanToken, serialized);
+    if (data.examId) {
+      localStorage.setItem(
+        `${PROGRESS_KEY_PREFIX}${cleanToken}_exam_${Number(data.examId)}`,
+        serialized
+      );
+    }
   } catch (e) {
     console.error('Failed to save progress to localStorage', e);
   }
@@ -121,9 +129,22 @@ function getLocalProgress(
   examId?: number
 ): StudentExamProgress | null {
   try {
-    const raw = localStorage.getItem(
-      PROGRESS_KEY_PREFIX + token.toUpperCase().trim()
-    );
+    const cleanToken = token.toUpperCase().trim();
+    if (examId) {
+      const examSpecificRaw = localStorage.getItem(
+        `${PROGRESS_KEY_PREFIX}${cleanToken}_exam_${Number(examId)}`
+      );
+      if (examSpecificRaw) {
+        const parsedExamSpecific: StudentExamProgress = JSON.parse(examSpecificRaw);
+        if (
+          !parsedExamSpecific.examId ||
+          Number(parsedExamSpecific.examId) === Number(examId)
+        ) {
+          return parsedExamSpecific;
+        }
+      }
+    }
+    const raw = localStorage.getItem(PROGRESS_KEY_PREFIX + cleanToken);
     if (!raw) return null;
     const parsed: StudentExamProgress = JSON.parse(raw);
     if (examId && parsed.examId && Number(parsed.examId) !== Number(examId)) {
@@ -135,9 +156,15 @@ function getLocalProgress(
   }
 }
 
-function clearLocalProgress(token: string) {
+function clearLocalProgress(token: string, examId?: number) {
   try {
-    localStorage.removeItem(PROGRESS_KEY_PREFIX + token.toUpperCase().trim());
+    const cleanToken = token.toUpperCase().trim();
+    localStorage.removeItem(PROGRESS_KEY_PREFIX + cleanToken);
+    if (examId) {
+      localStorage.removeItem(
+        `${PROGRESS_KEY_PREFIX}${cleanToken}_exam_${Number(examId)}`
+      );
+    }
   } catch {}
 }
 
@@ -404,7 +431,44 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     onExamStateChange?.(isRunning);
   }, [activeStudent, submittedSummary, onExamStateChange]);
 
-  // Real-time synchronization & autosave to ensure reload/logout never loses data
+  // Keep examQuestions bobot synchronized with live Bank Soal weights while preserving student's exact question order & option shuffle
+  useEffect(() => {
+    if (!activeStudent || !activeExam || questions.length === 0 || examQuestions.length === 0) {
+      return;
+    }
+    const qMap = new Map<number, QuestionItem>();
+    for (const q of questions) {
+      qMap.set(Number(q.id), q);
+    }
+    let hasChanged = false;
+    const syncedList = examQuestions.map((eq) => {
+      const liveQ = qMap.get(Number(eq.id));
+      if (!liveQ) return eq;
+      const liveBobot =
+        Number(liveQ.bobot) > 0
+          ? Number(liveQ.bobot)
+          : Number(eq.bobot) > 0
+          ? Number(eq.bobot)
+          : String(liveQ.tipe_soal || eq.tipe_soal || '')
+              .toLowerCase()
+              .includes('kompleks')
+          ? 3
+          : 2;
+      if (Number(eq.bobot) !== liveBobot) {
+        hasChanged = true;
+        return {
+          ...eq,
+          bobot: liveBobot,
+        };
+      }
+      return eq;
+    });
+    if (hasChanged) {
+      setExamQuestions(syncedList);
+    }
+  }, [questions, activeStudent, activeExam, examQuestions]);
+
+  // Real-time synchronization & autosave to ensure reload/logout/error never loses package, shuffle order, or answers
   useEffect(() => {
     if (!activeStudent || !activeExam || submittedSummary) return;
 
@@ -414,6 +478,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       kelas: activeStudent.kelas,
       token_ujian: activeStudent.token_ujian,
       examId: activeExam.id,
+      assignedPackageCode:
+        activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+      questionOrderIds: examQuestions.map((q) => Number(q.id)),
+      preparedQuestions: examQuestions,
       answers,
       currentIndex,
       remainingSeconds,
@@ -622,8 +690,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       const enrichedStudent: StudentItem = {
         ...matchedStudent,
         kode_soal:
-          matchedStudent.kode_soal ||
           proportional?.packageCode ||
+          matchedStudent.kode_soal ||
           'PAKET-A',
       };
 
@@ -667,25 +735,36 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         .toUpperCase()
         .trim();
 
+      const preSavedProgress = getLocalProgress(cleanSystemToken, targetExam.id);
+      const preferredExamIdToUse = preSavedProgress?.examId || targetExam.id;
+
       const session = await loginStudentExamCbt(
         currentAccount.nama,
         cleanSystemToken,
-        targetExam.id
+        preferredExamIdToUse
       );
 
-      const savedProgress = getLocalProgress(cleanSystemToken, session.exam?.id);
+      const savedProgress =
+        getLocalProgress(cleanSystemToken, session.exam?.id) || preSavedProgress;
 
       const proportional = resolveProportionalStudentExamPackage({
         student: currentAccount,
         allStudents: students,
         exams,
         questions,
+        preferredExamId: session.exam?.id || preferredExamIdToUse,
       });
 
+      // Deterministic Priority:
+      // 1. Saved package code from previous interrupted attempt on this exam
+      // 2. Proportional Ganjil/Genap or Multi-Mapel package allocation
+      // 3. Student's assigned kode_soal from login session
+      // 4. Exam default kode_paket
       const syncedPackageCode =
-        session.exam?.kode_paket ||
-        session.student.kode_soal ||
+        savedProgress?.assignedPackageCode ||
         proportional?.packageCode ||
+        session.student.kode_soal ||
+        session.exam?.kode_paket ||
         'PAKET-A';
 
       const prepared = prepareStudentExamQuestions({
@@ -696,6 +775,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         },
         exam: session.exam,
         forcedPackageCode: syncedPackageCode,
+        lockedQuestionOrderIds: savedProgress?.questionOrderIds,
       });
 
       const updatedStudent: StudentItem = {
@@ -734,12 +814,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             action: 'resume',
-            detail: `Siswa masuk kembali dan melanjutkan sesi ujian (${Object.keys(savedProgress.answers).length} jawaban dipulihkan).`,
+            detail: `Siswa masuk kembali dan melanjutkan sesi ujian [${prepared.studentPackageCode}] (${Object.keys(savedProgress.answers).length} jawaban dipulihkan dengan urutan soal konsisten).`,
           },
         ];
         setActivityLogs(resumedLogs);
         setResumeNotice(
-          `Sesi Ujian Dilanjutkan! Jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis.`
+          `Sesi Ujian Dilanjutkan (${prepared.studentPackageCode})! Urutan soal, paket soal, dan jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis.`
         );
       } else {
         setAnswers({});
@@ -750,7 +830,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             action: 'login',
-            detail: `Siswa memulai sesi ujian "${session.exam?.judul_ujian || targetExam.judul_ujian}" setelah verifikasi Token Sesi Ujian.`,
+            detail: `Siswa memulai sesi ujian "${session.exam?.judul_ujian || targetExam.judul_ujian}" [${prepared.studentPackageCode}] setelah verifikasi Token Sesi Ujian.`,
           },
         ]);
         setResumeNotice(null);
@@ -816,7 +896,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           });
         } else if (newStatus === 'Belum Mulai') {
           // Teacher reset this student's session
-          clearLocalProgress(activeStudent.token_ujian);
+          clearLocalProgress(activeStudent.token_ujian, activeExam?.id);
           clearActiveStudentSession();
           setActiveStudent(null);
           setSubmittedSummary(null);
@@ -862,6 +942,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         kelas: activeStudent.kelas,
         token_ujian: activeStudent.token_ujian,
         examId: activeExam ? activeExam.id : 0,
+        assignedPackageCode:
+          activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A',
+        questionOrderIds: examQuestions.map((q) => Number(q.id)),
+        preparedQuestions: examQuestions,
         answers,
         currentIndex,
         remainingSeconds,
@@ -1004,6 +1088,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             kelas: activeStudent.kelas,
             token_ujian: activeStudent.token_ujian,
             examId: activeExam.id,
+            assignedPackageCode:
+              activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+            questionOrderIds: examQuestions.map((q) => Number(q.id)),
+            preparedQuestions: examQuestions,
             answers,
             currentIndex,
             remainingSeconds,
@@ -1082,7 +1170,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       }
 
       // Clear in-progress storage upon successful submission
-      clearLocalProgress(activeStudent.token_ujian);
+      clearLocalProgress(activeStudent.token_ujian, activeExam.id);
       clearActiveStudentSession();
 
       // Save complete receipt to student's history
@@ -1193,6 +1281,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         kelas: activeStudent.kelas,
         token_ujian: activeStudent.token_ujian,
         examId: activeExam.id,
+        assignedPackageCode:
+          activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+        questionOrderIds: examQuestions.map((q) => Number(q.id)),
+        preparedQuestions: examQuestions,
         answers: nextAnswersMap,
         currentIndex,
         remainingSeconds,

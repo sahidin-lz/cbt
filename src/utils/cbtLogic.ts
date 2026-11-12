@@ -2386,17 +2386,24 @@ export function resolveProportionalStudentExamPackage<
         )
     );
     if (matchedSubjectAlloc) {
+      // Always honor the student's deterministic package assignment for this subject unless a specific different package ID was explicitly requested
       const exactExam =
         matchedSubjectAlloc.allPackagesInSubject.find(
           (e) => String(e.id) === String(preferredExamId)
         ) || matchedSubjectAlloc.assignedExam;
+      const isAssignedExam =
+        String(exactExam.id) === String(matchedSubjectAlloc.assignedExam.id);
+      const effectivePackageCode = isAssignedExam
+        ? matchedSubjectAlloc.assignedPackageCode
+        : exactExam.kode_paket?.trim().toUpperCase() ||
+          matchedSubjectAlloc.assignedPackageCode;
       return {
         exam: exactExam,
         matchedExams: matchedSubjectAlloc.allPackagesInSubject,
-        packageCode:
-          exactExam.kode_paket?.trim().toUpperCase() ||
-          matchedSubjectAlloc.assignedPackageCode,
-        variantLetter: matchedSubjectAlloc.variantLetter,
+        packageCode: effectivePackageCode,
+        variantLetter:
+          effectivePackageCode.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z0-9]/gi, '') ||
+          matchedSubjectAlloc.variantLetter,
         proportionalIndex: matchedSubjectAlloc.packageIndex,
         totalPackagesInPool: matchedSubjectAlloc.totalPackagesForSubject,
         studentRankInClass: absenInfo.noAbsen,
@@ -2511,9 +2518,10 @@ export function mapStudentAnswersToCanonicalKeys(
 /**
  * Prepares the final question set for a student, orchestrating:
  * 1. Synchronized Package Code determination (never mismatched with activeExam)
- * 2. Full Question Set preservation (all 40 questions preserved)
- * 3. Seeded Question Shuffling (Acak Soal - if enabled)
- * 4. Seeded Option Shuffling with Recalculated Answer Keys (Acak Opsi - if enabled)
+ * 2. Deterministic Canonical Sorting by Question ID before shuffling (so network/Firestore fetch order never alters a student's question sequence)
+ * 3. Optional Locked Question Order recovery (`lockedQuestionOrderIds`) if the student resumes after an error/reload
+ * 4. Seeded Question Shuffling (Acak Soal - if enabled)
+ * 5. Seeded Option Shuffling with Recalculated Answer Keys & Preserved Bobot (Acak Opsi - if enabled)
  */
 export function prepareStudentExamQuestions<T extends {
   id: number | string;
@@ -2549,6 +2557,7 @@ export function prepareStudentExamQuestions<T extends {
     jumlah_paket?: number;
   };
   forcedPackageCode?: string;
+  lockedQuestionOrderIds?: (number | string)[];
 }): {
   questions: T[];
   studentPackageCode: string;
@@ -2556,19 +2565,38 @@ export function prepareStudentExamQuestions<T extends {
   isOptionShuffled: boolean;
   originalQuestionCount: number;
 } {
-  const { questions, student, exam, forcedPackageCode } = params;
+  const { questions, student, exam, forcedPackageCode, lockedQuestionOrderIds } = params;
   // Filter to only questions belonging to this exam_id if exam_id is populated
   const examSpecificQuestions = (questions || []).filter(
     (q) => q.exam_id === undefined || Number(q.exam_id) === Number(exam.id)
   );
-  const baseQuestions =
+  const rawBaseQuestions =
     examSpecificQuestions.length > 0 ? examSpecificQuestions : questions || [];
+
+  // Sort deterministically by Question ID and normalize bobot so fetch order never changes shuffle results
+  const baseQuestions = [...rawBaseQuestions]
+    .sort((a, b) => Number(a.id) - Number(b.id))
+    .map((q) => {
+      const correctKeys = normalizeAnswerKeys(q.kunci_jawaban);
+      const isKompleks =
+        String(q.tipe_soal || '').toLowerCase().includes('kompleks') ||
+        correctKeys.length > 1;
+      const defaultBobot = isKompleks ? 3 : 2;
+      const validBobot =
+        typeof q.bobot === 'number' && !Number.isNaN(q.bobot) && q.bobot > 0
+          ? q.bobot
+          : defaultBobot;
+      return {
+        ...q,
+        bobot: validBobot,
+      };
+    });
 
   if (baseQuestions.length === 0) {
     return {
       questions: [],
       studentPackageCode:
-        forcedPackageCode || exam.kode_paket || student.kode_soal || 'PAKET-A',
+        forcedPackageCode || student.kode_soal || exam.kode_paket || 'PAKET-A',
       isQuestionShuffled: false,
       isOptionShuffled: false,
       originalQuestionCount: 0,
@@ -2585,10 +2613,10 @@ export function prepareStudentExamQuestions<T extends {
       student.kode_soal && student.kode_soal.trim()
         ? student.kode_soal.trim().toUpperCase()
         : getDeterministicStudentPackage(student, numVariants);
-  } else if (exam.kode_paket && exam.kode_paket.trim()) {
-    packageCode = exam.kode_paket.trim().toUpperCase();
   } else if (student.kode_soal && student.kode_soal.trim()) {
     packageCode = student.kode_soal.trim().toUpperCase();
+  } else if (exam.kode_paket && exam.kode_paket.trim()) {
+    packageCode = exam.kode_paket.trim().toUpperCase();
   } else {
     packageCode = getDeterministicStudentPackage(student, numVariants);
   }
@@ -2603,17 +2631,41 @@ export function prepareStudentExamQuestions<T extends {
     );
   }
 
-  // 3. Deterministic Seed (incorporates student, token, exam.id, and packageCode)
+  // 3. Deterministic Seed (normalized student.id, packageCode, system token, and exam.id)
+  const cleanStudentId = String(student.id).trim();
+  const cleanToken = String(student.token_ujian || '').toUpperCase().trim();
   const studentSeed = hashStudentSeed(
-    `${student.id}_${packageCode}`,
-    student.token_ujian,
-    exam.id
+    `${cleanStudentId}_${packageCode}`,
+    cleanToken,
+    Number(exam.id)
   );
   const qRng = createSeededRandom(studentSeed);
 
-  // 4. Acak Urutan Soal (Shuffle Questions) - default true unless explicitly false
+  // 4. Acak Urutan Soal (Shuffle Questions) — or restore exact lockedQuestionOrderIds on session recovery
   const shouldShuffleQuestions = exam.acak_soal !== false;
-  if (shouldShuffleQuestions && workingQuestions.length > 1) {
+  if (Array.isArray(lockedQuestionOrderIds) && lockedQuestionOrderIds.length > 0) {
+    const byId = new Map<string, T>();
+    workingQuestions.forEach((q) => byId.set(String(q.id), q));
+    const ordered: T[] = [];
+    const seen = new Set<string>();
+    for (const qId of lockedQuestionOrderIds) {
+      const key = String(qId);
+      const found = byId.get(key);
+      if (found && !seen.has(key)) {
+        ordered.push(found);
+        seen.add(key);
+      }
+    }
+    // Append any newly added questions at the end so nothing is ever lost
+    for (const q of workingQuestions) {
+      const key = String(q.id);
+      if (!seen.has(key)) {
+        ordered.push(q);
+        seen.add(key);
+      }
+    }
+    workingQuestions = ordered;
+  } else if (shouldShuffleQuestions && workingQuestions.length > 1) {
     workingQuestions = shuffleArrayDeterministic(workingQuestions, qRng);
   }
 
@@ -2621,6 +2673,13 @@ export function prepareStudentExamQuestions<T extends {
   const shouldShuffleOptions = exam.acak_opsi !== false;
   if (shouldShuffleOptions) {
     workingQuestions = workingQuestions.map((q, idx) => {
+      // If question is already option-shuffled (has opsi_original_map), don't double-shuffle!
+      if (
+        q.data_opsi?.opsi_original_map &&
+        Object.keys(q.data_opsi.opsi_original_map).length > 0
+      ) {
+        return q;
+      }
       const optSeed = (studentSeed + Number(q.id) * 37 + idx * 13) >>> 0;
       const optRng = createSeededRandom(optSeed);
       return shuffleQuestionOptions(q, optRng);

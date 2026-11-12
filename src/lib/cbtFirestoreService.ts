@@ -1503,67 +1503,76 @@ export async function loginStudentExamCbt(
   const cleanToken = token_ujian.trim();
   const cleanTokenUpper = cleanToken.toUpperCase();
 
-  const apiRes = await safeApiJson<{
-    student?: StudentItem;
-    exam?: ExamItem;
-    questions?: QuestionItem[];
-    error?: string;
-  }>('/api/exam/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      nama: cleanNama,
-      token_ujian: cleanTokenUpper,
-      examId,
-    }),
-  });
-
-  if (apiRes.isApiAvailable && apiRes.ok && apiRes.data?.student && apiRes.data?.exam && apiRes.data?.questions) {
-    const syncedPkg =
-      apiRes.data.student.kode_soal ||
-      apiRes.data.exam.kode_paket ||
-      'PAKET-A';
-    const syncedStudent: StudentItem = {
-      ...apiRes.data.student,
-      status_ujian: 'Sedang Ujian',
-      kode_soal: syncedPkg,
-      variasi_paket:
-        apiRes.data.student.variasi_paket ||
-        syncedPkg.replace(/^PAKET[-_\s]*/i, '') ||
-        'A',
-    };
-    if (db) {
-      await setDoc(
-        doc(db, 'students', String(syncedStudent.id)),
-        buildCleanStudentFirestoreDoc(syncedStudent, new Date().toISOString()),
-        { merge: true }
-      ).catch(() => {});
-    }
-    return {
-      student: syncedStudent,
-      exam: apiRes.data.exam,
-      questions: apiRes.data.questions,
-    };
-  }
-
-  // Fallback / Direct Firebase Firestore verification (also handles custom password_login and Vercel static deployments)
+  // First try Firestore as authoritative source if connected so Ganjil-Genap / Multi-Mapel / Bobot rules are 100% up-to-date
   const fsData = await fetchAllFromFirestore();
+
   if (!fsData) {
+    const apiRes = await safeApiJson<{
+      student?: StudentItem;
+      exam?: ExamItem;
+      questions?: QuestionItem[];
+      error?: string;
+    }>('/api/exam/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nama: cleanNama,
+        token_ujian: cleanTokenUpper,
+        examId,
+      }),
+    });
+
+    if (apiRes.isApiAvailable && apiRes.ok && apiRes.data?.student && apiRes.data?.exam && apiRes.data?.questions) {
+      const syncedPkg =
+        apiRes.data.student.kode_soal ||
+        apiRes.data.exam.kode_paket ||
+        'PAKET-A';
+      const syncedStudent: StudentItem = {
+        ...apiRes.data.student,
+        status_ujian: 'Sedang Ujian',
+        kode_soal: syncedPkg,
+        variasi_paket:
+          apiRes.data.student.variasi_paket ||
+          syncedPkg.replace(/^PAKET[-_\s]*/i, '') ||
+          'A',
+      };
+      const sortedQuestions = [...apiRes.data.questions]
+        .sort((a, b) => Number(a.id) - Number(b.id))
+        .map((q) => ({
+          ...q,
+          bobot:
+            Number(q.bobot) > 0
+              ? Number(q.bobot)
+              : String(q.tipe_soal || '').toLowerCase().includes('kompleks')
+              ? 3
+              : 2,
+        }));
+      return {
+        student: syncedStudent,
+        exam: apiRes.data.exam,
+        questions: sortedQuestions,
+      };
+    }
+
     if (apiRes.isApiAvailable && apiRes.data?.error) {
       throw new Error(apiRes.data.error);
     }
     throw new Error('Tidak dapat terhubung ke database Firebase Firestore.');
   }
 
-  const matchedStudent = fsData.students.find((s) => {
-    const nameMatch = s.nama.trim().toLowerCase() === cleanNama.toLowerCase();
-    const sysTokenMatch = (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper;
-    const customPassMatch =
-      Boolean(s.password_login) &&
-      (s.password_login!.trim() === cleanToken ||
-        s.password_login!.trim().toUpperCase() === cleanTokenUpper);
-    return nameMatch && (sysTokenMatch || customPassMatch);
-  }) || fsData.students.find((s) => (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper);
+  const matchedStudent =
+    fsData.students.find((s) => {
+      const nameMatch = s.nama.trim().toLowerCase() === cleanNama.toLowerCase();
+      const sysTokenMatch = (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper;
+      const customPassMatch =
+        Boolean(s.password_login) &&
+        (s.password_login!.trim() === cleanToken ||
+          s.password_login!.trim().toUpperCase() === cleanTokenUpper);
+      return nameMatch && (sysTokenMatch || customPassMatch);
+    }) ||
+    fsData.students.find(
+      (s) => (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper
+    );
 
   if (!matchedStudent) {
     throw new Error(
@@ -1589,7 +1598,7 @@ export async function loginStudentExamCbt(
     );
   }
 
-  // Proportional Exam Package Resolution across Class & Angkatan
+  // Proportional & Deterministic Exam Package Resolution across Class, Angkatan & Mata Pelajaran
   const proportionalAlloc = resolveProportionalStudentExamPackage({
     student: matchedStudent,
     allStudents: fsData.students,
@@ -1600,14 +1609,24 @@ export async function loginStudentExamCbt(
 
   if (!proportionalAlloc.exam || proportionalAlloc.matchedExams.length === 0) {
     throw new Error(
-      `Belum ada sesi ujian Sosiologi berstatus AKTIF yang dijadwalkan untuk kelas Anda (${matchedStudent.kelas}). Paket soal mungkin masih berstatus DRAF atau telah ditutup oleh Guru Sosiologi.`
+      `Belum ada sesi ujian berstatus AKTIF yang dijadwalkan untuk kelas Anda (${matchedStudent.kelas}). Paket soal mungkin masih berstatus DRAF atau telah ditutup oleh Guru.`
     );
   }
 
   const activeExam = proportionalAlloc.exam;
-  const examQuestions = fsData.questions.filter(
-    (q) => Number(q.exam_id) === Number(activeExam.id)
-  );
+  const examQuestions = fsData.questions
+    .filter((q) => Number(q.exam_id) === Number(activeExam.id))
+    .sort((a, b) => Number(a.id) - Number(b.id))
+    .map((q) => ({
+      ...q,
+      bobot:
+        Number(q.bobot) > 0
+          ? Number(q.bobot)
+          : String(q.tipe_soal || '').toLowerCase().includes('kompleks')
+          ? 3
+          : 2,
+    }));
+
   if (examQuestions.length === 0) {
     throw new Error(
       `Paket ujian "${activeExam.judul_ujian}" untuk kelas ${matchedStudent.kelas} belum memiliki butir soal. Silakan hubungi Guru.`
@@ -1631,6 +1650,17 @@ export async function loginStudentExamCbt(
       `Siswa mulai ujian: ${updatedStudent.nama} (${updatedStudent.kelas}) — ${activeExam.judul_ujian} [${proportionalAlloc.packageCode}]`
     );
   }
+
+  // Also notify backend API silently if available
+  safeApiJson('/api/exam/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      nama: cleanNama,
+      token_ujian: cleanTokenUpper,
+      examId: activeExam.id,
+    }),
+  }).catch(() => {});
 
   return {
     student: updatedStudent,
@@ -1664,15 +1694,56 @@ export async function submitStudentExamCbt(payload: {
     );
   }
 
-  // 1. Calculate deterministic score against the exact prepared questions (with shuffled keys)
+  // Synchronize latest bobot from Firestore if available while keeping the student's exact prepared option mapping
+  let syncedQuestions = payload.questions.map((q) => ({
+    ...q,
+    bobot:
+      Number(q.bobot) > 0
+        ? Number(q.bobot)
+        : String(q.tipe_soal || '').toLowerCase().includes('kompleks')
+        ? 3
+        : 2,
+  }));
+
+  try {
+    const fsData = await fetchAllFromFirestore();
+    if (fsData && fsData.questions.length > 0) {
+      const fsQuestionMap = new Map<number, QuestionItem>();
+      for (const fq of fsData.questions) {
+        fsQuestionMap.set(Number(fq.id), fq);
+      }
+      syncedQuestions = syncedQuestions.map((q) => {
+        const fq = fsQuestionMap.get(Number(q.id));
+        if (!fq) return q;
+        const authoritativeBobot =
+          Number(fq.bobot) > 0
+            ? Number(fq.bobot)
+            : Number(q.bobot) > 0
+            ? Number(q.bobot)
+            : String(fq.tipe_soal || q.tipe_soal || '')
+                .toLowerCase()
+                .includes('kompleks')
+            ? 3
+            : 2;
+        return {
+          ...q,
+          bobot: authoritativeBobot,
+        };
+      });
+    }
+  } catch {
+    // Fallback to payload.questions with normalized bobot
+  }
+
+  // 1. Calculate deterministic score against the exact prepared questions (with shuffled keys & teacher's bobot)
   const scoreSummary = calculateExamScore(
-    payload.questions,
+    syncedQuestions,
     payload.jawabanSiswa
   );
 
   // 2. Map student answers from shuffled display keys back to canonical Bank Soal option keys (A-E)
   const canonicalAnswers = mapStudentAnswersToCanonicalKeys(
-    payload.questions,
+    syncedQuestions,
     payload.jawabanSiswa
   );
 

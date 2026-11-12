@@ -949,16 +949,43 @@ export const SAMPLE_PHYSICS_DIAGRAM_DATA_URL =
 
 /**
  * Generates a Microsoft Word (.doc) Template using the 11-Column Table Format,
- * complete with sample Math, Physics (with Diagram Image), Chemistry, and Sociology questions.
+ * strictly fitted to 100% of the Word page width (table-layout: fixed, WordSection1 page bounds,
+ * percentage column widths, and compact cell images so it never overflows horizontally).
  */
 export function generateWordQuestionTemplateTableDoc(): string {
+  const colWidths = ['5%', '6%', '16%', '18%', '9%', '9%', '9%', '9%', '9%', '5%', '5%'];
+  const headers = [
+    'id_soal',
+    'jenis_soal',
+    'wacana',
+    'teks_soal',
+    'opsi_a',
+    'opsi_b',
+    'opsi_c',
+    'opsi_d',
+    'opsi_e',
+    'kunci_jawaban',
+    'bobot',
+  ];
+
+  const colgroupHtml = colWidths.map((w) => `<col style="width:${w};" width="${w}" />`).join('');
+  const thHtml = headers
+    .map(
+      (h, i) =>
+        `<th width="${colWidths[i]}" style="width:${colWidths[i]}; background-color:#1e3a8a; color:#ffffff; font-weight:bold; border:1px solid #334155; padding:3.5pt 4pt; text-align:left; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word;">${h}</th>`
+    )
+    .join('');
+
+  const tdStyle = (idx: number) =>
+    `width="${colWidths[idx]}" style="width:${colWidths[idx]}; border:1px solid #94a3b8; padding:3.5pt 4pt; vertical-align:top; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word; word-break:break-word;"`;
+
   return `<!DOCTYPE html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
       xmlns:w="urn:schemas-microsoft-com:office:word"
       xmlns="http://www.w3.org/TR/REC-html40">
 <head>
   <meta charset="utf-8" />
-  <title>Template Word Tabel Bank Soal CBT (Matematika, Fisika, Kimia, Sosiologi & Gambar)</title>
+  <title>Template Word Tabel Bank Soal CBT (Fit Halaman Word)</title>
   <!--[if gte mso 9]>
   <xml>
     <w:WordDocument>
@@ -969,105 +996,130 @@ export function generateWordQuestionTemplateTableDoc(): string {
   </xml>
   <![endif]-->
   <style>
-    @page { size: 29.7cm 21cm; margin: 1.5cm; mso-page-orientation: landscape; }
-    body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #0f172a; }
-    h1 { font-size: 16pt; color: #1e3a8a; margin-bottom: 4pt; }
-    .guide { background: #eff6ff; border: 1px solid #93c5fd; padding: 10pt; margin-bottom: 12pt; font-size: 10pt; }
-    table { border-collapse: collapse; width: 100%; font-size: 10pt; }
-    th { background-color: #1e3a8a; color: #ffffff; font-weight: bold; border: 1px solid #334155; padding: 6pt; text-align: left; }
-    td { border: 1px solid #94a3b8; padding: 6pt; vertical-align: top; }
+    @page WordSection1 {
+      size: 841.9pt 595.3pt;
+      mso-page-orientation: landscape;
+      margin: 28.35pt 28.35pt 28.35pt 28.35pt;
+    }
+    div.WordSection1 {
+      page: WordSection1;
+      width: 100%;
+    }
+    body {
+      font-family: Calibri, Arial, sans-serif;
+      font-size: 9.5pt;
+      color: #0f172a;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      font-size: 13pt;
+      color: #1e3a8a;
+      margin: 0 0 4pt 0;
+    }
+    .guide {
+      background: #eff6ff;
+      border: 1px solid #93c5fd;
+      padding: 6pt 8pt;
+      margin-bottom: 8pt;
+      font-size: 8.5pt;
+      line-height: 1.35;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    table.cbt-fit-table {
+      border-collapse: collapse;
+      width: 100.0%;
+      max-width: 100.0%;
+      table-layout: fixed;
+      mso-table-layout-alt: fixed;
+      mso-FitToPage: yes;
+      font-size: 8.5pt;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+    }
   </style>
 </head>
 <body>
-  <h1>TEMPLATE MICROSOFT WORD (TABEL 11 KOLOM) — BANK SOAL CBT MULTI-MAPEL</h1>
+<div class="WordSection1">
+  <h1>TEMPLATE MICROSOFT WORD (TABEL 11 KOLOM FIT HALAMAN) — BANK SOAL CBT</h1>
   <div class="guide">
-    <strong>PANDUAN CEPAT PENGGUNAAN DI MICROSOFT WORD:</strong><br/>
-    1. Anda dapat mengedit tabel di bawah ini langsung di <strong>Microsoft Word</strong>, lalu simpan sebagai <strong>.docx</strong> atau <strong>.doc</strong> dan langsung upload ke sistem CBT.<br/>
-    2. <strong>Cara Memasukkan Gambar:</strong> Langsung <em>Copy-Paste</em> atau <em>Insert &rarr; Pictures</em> gambar ke dalam sel <code>wacana</code>, <code>teks_soal</code>, atau <code>opsi_a..e</code>.<br/>
-    3. <strong>Cara Menulis Rumus Matematika / Fisika / Kimia:</strong> Gunakan apitan tanda dolar <code>$...$</code> atau tag <code>[RUMUS:...]</code>:<br/>
-       &bull; <strong>Matematika:</strong> Pecahan <code>$\\frac{a}{b}$</code>, Akar <code>$\\sqrt{x^2 + y^2}$</code>, Kuadrat <code>$x^2 + 5x + 6 = 0$</code>, Integral <code>$\\int_{0}^{2} 3x^2 dx$</code><br/>
-       &bull; <strong>Fisika:</strong> <code>$\\sum \\vec{F} = m \\cdot \\vec{a}$</code>, <code>$E_k = \\frac{1}{2}mv^2$</code>, <code>$\\lambda = \\frac{v}{f}$</code>, <code>$R_{total} = R_1 + R_2$</code><br/>
-       &bull; <strong>Kimia:</strong> <code>$\\ce{2H2 + O2 -> 2H2O}$</code>, <code>$\\ce{N2(g) + 3H2(g) <=> 2NH3(g)}$</code>, <code>$\\text{H}_2\\text{SO}_4$</code>, <code>$\\text{pH} = -\\log[\\text{H}^+]$</code>
+    <strong>PANDUAN CEPAT (UKURAN TABEL SUDAH FIT 100% DENGAN HALAMAN WORD):</strong><br/>
+    1. Tabel di bawah sudah dikunci proporsional (<em>AutoFit to Window</em>) agar tidak melebar keluar halaman Word.<br/>
+    2. <strong>Sisipkan Gambar:</strong> Langsung <em>Copy-Paste</em> atau <em>Insert &rarr; Pictures</em> gambar ke dalam sel <code>wacana</code>, <code>teks_soal</code>, atau <code>opsi_a..e</code>.<br/>
+    3. <strong>Rumus Matematika / Fisika / Kimia:</strong> Gunakan tanda dolar <code>$...$</code> atau <code>\\ce{...}</code>, contoh: <code>$\\sum \\vec{F} = m \\cdot \\vec{a}$</code>, <code>$E_k = \\frac{1}{2}mv^2$</code>, <code>$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$</code>, <code>$\\ce{N2(g) + 3H2(g) <=> 2NH3(g)}$</code>.
   </div>
 
-  <table>
+  <table class="cbt-fit-table" width="100%">
+    <colgroup>${colgroupHtml}</colgroup>
     <thead>
-      <tr>
-        <th>id_soal</th>
-        <th>jenis_soal</th>
-        <th>wacana</th>
-        <th>teks_soal</th>
-        <th>opsi_a</th>
-        <th>opsi_b</th>
-        <th>opsi_c</th>
-        <th>opsi_d</th>
-        <th>opsi_e</th>
-        <th>kunci_jawaban</th>
-        <th>bobot</th>
-      </tr>
+      <tr>${thHtml}</tr>
     </thead>
     <tbody>
       <tr>
-        <td>FIS-01</td>
-        <td>PG</td>
-        <td>Perhatikan diagram balok bermassa $m = 4\\text{ kg}$ yang ditarik gaya mendatar $F = 24\\text{ N}$ di atas bidang datar licin berikut:<br/><img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="320" /></td>
-        <td>Berdasarkan Hukum II Newton $\\sum \\vec{F} = m \\cdot \\vec{a}$, berapakah percepatan $a$ dan energi kinetik $E_k = \\frac{1}{2}mv^2$ balok setelah bergerak selama $t = 2\\text{ s}$ dari keadaan diam?</td>
-        <td>$a = 6\\text{ m/s}^2$ dan $E_k = 288\\text{ J}$</td>
-        <td>$a = 4\\text{ m/s}^2$ dan $E_k = 128\\text{ J}$</td>
-        <td>$a = 6\\text{ m/s}^2$ dan $E_k = 144\\text{ J}$</td>
-        <td>$a = 8\\text{ m/s}^2$ dan $E_k = 256\\text{ J}$</td>
-        <td>$a = 12\\text{ m/s}^2$ dan $E_k = 576\\text{ J}$</td>
-        <td>A</td>
-        <td>2</td>
+        <td ${tdStyle(0)}>FIS-01</td>
+        <td ${tdStyle(1)}>PG</td>
+        <td ${tdStyle(2)}>Perhatikan diagram balok bermassa $m = 4\\text{ kg}$ yang ditarik gaya mendatar $F = 24\\text{ N}$ di atas bidang datar licin berikut:<br/><img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="115" height="40" style="width:115px; height:auto; max-width:100%;" /></td>
+        <td ${tdStyle(3)}>Berdasarkan Hukum II Newton $\\sum \\vec{F} = m \\cdot \\vec{a}$, berapakah percepatan $a$ dan energi kinetik $E_k = \\frac{1}{2}mv^2$ balok setelah bergerak selama $t = 2\\text{ s}$ dari keadaan diam?</td>
+        <td ${tdStyle(4)}>$a = 6\\text{ m/s}^2$ dan $E_k = 288\\text{ J}$</td>
+        <td ${tdStyle(5)}>$a = 4\\text{ m/s}^2$ dan $E_k = 128\\text{ J}$</td>
+        <td ${tdStyle(6)}>$a = 6\\text{ m/s}^2$ dan $E_k = 144\\text{ J}$</td>
+        <td ${tdStyle(7)}>$a = 8\\text{ m/s}^2$ dan $E_k = 256\\text{ J}$</td>
+        <td ${tdStyle(8)}>$a = 12\\text{ m/s}^2$ dan $E_k = 576\\text{ J}$</td>
+        <td ${tdStyle(9)}>A</td>
+        <td ${tdStyle(10)}>2</td>
       </tr>
       <tr>
-        <td>MAT-02</td>
-        <td>PG</td>
-        <td>Diketahui persamaan kuadrat $x^2 - 5x + 6 = 0$ dengan rumus akar-akar $x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$.</td>
-        <td>Nilai dari integral tentu $\\int_{1}^{3} (3x^2 - 4x + 1)\\,dx$ adalah...</td>
-        <td>$10$</td>
-        <td>$12$</td>
-        <td>$14$</td>
-        <td>$16$</td>
-        <td>$18$</td>
-        <td>B</td>
-        <td>2</td>
+        <td ${tdStyle(0)}>MAT-02</td>
+        <td ${tdStyle(1)}>PG</td>
+        <td ${tdStyle(2)}>Diketahui persamaan kuadrat $x^2 - 5x + 6 = 0$ dengan rumus akar-akar $x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$.</td>
+        <td ${tdStyle(3)}>Nilai dari integral tentu $\\int_{1}^{3} (3x^2 - 4x + 1)\\,dx$ adalah...</td>
+        <td ${tdStyle(4)}>$10$</td>
+        <td ${tdStyle(5)}>$12$</td>
+        <td ${tdStyle(6)}>$14$</td>
+        <td ${tdStyle(7)}>$16$</td>
+        <td ${tdStyle(8)}>$18$</td>
+        <td ${tdStyle(9)}>B</td>
+        <td ${tdStyle(10)}>2</td>
       </tr>
       <tr>
-        <td>KIM-03</td>
-        <td>PG</td>
-        <td>Reaksi kesetimbangan pembentukan amonia (Proses Haber-Bosch) berlangsung menurut persamaan termokimia: $$\\ce{N2(g) + 3H2(g) <=> 2NH3(g)} \\quad \\Delta H = -92\\text{ kJ/mol}$$</td>
-        <td>Ungkapan tetapan kesetimbangan konsentrasi $K_c$ yang tepat untuk reaksi di atas adalah...</td>
-        <td>$K_c = \\frac{[\\text{NH}_3]^2}{[\\text{N}_2][\\text{H}_2]^3}$</td>
-        <td>$K_c = \\frac{[\\text{N}_2][\\text{H}_2]^3}{[\\text{NH}_3]^2}$</td>
-        <td>$K_c = \\frac{[\\text{NH}_3]}{[\\text{N}_2][\\text{H}_2]}$</td>
-        <td>$K_c = \\frac{2[\\text{NH}_3]}{[\\text{N}_2] + 3[\\text{H}_2]}$</td>
-        <td>$K_c = [\\text{NH}_3]^2 [\\text{N}_2] [\\text{H}_2]^3$</td>
-        <td>A</td>
-        <td>2</td>
+        <td ${tdStyle(0)}>KIM-03</td>
+        <td ${tdStyle(1)}>PG</td>
+        <td ${tdStyle(2)}>Reaksi kesetimbangan pembentukan amonia (Proses Haber-Bosch): $$\\ce{N2(g) + 3H2(g) <=> 2NH3(g)} \\quad \\Delta H = -92\\text{ kJ/mol}$$</td>
+        <td ${tdStyle(3)}>Ungkapan tetapan kesetimbangan konsentrasi $K_c$ yang tepat untuk reaksi di atas adalah...</td>
+        <td ${tdStyle(4)}>$K_c = \\frac{[\\text{NH}_3]^2}{[\\text{N}_2][\\text{H}_2]^3}$</td>
+        <td ${tdStyle(5)}>$K_c = \\frac{[\\text{N}_2][\\text{H}_2]^3}{[\\text{NH}_3]^2}$</td>
+        <td ${tdStyle(6)}>$K_c = \\frac{[\\text{NH}_3]}{[\\text{N}_2][\\text{H}_2]}$</td>
+        <td ${tdStyle(7)}>$K_c = \\frac{2[\\text{NH}_3]}{[\\text{N}_2] + 3[\\text{H}_2]}$</td>
+        <td ${tdStyle(8)}>$K_c = [\\text{NH}_3]^2 [\\text{N}_2] [\\text{H}_2]^3$</td>
+        <td ${tdStyle(9)}>A</td>
+        <td ${tdStyle(10)}>2</td>
       </tr>
       <tr>
-        <td>SOS-04</td>
-        <td>Kompleks</td>
-        <td>Transformasi digital mempercepat perubahan sosial di masyarakat perkotaan maupun perdesaan.</td>
-        <td>Manakah di antara pernyataan berikut yang merupakan dampak positif modernisasi teknologi informasi? (Pilih lebih dari satu jawaban benar)</td>
-        <td>Terbukanya akses pendidikan dan literasi ilmiah secara daring</td>
-        <td>Meningkatnya efisiensi komunikasi lintas wilayah secara real-time</td>
-        <td>Hilangnya seluruh norma sosial tradisional secara tiba-tiba</td>
-        <td>Munculnya ekosistem ekonomi kreatif berbasis digital bagi UMKM</td>
-        <td>Meningkatnya disorganisasi sosial akibat hoaks</td>
-        <td>A,B,D</td>
-        <td>3</td>
+        <td ${tdStyle(0)}>SOS-04</td>
+        <td ${tdStyle(1)}>Kompleks</td>
+        <td ${tdStyle(2)}>Transformasi digital mempercepat perubahan sosial di masyarakat perkotaan maupun perdesaan.</td>
+        <td ${tdStyle(3)}>Manakah pernyataan berikut yang merupakan dampak positif modernisasi teknologi informasi? (Pilih &gt;1 jawaban benar)</td>
+        <td ${tdStyle(4)}>Terbukanya akses pendidikan dan literasi ilmiah daring</td>
+        <td ${tdStyle(5)}>Meningkatnya efisiensi komunikasi lintas wilayah</td>
+        <td ${tdStyle(6)}>Hilangnya seluruh norma sosial tradisional secara tiba-tiba</td>
+        <td ${tdStyle(7)}>Munculnya ekosistem ekonomi kreatif berbasis digital UMKM</td>
+        <td ${tdStyle(8)}>Meningkatnya disorganisasi sosial akibat hoaks</td>
+        <td ${tdStyle(9)}>A,B,D</td>
+        <td ${tdStyle(10)}>3</td>
       </tr>
     </tbody>
   </table>
+</div>
 </body>
 </html>`;
 }
 
 /**
  * Generates a Microsoft Word (.doc) Template using the Standard Numbered Question Format
- * (1. Pertanyaan... A. ... B. ... Kunci: A) so teachers can write naturally without tables.
+ * (1. Pertanyaan... A. ... B. ... Kunci: A) strictly fitted to A4 Portrait page bounds.
  */
 export function generateWordQuestionTemplateNumberedDoc(): string {
   return `<!DOCTYPE html>
@@ -1076,7 +1128,7 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
       xmlns="http://www.w3.org/TR/REC-html40">
 <head>
   <meta charset="utf-8" />
-  <title>Template Word Soal Bernomor CBT (Matematika, Fisika, Kimia, Sosiologi & Gambar)</title>
+  <title>Template Word Soal Bernomor CBT (Fit A4 Portrait)</title>
   <!--[if gte mso 9]>
   <xml>
     <w:WordDocument>
@@ -1087,24 +1139,60 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
   </xml>
   <![endif]-->
   <style>
-    @page { size: 21cm 29.7cm; margin: 2cm; }
-    body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #0f172a; }
-    h1 { font-size: 15pt; color: #1e3a8a; margin-bottom: 6pt; }
-    .guide { background: #f0fdf4; border: 1px solid #86efac; padding: 10pt; margin-bottom: 14pt; font-size: 10pt; }
-    p { margin: 3pt 0; }
+    @page WordSection1 {
+      size: 595.3pt 841.9pt;
+      mso-page-orientation: portrait;
+      margin: 42.5pt 42.5pt 42.5pt 42.5pt;
+    }
+    div.WordSection1 {
+      page: WordSection1;
+      width: 100%;
+    }
+    body {
+      font-family: Calibri, Arial, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.45;
+      color: #0f172a;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      font-size: 13.5pt;
+      color: #1e3a8a;
+      margin: 0 0 6pt 0;
+    }
+    .guide {
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+      padding: 8pt 10pt;
+      margin-bottom: 12pt;
+      font-size: 9.5pt;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    p {
+      margin: 2.5pt 0;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+    }
   </style>
 </head>
 <body>
-  <h1>TEMPLATE WORD SOAL BERNOMOR — BANK SOAL CBT</h1>
+<div class="WordSection1">
+  <h1>TEMPLATE WORD SOAL BERNOMOR (FIT A4 PORTRAIT) — BANK SOAL CBT</h1>
   <div class="guide">
-    <strong>PETUNJUK PENULISAN SOAL BERNOMOR DI WORD:</strong><br/>
+    <strong>PETUNJUK PENULISAN SOAL BERNOMOR DI WORD (PAS UKURAN KERTAS A4):</strong><br/>
     &bull; Awali setiap soal dengan nomor (<code>1.</code>, <code>2.</code>, <code>3.</code> dst.), diikuti pilihan <code>A.</code> sampai <code>E.</code>, lalu baris <code>Kunci: A</code> (atau <code>Kunci: A, B, D</code> untuk PG Kompleks) dan <code>Bobot: 2</code>.<br/>
     &bull; Jika soal memiliki bacaan/gambar pengantar, awali baris dengan <code>Wacana: ...</code>.<br/>
     &bull; Anda bebas menyisipkan <strong>Gambar (Copy-Paste / Insert Picture)</strong> dan <strong>Rumus Matematika/Fisika/Kimia</strong> (<code>$...$</code> atau <code>\\ce{...}</code>).
   </div>
 
   <p>Wacana: Perhatikan diagram balok bermassa $m = 4\text{ kg}$ yang ditarik gaya mendatar $F = 24\text{ N}$ di atas bidang datar licin berikut:</p>
-  <p><img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="320" /></p>
+  <p><img src="${SAMPLE_PHYSICS_DIAGRAM_DATA_URL}" alt="Diagram Gaya Fisika" width="210" height="72" style="width:210px; height:auto; max-width:100%;" /></p>
   <p>1. Berdasarkan Hukum II Newton $\sum \vec{F} = m \cdot \vec{a}$, berapakah percepatan $a$ dan energi kinetik $E_k = \frac{1}{2}mv^2$ balok setelah bergerak selama $t = 2\text{ s}$ dari keadaan diam?</p>
   <p>A. $a = 6\text{ m/s}^2$ dan $E_k = 288\text{ J}$</p>
   <p>B. $a = 4\text{ m/s}^2$ dan $E_k = 128\text{ J}$</p>
@@ -1149,18 +1237,45 @@ export function generateWordQuestionTemplateNumberedDoc(): string {
   <p>E. Meningkatnya disorganisasi sosial akibat hoaks</p>
   <p>Kunci: A, B, D</p>
   <p>Bobot: 3</p>
+</div>
 </body>
 </html>`;
 }
 
 /**
  * Exports an existing list of QuestionItem[] into a ready-to-edit Microsoft Word (.doc) file,
- * converting [IMG:...] tokens back into real <img> elements for Word.
+ * strictly fitted to 100% of the Word page width without overflowing.
  */
 export function exportQuestionsToWordDoc(
   examTitle: string,
   questionsList: QuestionItem[]
 ): string {
+  const colWidths = ['5%', '6%', '16%', '18%', '9%', '9%', '9%', '9%', '9%', '5%', '5%'];
+  const headers = [
+    'id_soal',
+    'jenis_soal',
+    'wacana',
+    'teks_soal',
+    'opsi_a',
+    'opsi_b',
+    'opsi_c',
+    'opsi_d',
+    'opsi_e',
+    'kunci_jawaban',
+    'bobot',
+  ];
+
+  const colgroupHtml = colWidths.map((w) => `<col style="width:${w};" width="${w}" />`).join('');
+  const thHtml = headers
+    .map(
+      (h, i) =>
+        `<th width="${colWidths[i]}" style="width:${colWidths[i]}; background-color:#1e3a8a; color:#ffffff; font-weight:bold; border:1px solid #334155; padding:3.5pt 4pt; text-align:left; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word;">${h}</th>`
+    )
+    .join('');
+
+  const tdStyle = (idx: number) =>
+    `width="${colWidths[idx]}" style="width:${colWidths[idx]}; border:1px solid #94a3b8; padding:3.5pt 4pt; vertical-align:top; font-size:8.5pt; word-wrap:break-word; overflow-wrap:break-word; word-break:break-word;"`;
+
   const formatForWordHtml = (text: string | undefined | null) => {
     if (!text) return '';
     return String(text)
@@ -1168,7 +1283,10 @@ export function exportQuestionsToWordDoc(
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/&lt;(sup|sub)&gt;([\s\S]*?)&lt;\/\1&gt;/gi, '<$1>$2</$1>')
-      .replace(/\[IMG:([^\]]+)\]/g, '<br/><img src="$1" alt="Gambar Soal" width="280" /><br/>')
+      .replace(
+        /\[IMG:([^\]]+)\]/g,
+        '<br/><img src="$1" alt="Gambar Soal" width="115" style="width:115px; height:auto; max-width:100%;" /><br/>'
+      )
       .replace(/\n/g, '<br/>');
   };
 
@@ -1177,17 +1295,17 @@ export function exportQuestionsToWordDoc(
       const idSoal = q.data_opsi?.id_soal_csv || `SOAL-${String(idx + 1).padStart(2, '0')}`;
       const isKompleks = q.tipe_soal === 'Kompleks' || q.kunci_jawaban.length > 1;
       return `<tr>
-        <td>${idSoal}</td>
-        <td>${isKompleks ? 'Kompleks' : 'PG'}</td>
-        <td>${formatForWordHtml(q.data_opsi?.wacana || '')}</td>
-        <td>${formatForWordHtml(q.teks_soal)}</td>
-        <td>${formatForWordHtml(q.data_opsi?.opsi?.A || '')}</td>
-        <td>${formatForWordHtml(q.data_opsi?.opsi?.B || '')}</td>
-        <td>${formatForWordHtml(q.data_opsi?.opsi?.C || '')}</td>
-        <td>${formatForWordHtml(q.data_opsi?.opsi?.D || '')}</td>
-        <td>${formatForWordHtml(q.data_opsi?.opsi?.E || '')}</td>
-        <td>${q.kunci_jawaban.join(',')}</td>
-        <td>${q.bobot || (isKompleks ? 3 : 2)}</td>
+        <td ${tdStyle(0)}>${idSoal}</td>
+        <td ${tdStyle(1)}>${isKompleks ? 'Kompleks' : 'PG'}</td>
+        <td ${tdStyle(2)}>${formatForWordHtml(q.data_opsi?.wacana || '')}</td>
+        <td ${tdStyle(3)}>${formatForWordHtml(q.teks_soal)}</td>
+        <td ${tdStyle(4)}>${formatForWordHtml(q.data_opsi?.opsi?.A || '')}</td>
+        <td ${tdStyle(5)}>${formatForWordHtml(q.data_opsi?.opsi?.B || '')}</td>
+        <td ${tdStyle(6)}>${formatForWordHtml(q.data_opsi?.opsi?.C || '')}</td>
+        <td ${tdStyle(7)}>${formatForWordHtml(q.data_opsi?.opsi?.D || '')}</td>
+        <td ${tdStyle(8)}>${formatForWordHtml(q.data_opsi?.opsi?.E || '')}</td>
+        <td ${tdStyle(9)}>${q.kunci_jawaban.join(',')}</td>
+        <td ${tdStyle(10)}>${q.bobot || (isKompleks ? 3 : 2)}</td>
       </tr>`;
     })
     .join('\n');
@@ -1199,37 +1317,61 @@ export function exportQuestionsToWordDoc(
 <head>
   <meta charset="utf-8" />
   <title>Bank Soal Word — ${examTitle}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
   <style>
-    @page { size: 29.7cm 21cm; margin: 1.5cm; mso-page-orientation: landscape; }
-    body { font-family: Calibri, Arial, sans-serif; font-size: 10.5pt; color: #0f172a; }
-    h1 { font-size: 15pt; color: #1e3a8a; }
-    table { border-collapse: collapse; width: 100%; font-size: 10pt; }
-    th { background-color: #1e3a8a; color: #ffffff; font-weight: bold; border: 1px solid #334155; padding: 6pt; text-align: left; }
-    td { border: 1px solid #94a3b8; padding: 6pt; vertical-align: top; }
+    @page WordSection1 {
+      size: 841.9pt 595.3pt;
+      mso-page-orientation: landscape;
+      margin: 28.35pt 28.35pt 28.35pt 28.35pt;
+    }
+    div.WordSection1 {
+      page: WordSection1;
+      width: 100%;
+    }
+    body {
+      font-family: Calibri, Arial, sans-serif;
+      font-size: 9.5pt;
+      color: #0f172a;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      font-size: 13pt;
+      color: #1e3a8a;
+      margin: 0 0 6pt 0;
+    }
+    table.cbt-fit-table {
+      border-collapse: collapse;
+      width: 100.0%;
+      max-width: 100.0%;
+      table-layout: fixed;
+      mso-table-layout-alt: fixed;
+      mso-FitToPage: yes;
+      font-size: 8.5pt;
+    }
   </style>
 </head>
 <body>
+<div class="WordSection1">
   <h1>BANK SOAL MICROSOFT WORD — ${examTitle} (${questionsList.length} Butir Soal)</h1>
-  <table>
+  <table class="cbt-fit-table" width="100%">
+    <colgroup>${colgroupHtml}</colgroup>
     <thead>
-      <tr>
-        <th>id_soal</th>
-        <th>jenis_soal</th>
-        <th>wacana</th>
-        <th>teks_soal</th>
-        <th>opsi_a</th>
-        <th>opsi_b</th>
-        <th>opsi_c</th>
-        <th>opsi_d</th>
-        <th>opsi_e</th>
-        <th>kunci_jawaban</th>
-        <th>bobot</th>
-      </tr>
+      <tr>${thHtml}</tr>
     </thead>
     <tbody>
       ${rowsHtml}
     </tbody>
   </table>
+</div>
 </body>
 </html>`;
 }
