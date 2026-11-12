@@ -6,7 +6,14 @@ import {
   AnalisisAI,
   QuestionItem,
 } from '../types/cbt';
-import { extractTingkatFromKelas, calculateExamScore } from './cbtLogic';
+import {
+  extractTingkatFromKelas,
+  calculateExamScore,
+  getEffectiveExamSessionToken,
+  getEffectiveMataPelajaran,
+  getStudentAbsenInfoInClass,
+  resolveStudentExamPackagesBySubject,
+} from './cbtLogic';
 
 export interface TokenCardPdfOptions {
   title?: string;
@@ -14,11 +21,16 @@ export interface TokenCardPdfOptions {
   kelasLabel?: string;
   exams?: ExamItem[];
   results?: ResultItem[];
+  questions?: QuestionItem[];
+  allStudents?: StudentItem[];
+  preferredExamId?: number | string | null;
   includeSummaryPage?: boolean;
 }
 
 export interface SingleStudentResultPdfParams {
   student: StudentItem;
+  allStudents?: StudentItem[];
+  exams?: ExamItem[];
   exam?: ExamItem | null;
   score: number;
   kategori: string;
@@ -29,6 +41,369 @@ export interface SingleStudentResultPdfParams {
   submittedAt?: string;
   questions?: QuestionItem[];
   studentAnswers?: Record<string, string[]>;
+}
+
+export interface StudentSubjectTokenInfo {
+  examId: number;
+  mataPelajaran: string;
+  kodePaket: string;
+  namaPaketSoal: string;
+  tokenUjian: string;
+  statusExam: string;
+  distribusiReason: string;
+}
+
+export interface StudentPrecisionRecord {
+  student: StudentItem;
+  noAbsen: number;
+  isGanjil: boolean;
+  ganjilGenapLabel: 'GANJIL' | 'GENAP';
+  tingkat: '10' | '11' | '12' | 'LAINNYA';
+  tokenLogin: string;
+  tokenSistemAsli: string;
+  hasCustomPassword: boolean;
+  kodePaket: string;
+  namaPaketSoal: string;
+  mataPelajaran: string;
+  paketLengkapLabel: string;
+  tokenUjianHariIni: string;
+  allSubjectPackages: StudentSubjectTokenInfo[];
+  allSubjectTokensLabel: string;
+  assignedExam: ExamItem | null;
+  matchedResult: ResultItem | null;
+  score: number | null;
+  predikatLabel: string;
+  statusLabel: string;
+  pelanggaranTab: number;
+}
+
+/**
+ * Resolves 100% precise student card & table data:
+ * - Attendance Number (No. Absen) & Ganjil/Genap within the student's class
+ * - Token Login Akun Siswa (`password_login || token_ujian`)
+ * - Exact Paket Soal received (`kodePaket`, `namaPaketSoal`, `mataPelajaran`)
+ * - Exact Token Sesi Ujian for that Paket Soal today (`token_sesi`)
+ * - Exact Nilai Akhir (`0-100`), Predikat, and Status Ujian (`Selesai` / `Sedang Ujian` / `Belum Mulai` / `Diblokir`)
+ */
+export function resolveStudentPrecisionRecord(params: {
+  student: StudentItem;
+  allStudents?: StudentItem[];
+  exams?: ExamItem[];
+  results?: ResultItem[];
+  questions?: QuestionItem[];
+  preferredExamId?: number | string | null;
+}): StudentPrecisionRecord {
+  const {
+    student,
+    allStudents = [student],
+    exams = [],
+    results = [],
+    questions = [],
+    preferredExamId = null,
+  } = params;
+
+  const rosterPool = allStudents.length > 0 ? allStudents : [student];
+  const absenInfo = getStudentAbsenInfoInClass(student, rosterPool);
+  const tingkat = extractTingkatFromKelas(student.kelas);
+
+  const tokenSistemAsli = (student.token_ujian || '-').trim().toUpperCase();
+  const rawPass = (student.password_login || '').trim();
+  const tokenLogin = rawPass ? rawPass : tokenSistemAsli;
+  const hasCustomPassword =
+    Boolean(rawPass) && rawPass.toUpperCase() !== tokenSistemAsli;
+
+  // Match student result (by student_id first, then by preferredExamId if specified, with safe name fallback)
+  let studentResults = results.filter(
+    (r) => Number(r.student_id) === Number(student.id)
+  );
+  if (studentResults.length === 0 && results.length > 0) {
+    const cleanTargetName = (student.nama || '').trim().toLowerCase();
+    if (cleanTargetName) {
+      studentResults = results.filter(
+        (r) =>
+          (r.analisis_ai?.nama_siswa || '').trim().toLowerCase() ===
+          cleanTargetName
+      );
+    }
+  }
+
+  let matchedResult: ResultItem | null = null;
+  if (
+    preferredExamId !== null &&
+    preferredExamId !== undefined &&
+    String(preferredExamId) !== '' &&
+    String(preferredExamId) !== 'SEMUA'
+  ) {
+    const forPreferred = studentResults.filter(
+      (r) => Number(r.exam_id) === Number(preferredExamId)
+    );
+    if (forPreferred.length > 0) {
+      matchedResult = forPreferred.reduce((best, cur) =>
+        Number(cur.id) >= Number(best.id) ? cur : best
+      );
+    }
+  }
+  if (!matchedResult && studentResults.length > 0) {
+    matchedResult = studentResults.reduce((best, cur) =>
+      Number(cur.id) >= Number(best.id) ? cur : best
+    );
+  }
+
+  const score =
+    matchedResult &&
+    typeof matchedResult.skor_angka === 'number' &&
+    !Number.isNaN(matchedResult.skor_angka)
+      ? matchedResult.skor_angka
+      : null;
+
+  let predikatLabel = '-';
+  if (score !== null) {
+    if (score >= 85) predikatLabel = 'Sangat Baik (A)';
+    else if (score >= 70) predikatLabel = 'Baik (B)';
+    else if (score >= 55) predikatLabel = 'Cukup (C)';
+    else predikatLabel = 'Perlu Penguatan (D)';
+  }
+
+  let statusLabel = student.status_ujian || 'Belum Mulai';
+  if (student.status_ujian === 'Diblokir') {
+    statusLabel = 'Diblokir';
+  } else if (score !== null || student.status_ujian === 'Selesai') {
+    statusLabel = 'Selesai';
+  } else if (student.status_ujian === 'Sedang Ujian') {
+    statusLabel = 'Sedang Ujian';
+  } else {
+    statusLabel = 'Belum Mulai';
+  }
+
+  // Resolve subject allocations (merge active and non-finished draft packages so multi-package Ganjil/Genap is always accurate)
+  const activeAllocations = resolveStudentExamPackagesBySubject({
+    student,
+    allStudents: rosterPool,
+    exams,
+    questions,
+    requireActive: true,
+    onlyPackagesWithQuestions: false,
+  });
+
+  const allAllocations = resolveStudentExamPackagesBySubject({
+    student,
+    allStudents: rosterPool,
+    exams,
+    questions,
+    requireActive: false,
+    onlyPackagesWithQuestions: false,
+  });
+
+  // Prefer allAllocations when a subject has more packages in allAllocations (e.g., 2 packages where 1 is still DRAF) or when activeAllocations is empty
+  const mergedAllocMap = new Map<string, (typeof allAllocations)[0]>();
+  for (const alloc of activeAllocations) {
+    mergedAllocMap.set(alloc.mataPelajaran.toUpperCase(), alloc);
+  }
+  for (const alloc of allAllocations) {
+    const key = alloc.mataPelajaran.toUpperCase();
+    const existing = mergedAllocMap.get(key);
+    if (
+      !existing ||
+      alloc.allPackagesInSubject.length > existing.allPackagesInSubject.length
+    ) {
+      mergedAllocMap.set(key, alloc);
+    }
+  }
+  const effectiveAllocations = Array.from(mergedAllocMap.values());
+
+  const allSubjectPackages: StudentSubjectTokenInfo[] = effectiveAllocations.map(
+    (alloc) => ({
+      examId: Number(alloc.assignedExam.id),
+      mataPelajaran: alloc.mataPelajaran,
+      kodePaket: alloc.assignedPackageCode,
+      namaPaketSoal: alloc.assignedExam.judul_ujian,
+      tokenUjian: getEffectiveExamSessionToken(alloc.assignedExam),
+      statusExam: alloc.assignedExam.status_ujian || 'AKTIF',
+      distribusiReason: alloc.distributionReason,
+    })
+  );
+
+  // Choose primary package for this student
+  let chosenInfo: StudentSubjectTokenInfo | null = null;
+  let assignedExam: ExamItem | null = null;
+
+  if (
+    preferredExamId !== null &&
+    preferredExamId !== undefined &&
+    String(preferredExamId) !== '' &&
+    String(preferredExamId) !== 'SEMUA'
+  ) {
+    const explicitExam = exams.find(
+      (e) => Number(e.id) === Number(preferredExamId)
+    );
+    const matchedSubj = allSubjectPackages.find(
+      (p) => Number(p.examId) === Number(preferredExamId)
+    );
+    if (matchedSubj && explicitExam) {
+      chosenInfo = matchedSubj;
+      assignedExam = explicitExam;
+    } else if (explicitExam) {
+      assignedExam = explicitExam;
+      const mapel = getEffectiveMataPelajaran(explicitExam);
+      const subjAlloc = effectiveAllocations.find(
+        (a) => a.mataPelajaran.toUpperCase() === mapel.toUpperCase()
+      );
+      chosenInfo = {
+        examId: Number(explicitExam.id),
+        mataPelajaran: mapel,
+        kodePaket:
+          subjAlloc?.assignedPackageCode ||
+          explicitExam.kode_paket ||
+          student.kode_soal ||
+          'PAKET-A',
+        namaPaketSoal: explicitExam.judul_ujian,
+        tokenUjian: getEffectiveExamSessionToken(explicitExam),
+        statusExam: explicitExam.status_ujian || 'AKTIF',
+        distribusiReason: subjAlloc?.distributionReason || 'Paket Terpilih',
+      };
+    }
+  }
+
+  // If student already completed an exam and no preferredExamId overrode it, check if that exam is in allSubjectPackages or exams
+  if (!chosenInfo && matchedResult) {
+    const resExam = exams.find(
+      (e) => Number(e.id) === Number(matchedResult!.exam_id)
+    );
+    const fromAlloc = allSubjectPackages.find(
+      (p) => Number(p.examId) === Number(matchedResult!.exam_id)
+    );
+    if (fromAlloc && resExam) {
+      chosenInfo = {
+        ...fromAlloc,
+        kodePaket: matchedResult.kode_soal || fromAlloc.kodePaket,
+      };
+      assignedExam = resExam;
+    } else if (resExam) {
+      assignedExam = resExam;
+      const mapel = getEffectiveMataPelajaran(resExam);
+      const subjAlloc = effectiveAllocations.find(
+        (a) => a.mataPelajaran.toUpperCase() === mapel.toUpperCase()
+      );
+      chosenInfo = {
+        examId: Number(resExam.id),
+        mataPelajaran: mapel,
+        kodePaket:
+          matchedResult.kode_soal ||
+          subjAlloc?.assignedPackageCode ||
+          resExam.kode_paket ||
+          student.kode_soal ||
+          'PAKET-A',
+        namaPaketSoal: resExam.judul_ujian,
+        tokenUjian: getEffectiveExamSessionToken(resExam),
+        statusExam: resExam.status_ujian || 'AKTIF',
+        distribusiReason: subjAlloc?.distributionReason || 'Ujian Selesai',
+      };
+    }
+  }
+
+  if (!chosenInfo && allSubjectPackages.length > 0) {
+    // Prefer an AKTIF package first if available
+    const activePkg =
+      allSubjectPackages.find(
+        (p) => (p.statusExam || 'AKTIF').toUpperCase() === 'AKTIF'
+      ) || allSubjectPackages[0];
+    chosenInfo = activePkg;
+    assignedExam =
+      exams.find((e) => Number(e.id) === Number(activePkg.examId)) || null;
+  }
+
+  // Ultimate fallback if no exam matched the class filter but exams exist in the system
+  if (!chosenInfo && exams.length > 0) {
+    const fallbackExam =
+      exams.find((e) => (e.status_ujian || 'AKTIF').toUpperCase() === 'AKTIF') ||
+      exams[0];
+    assignedExam = fallbackExam;
+    const mapel = getEffectiveMataPelajaran(fallbackExam);
+    const code =
+      matchedResult?.kode_soal ||
+      student.kode_soal ||
+      fallbackExam.kode_paket ||
+      (absenInfo.isGanjil ? 'PAKET-A' : 'PAKET-B');
+    chosenInfo = {
+      examId: Number(fallbackExam.id),
+      mataPelajaran: mapel,
+      kodePaket: code,
+      namaPaketSoal: fallbackExam.judul_ujian,
+      tokenUjian: getEffectiveExamSessionToken(fallbackExam),
+      statusExam: fallbackExam.status_ujian || 'AKTIF',
+      distribusiReason: `Absen #${absenInfo.noAbsen} (${absenInfo.ganjilGenapLabel})`,
+    };
+    if (allSubjectPackages.length === 0) {
+      allSubjectPackages.push(chosenInfo);
+    }
+  }
+
+  const kodePaket = (
+    chosenInfo?.kodePaket ||
+    matchedResult?.kode_soal ||
+    student.kode_soal ||
+    student.variasi_paket ||
+    (absenInfo.isGanjil ? 'PAKET-A' : 'PAKET-B')
+  )
+    .trim()
+    .toUpperCase();
+
+  const namaPaketSoal = (
+    chosenInfo?.namaPaketSoal ||
+    assignedExam?.judul_ujian ||
+    kodePaket
+  ).trim();
+
+  const mataPelajaran = (
+    chosenInfo?.mataPelajaran ||
+    getEffectiveMataPelajaran(assignedExam)
+  ).trim();
+
+  const tokenUjianHariIni = (
+    chosenInfo?.tokenUjian ||
+    (assignedExam ? getEffectiveExamSessionToken(assignedExam) : tokenSistemAsli)
+  )
+    .trim()
+    .toUpperCase();
+
+  const paketLengkapLabel =
+    namaPaketSoal.toUpperCase() === kodePaket
+      ? `${kodePaket} (${mataPelajaran})`
+      : `${namaPaketSoal} [${kodePaket}]`;
+
+  const allSubjectTokensLabel =
+    allSubjectPackages.length > 0
+      ? allSubjectPackages
+          .map(
+            (p) =>
+              `${p.mataPelajaran} (${p.namaPaketSoal} · ${p.kodePaket}): Token Ujian = ${p.tokenUjian}`
+          )
+          .join('   |   ')
+      : `${mataPelajaran} (${paketLengkapLabel}): Token Ujian = ${tokenUjianHariIni}`;
+
+  return {
+    student,
+    noAbsen: absenInfo.noAbsen,
+    isGanjil: absenInfo.isGanjil,
+    ganjilGenapLabel: absenInfo.ganjilGenapLabel,
+    tingkat,
+    tokenLogin,
+    tokenSistemAsli,
+    hasCustomPassword,
+    kodePaket,
+    namaPaketSoal,
+    mataPelajaran,
+    paketLengkapLabel,
+    tokenUjianHariIni,
+    allSubjectPackages,
+    allSubjectTokensLabel,
+    assignedExam,
+    matchedResult,
+    score,
+    predikatLabel,
+    statusLabel,
+    pelanggaranTab: matchedResult?.pelanggaran_tab || 0,
+  };
 }
 
 function stripMarkupForPdf(input: string | undefined | null): string {
@@ -131,7 +506,7 @@ function getScoreBadgeColors(score: number | null | undefined): {
 }
 
 /**
- * 1. GENERATE KARTU PESERTA, TOKEN & HASIL NILAI UJIAN (GRID 8 KARTU PER HALAMAN + OPSIONAL REKAP TABEL)
+ * 1. GENERATE KARTU PESERTA, TOKEN LOGIN, TOKEN UJIAN & HASIL NILAI UJIAN (GRID 8 KARTU PER HALAMAN + REKAP TABEL PRESISI)
  */
 export function downloadStudentTokenCardsPdf(
   students: StudentItem[],
@@ -145,20 +520,21 @@ export function downloadStudentTokenCardsPdf(
     format: 'a4',
   });
 
-  const resultsMap = new Map<number, ResultItem>();
-  if (options.results) {
-    options.results.forEach((r) => {
-      const existing = resultsMap.get(Number(r.student_id));
-      if (!existing || Number(r.id) > Number(existing.id)) {
-        resultsMap.set(Number(r.student_id), r);
-      }
-    });
-  }
+  const rosterPool =
+    options.allStudents && options.allStudents.length > 0
+      ? options.allStudents
+      : students;
 
-  const examsMap = new Map<number, ExamItem>();
-  if (options.exams) {
-    options.exams.forEach((e) => examsMap.set(Number(e.id), e));
-  }
+  const precisionRecords: StudentPrecisionRecord[] = students.map((st) =>
+    resolveStudentPrecisionRecord({
+      student: st,
+      allStudents: rosterPool,
+      exams: options.exams || [],
+      results: options.results || [],
+      questions: options.questions || [],
+      preferredExamId: options.preferredExamId,
+    })
+  );
 
   const nowStr = new Date().toLocaleDateString('id-ID', {
     day: '2-digit',
@@ -168,9 +544,9 @@ export function downloadStudentTokenCardsPdf(
 
   const kelasHeader = options.kelasLabel || 'Semua Kelas';
 
-  // Optional Page 1: Summary Table of Token & Score if requested and >1 student
-  if (options.includeSummaryPage && students.length > 1) {
-    drawSummaryTablePages(doc, students, resultsMap, examsMap, kelasHeader, nowStr);
+  // Optional Page 1: Summary Table of Token Login, Paket Soal, Token Ujian & Score if requested and >1 student
+  if (options.includeSummaryPage && precisionRecords.length > 1) {
+    drawSummaryTablePages(doc, precisionRecords, kelasHeader, nowStr);
     doc.addPage();
   }
 
@@ -181,13 +557,13 @@ export function downloadStudentTokenCardsPdf(
   const marginY = 18;
   const gapX = 6;
   const gapY = 5;
-  const cardWidth = (pageWidth - marginX * 2 - gapX) / 2; // ~92mm
-  const cardHeight = (pageHeight - marginY - 12 - gapY * 3) / 4; // ~63mm
+  const cardWidth = (pageWidth - marginX * 2 - gapX) / 2; // 92mm
+  const cardHeight = (pageHeight - marginY - 12 - gapY * 3) / 4; // 63mm
 
   const cardsPerPage = 8;
-  const totalCardPages = Math.ceil(students.length / cardsPerPage);
+  const totalCardPages = Math.ceil(precisionRecords.length / cardsPerPage);
 
-  students.forEach((student, idx) => {
+  precisionRecords.forEach((rec, idx) => {
     const posInPage = idx % cardsPerPage;
     const currentCardPage = Math.floor(idx / cardsPerPage) + 1;
 
@@ -195,7 +571,7 @@ export function downloadStudentTokenCardsPdf(
       doc.addPage();
     }
 
-    // Draw Page Top Header on first card of the page
+    // Draw Page Top Header on first card of the page (truncated cleanly so left and right never overlap)
     if (posInPage === 0) {
       doc.setFillColor(30, 58, 138); // Deep royal blue
       doc.rect(0, 0, pageWidth, 12, 'F');
@@ -203,20 +579,21 @@ export function downloadStudentTokenCardsPdf(
       doc.rect(0, 12, pageWidth, 1.2, 'F');
 
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9.5);
+      doc.setFontSize(8.5);
       doc.setTextColor(255, 255, 255);
-      doc.text(
-        cleanPdfText(
-          `KARTU TOKEN & NILAI PESERTA CBT SOSIOLOGI SMA — ${kelasHeader.toUpperCase()}`
-        ),
-        marginX,
-        7.8
+      const rawLeftHeader = cleanPdfText(
+        `KARTU TOKEN LOGIN, TOKEN UJIAN & NILAI CBT — ${kelasHeader.toUpperCase()}`
       );
+      const safeLeftHeader =
+        rawLeftHeader.length > 64
+          ? rawLeftHeader.slice(0, 62) + '...'
+          : rawLeftHeader;
+      doc.text(safeLeftHeader, marginX, 7.8);
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(7.5);
       doc.text(
-        `Halaman Kartu ${currentCardPage}/${totalCardPages}  |  Cetak: ${cleanPdfText(nowStr)}`,
+        `Hal. Kartu ${currentCardPage}/${totalCardPages}  |  Cetak: ${cleanPdfText(nowStr)}`,
         pageWidth - marginX,
         7.8,
         { align: 'right' }
@@ -228,12 +605,18 @@ export function downloadStudentTokenCardsPdf(
     const x = marginX + col * (cardWidth + gapX);
     const y = marginY + row * (cardHeight + gapY);
 
-    const res = resultsMap.get(Number(student.id));
-    const score = res ? res.skor_angka : null;
-    const kodePaket = cleanPdfText(
-      student.kode_soal || student.variasi_paket || 'PAKET-A'
-    );
-    const tingkat = extractTingkatFromKelas(student.kelas);
+    const {
+      student,
+      noAbsen,
+      ganjilGenapLabel,
+      tokenLogin,
+      kodePaket,
+      namaPaketSoal,
+      mataPelajaran,
+      tokenUjianHariIni,
+      score,
+      statusLabel,
+    } = rec;
 
     // Card outer border & subtle background
     doc.setDrawColor(203, 213, 225);
@@ -243,143 +626,240 @@ export function downloadStudentTokenCardsPdf(
 
     // Card Top Banner (Colorful header inside card)
     doc.setFillColor(37, 99, 235); // Blue-600
-    doc.roundedRect(x, y, cardWidth, 11.5, 2.5, 2.5, 'F');
-    doc.rect(x, y + 8, cardWidth, 3.5, 'F'); // square bottom corners of header
+    doc.roundedRect(x, y, cardWidth, 11.2, 2.5, 2.5, 'F');
+    doc.rect(x, y + 8, cardWidth, 3.2, 'F'); // square bottom corners of header
 
     // Accent stripe under card header
     doc.setFillColor(245, 158, 11); // Amber-500
-    doc.rect(x, y + 11.5, cardWidth, 1, 'F');
+    doc.rect(x, y + 11.2, cardWidth, 0.9, 'F');
 
     // Card Header Text
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
+    doc.setFontSize(7);
     doc.setTextColor(255, 255, 255);
-    doc.text('KARTU PESERTA & TOKEN CBT SOSIOLOGI', x + 3.5, y + 5);
+    doc.text('KARTU PESERTA, TOKEN LOGIN & TOKEN UJIAN CBT', x + 3.2, y + 4.8);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.5);
+    doc.setFontSize(6.1);
     doc.setTextColor(219, 234, 254);
+    const subBannerText = cleanPdfText(
+      `Mapel: ${mataPelajaran}  |  Absen #${noAbsen} (${ganjilGenapLabel})`
+    );
     doc.text(
-      `Sistem Asesmen Sosiologi SMA ${tingkat !== 'LAINNYA' ? `- Kelas ${tingkat}` : ''}`,
-      x + 3.5,
-      y + 9.2
+      subBannerText.length > 44 ? subBannerText.slice(0, 42) + '...' : subBannerText,
+      x + 3.2,
+      y + 8.9
     );
 
     // Package Code Badge in Top Right of Card
-    doc.setFillColor(30, 41, 59);
-    doc.roundedRect(x + cardWidth - 21, y + 2.5, 18, 6.2, 1.2, 1.2, 'F');
+    const badgeW = Math.min(24, Math.max(17, kodePaket.length * 2.1 + 4));
+    doc.setFillColor(15, 23, 42);
+    doc.roundedRect(
+      x + cardWidth - badgeW - 2.8,
+      y + 2.3,
+      badgeW,
+      6.4,
+      1.2,
+      1.2,
+      'F'
+    );
     doc.setFont('courier', 'bold');
-    doc.setFontSize(6.8);
-    doc.setTextColor(255, 255, 255);
-    doc.text(kodePaket, x + cardWidth - 12, y + 6.7, { align: 'center' });
+    doc.setFontSize(6.5);
+    doc.setTextColor(251, 191, 36); // Amber-400 text
+    doc.text(
+      cleanPdfText(kodePaket).slice(0, 11),
+      x + cardWidth - badgeW / 2 - 2.8,
+      y + 6.5,
+      { align: 'center' }
+    );
 
-    // Student Identity Section
-    const bodyY = y + 16.5;
+    // Student Identity & Assigned Package Section
+    const bodyY = y + 15.2;
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.5);
+    doc.setFontSize(5.8);
     doc.setTextColor(100, 116, 139);
-    doc.text('NAMA LENGKAP PESERTA:', x + 3.5, bodyY);
+    doc.text('NAMA PESERTA UJIAN:', x + 3.2, bodyY);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.8);
-    doc.setTextColor(15, 23, 42);
-    const cleanName = cleanPdfText(student.nama);
-    const truncatedName =
-      cleanName.length > 34 ? cleanName.slice(0, 32) + '...' : cleanName;
-    doc.text(truncatedName, x + 3.5, bodyY + 4.3);
-
-    // Kelas & Status Row
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text('KELAS / ROMBEL:', x + 3.5, bodyY + 10);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.8);
+    doc.setFontSize(6.2);
     doc.setTextColor(30, 64, 175);
-    doc.text(cleanPdfText(student.kelas), x + 3.5, bodyY + 14);
+    const klsShort = cleanPdfText(student.kelas);
+    doc.text(
+      klsShort.length > 22 ? klsShort.slice(0, 20) + '..' : klsShort,
+      x + cardWidth - 3.2,
+      bodyY,
+      { align: 'right' }
+    );
 
-    // Token Box (Left-Center Highlight) & Score Box (Right Highlight)
-    const boxY = bodyY + 17.5;
-    const tokenBoxW = 46;
-    const scoreBoxW = cardWidth - 7 - tokenBoxW - 3;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.2);
+    doc.setTextColor(15, 23, 42);
+    const cleanName = cleanPdfText(`${noAbsen}. ${student.nama}`);
+    const truncatedName =
+      cleanName.length > 36 ? cleanName.slice(0, 34) + '...' : cleanName;
+    doc.text(truncatedName, x + 3.2, bodyY + 4.1);
 
-    // Token Box
+    // Assigned Paket Soal Strip (Indigo-50 highlight bar showing exact Paket Soal & Mapel)
+    const pkgBarY = bodyY + 6.2;
+    doc.setFillColor(238, 242, 255); // Indigo-50
+    doc.setDrawColor(199, 210, 254); // Indigo-200
+    doc.setLineWidth(0.28);
+    doc.roundedRect(x + 3.2, pkgBarY, cardWidth - 6.4, 8.2, 1.5, 1.5, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.4);
+    doc.setTextColor(67, 56, 202); // Indigo-700
+    doc.text(
+      `PAKET SOAL DIDAPAT (${ganjilGenapLabel}):`,
+      x + 5,
+      pkgBarY + 3.1
+    );
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.6);
+    doc.setTextColor(15, 23, 42);
+    const fullPkgTitle = cleanPdfText(
+      `[${kodePaket}] ${namaPaketSoal} (${mataPelajaran})`
+    );
+    doc.text(
+      fullPkgTitle.length > 46 ? fullPkgTitle.slice(0, 44) + '...' : fullPkgTitle,
+      x + 5,
+      pkgBarY + 6.7
+    );
+
+    // 3 Precision Highlight Boxes Side-by-Side:
+    // 1) TOKEN LOGIN AKUN   2) TOKEN UJIAN HARI INI   3) NILAI & STATUS CBT
+    const boxY = bodyY + 16;
+    const innerW = cardWidth - 6.4; // 85.6mm
+    const boxGap = 2;
+    const singleBoxW = (innerW - boxGap * 2) / 3; // ~27.2mm
+    const boxH = 16.2;
+
+    // BOX 1: TOKEN LOGIN AKUN SISWA (Blue)
+    const box1X = x + 3.2;
     doc.setFillColor(239, 246, 255); // Blue-50
     doc.setDrawColor(147, 197, 253); // Blue-300
-    doc.setLineWidth(0.35);
-    doc.roundedRect(x + 3.5, boxY, tokenBoxW, 16, 2, 2, 'FD');
+    doc.setLineWidth(0.32);
+    doc.roundedRect(box1X, boxY, singleBoxW, boxH, 1.8, 1.8, 'FD');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6);
-    doc.setTextColor(37, 99, 235);
-    doc.text('TOKEN LOGIN UJIAN (6 DIGIT)', x + 3.5 + tokenBoxW / 2, boxY + 4.2, {
+    doc.setFontSize(5.2);
+    doc.setTextColor(29, 78, 216);
+    doc.text('TOKEN LOGIN AKUN', box1X + singleBoxW / 2, boxY + 3.8, {
       align: 'center',
     });
 
     doc.setFont('courier', 'bold');
-    doc.setFontSize(13.5);
+    doc.setFontSize(10.5);
     doc.setTextColor(15, 23, 42);
     doc.text(
-      cleanPdfText(student.token_ujian),
-      x + 3.5 + tokenBoxW / 2,
-      boxY + 11.8,
+      cleanPdfText(tokenLogin).slice(0, 10),
+      box1X + singleBoxW / 2,
+      boxY + 10.3,
       { align: 'center' }
     );
 
-    // Score / Status Box on the right
-    const badgeStyle = getScoreBadgeColors(score);
-    const scoreBoxX = x + 3.5 + tokenBoxW + 3;
-    doc.setFillColor(...badgeStyle.bg);
-    doc.setDrawColor(...badgeStyle.border);
-    doc.roundedRect(scoreBoxX, boxY, scoreBoxW, 16, 2, 2, 'FD');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(4.9);
+    doc.setTextColor(71, 85, 105);
+    doc.text('Login Portal Siswa', box1X + singleBoxW / 2, boxY + 14.3, {
+      align: 'center',
+    });
+
+    // BOX 2: TOKEN UJIAN HARI INI / SESUAI PAKET SOAL (Amber / Gold Highlight)
+    const box2X = box1X + singleBoxW + boxGap;
+    doc.setFillColor(255, 251, 235); // Amber-50
+    doc.setDrawColor(245, 158, 11); // Amber-500
+    doc.setLineWidth(0.35);
+    doc.roundedRect(box2X, boxY, singleBoxW, boxH, 1.8, 1.8, 'FD');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6);
+    doc.setFontSize(5.2);
+    doc.setTextColor(180, 83, 9); // Amber-700
+    doc.text('TOKEN UJIAN HARI INI', box2X + singleBoxW / 2, boxY + 3.8, {
+      align: 'center',
+    });
+
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(120, 53, 15); // Amber-900
+    doc.text(
+      cleanPdfText(tokenUjianHariIni).slice(0, 10),
+      box2X + singleBoxW / 2,
+      boxY + 10.3,
+      { align: 'center' }
+    );
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(4.9);
+    doc.setTextColor(146, 64, 14);
+    const shortPkgTag = cleanPdfText(`Sesuai ${kodePaket}`);
+    doc.text(
+      shortPkgTag.length > 16 ? shortPkgTag.slice(0, 16) : shortPkgTag,
+      box2X + singleBoxW / 2,
+      boxY + 14.3,
+      { align: 'center' }
+    );
+
+    // BOX 3: HASIL NILAI / STATUS UJIAN CBT (Right)
+    const badgeStyle = getScoreBadgeColors(score);
+    const box3X = box2X + singleBoxW + boxGap;
+    doc.setFillColor(...badgeStyle.bg);
+    doc.setDrawColor(...badgeStyle.border);
+    doc.setLineWidth(0.32);
+    doc.roundedRect(box3X, boxY, singleBoxW, boxH, 1.8, 1.8, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.2);
     doc.setTextColor(...badgeStyle.text);
-    doc.text('HASIL NILAI CBT', scoreBoxX + scoreBoxW / 2, boxY + 4.2, {
+    doc.text('NILAI & STATUS CBT', box3X + singleBoxW / 2, boxY + 3.8, {
       align: 'center',
     });
 
     if (typeof score === 'number') {
       doc.setFont('courier', 'bold');
-      doc.setFontSize(12.5);
-      doc.text(`${score}/100`, scoreBoxX + scoreBoxW / 2, boxY + 10.5, {
+      doc.setFontSize(10.5);
+      doc.text(`${score}/100`, box3X + singleBoxW / 2, boxY + 10.1, {
         align: 'center',
       });
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(5.5);
+      doc.setFontSize(4.8);
       doc.text(
         cleanPdfText(badgeStyle.label),
-        scoreBoxX + scoreBoxW / 2,
+        box3X + singleBoxW / 2,
         boxY + 14.3,
         { align: 'center' }
       );
     } else {
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.5);
+      doc.setFontSize(7);
       doc.text(
-        cleanPdfText(student.status_ujian || 'Belum Mulai'),
-        scoreBoxX + scoreBoxW / 2,
-        boxY + 10.2,
+        cleanPdfText(statusLabel),
+        box3X + singleBoxW / 2,
+        boxY + 10.1,
         { align: 'center' }
       );
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(5.5);
-      doc.text('Siap Digunakan', scoreBoxX + scoreBoxW / 2, boxY + 14, {
+      doc.setFontSize(4.9);
+      doc.text('Siap Digunakan', box3X + singleBoxW / 2, boxY + 14.3, {
         align: 'center',
       });
     }
 
-    // Card Footer Instructions
+    // Card Footer Instructions with exact tokens
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6);
-    doc.setTextColor(100, 116, 139);
+    doc.setFontSize(5.4);
+    doc.setTextColor(71, 85, 105);
+    const footerInstruction = cleanPdfText(
+      `1. Login Akun (${tokenLogin}) -> 2. Pilih Paket ${kodePaket} -> 3. Masukkan Token Ujian (${tokenUjianHariIni})`
+    );
     doc.text(
-      'Alur Login: 1. Pilih Kelas -> 2. Pilih Nama Peserta -> 3. Masukkan 6 Digit Token',
+      footerInstruction.length > 68
+        ? footerInstruction.slice(0, 66) + '..'
+        : footerInstruction,
       x + cardWidth / 2,
-      y + cardHeight - 2.5,
+      y + cardHeight - 2.2,
       { align: 'center' }
     );
   });
@@ -392,37 +872,71 @@ export function downloadStudentTokenCardsPdf(
 }
 
 /**
- * Helper to draw summary table pages before the cards
+ * Helper to draw precision summary table pages before the cards
  */
 function drawSummaryTablePages(
   doc: jsPDF,
-  students: StudentItem[],
-  resultsMap: Map<number, ResultItem>,
-  examsMap: Map<number, ExamItem>,
+  records: StudentPrecisionRecord[],
   kelasHeader: string,
   nowStr: string
 ): void {
   const pageWidth = 210;
   const marginX = 12;
+  const tableWidth = pageWidth - marginX * 2; // 186mm
 
-  // Calculate stats
+  // Calculate score stats
   const scores: number[] = [];
-  students.forEach((s) => {
-    const r = resultsMap.get(Number(s.id));
-    if (r && typeof r.skor_angka === 'number') {
-      scores.push(r.skor_angka);
+  records.forEach((rec) => {
+    if (typeof rec.score === 'number') {
+      scores.push(rec.score);
     }
   });
 
   const avgScore =
     scores.length > 0
-      ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+      ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10
       : null;
   const maxScore = scores.length > 0 ? Math.max(...scores) : null;
   const minScore = scores.length > 0 ? Math.min(...scores) : null;
 
-  const rowsPerPage = 28;
-  const totalPages = Math.ceil(students.length / rowsPerPage);
+  // Collect distinct Paket Soal & Token Ujian Hari Ini present in this class/group
+  const distinctPackagesMap = new Map<
+    string,
+    {
+      kodePaket: string;
+      namaPaketSoal: string;
+      mataPelajaran: string;
+      tokenUjian: string;
+      count: number;
+    }
+  >();
+
+  records.forEach((rec) => {
+    const key = `${rec.kodePaket}__${rec.namaPaketSoal}__${rec.tokenUjianHariIni}`;
+    const existing = distinctPackagesMap.get(key);
+    if (existing) {
+      existing.count++;
+    } else {
+      distinctPackagesMap.set(key, {
+        kodePaket: rec.kodePaket,
+        namaPaketSoal: rec.namaPaketSoal,
+        mataPelajaran: rec.mataPelajaran,
+        tokenUjian: rec.tokenUjianHariIni,
+        count: 1,
+      });
+    }
+  });
+  const distinctPackages = Array.from(distinctPackagesMap.values());
+  const primaryTokenSummary =
+    distinctPackages.length === 1
+      ? `${distinctPackages[0].tokenUjian} (${distinctPackages[0].kodePaket})`
+      : distinctPackages
+          .slice(0, 2)
+          .map((d) => `${d.kodePaket}:${d.tokenUjian}`)
+          .join(' | ');
+
+  const rowsPerPage = 25;
+  const totalPages = Math.ceil(records.length / rowsPerPage);
 
   for (let p = 0; p < totalPages; p++) {
     if (p > 0) doc.addPage();
@@ -434,34 +948,34 @@ function drawSummaryTablePages(
     doc.rect(0, 22, pageWidth, 1.5, 'F');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
+    doc.setFontSize(12);
     doc.setTextColor(255, 255, 255);
     doc.text(
-      'REKAPITULASI KARTU TOKEN & HASIL NILAI CBT SOSIOLOGI',
+      'REKAPITULASI TOKEN LOGIN, TOKEN UJIAN, PAKET SOAL & NILAI CBT',
       marginX,
-      10
+      9.8
     );
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8.2);
     doc.setTextColor(219, 234, 254);
     doc.text(
       cleanPdfText(
-        `Filter Kelas: ${kelasHeader}  |  Total Peserta: ${students.length} Siswa  |  Tanggal Cetak: ${nowStr}`
+        `Filter Kelas: ${kelasHeader}  |  Total Peserta: ${records.length} Siswa  |  Tanggal Cetak: ${nowStr}`
       ),
       marginX,
       16.5
     );
 
-    let startY = 29;
+    let startY = 27.5;
 
-    // KPI Summary Boxes on Page 1
+    // KPI Summary Boxes & Active Package Token Banner on Page 1
     if (p === 0) {
-      const kpiW = (pageWidth - marginX * 2 - 9) / 4;
+      const kpiW = (tableWidth - 9) / 4;
       const kpis = [
         {
           label: 'TOTAL PESERTA',
-          val: `${students.length} Siswa`,
+          val: `${records.length} Siswa`,
           bg: [239, 246, 255] as [number, number, number],
           text: [30, 64, 175] as [number, number, number],
         },
@@ -472,16 +986,19 @@ function drawSummaryTablePages(
           text: [6, 95, 70] as [number, number, number],
         },
         {
-          label: 'RATA-RATA KELAS',
-          val: avgScore !== null ? `${avgScore} / 100` : '-',
+          label: 'RATA-RATA & MAX/MIN',
+          val:
+            avgScore !== null
+              ? `${avgScore} (${maxScore}/${minScore})`
+              : '- (- / -)',
           bg: [245, 243, 255] as [number, number, number],
           text: [91, 33, 182] as [number, number, number],
         },
         {
-          label: 'TERTINGGI / TERENDAH',
-          val: maxScore !== null ? `${maxScore} / ${minScore}` : '- / -',
+          label: 'TOKEN UJIAN HARI INI',
+          val: cleanPdfText(primaryTokenSummary || '-').slice(0, 18),
           bg: [255, 251, 235] as [number, number, number],
-          text: [146, 64, 14] as [number, number, number],
+          text: [180, 83, 9] as [number, number, number],
         },
       ];
 
@@ -489,112 +1006,176 @@ function drawSummaryTablePages(
         const kx = marginX + idx * (kpiW + 3);
         doc.setFillColor(...k.bg);
         doc.setDrawColor(203, 213, 225);
-        doc.roundedRect(kx, startY, kpiW, 14, 2, 2, 'FD');
+        doc.roundedRect(kx, startY, kpiW, 13, 2, 2, 'FD');
 
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(6.5);
+        doc.setFontSize(6);
         doc.setTextColor(100, 116, 139);
-        doc.text(k.label, kx + 3, startY + 5);
+        doc.text(k.label, kx + 2.8, startY + 4.6);
 
         doc.setFont('courier', 'bold');
-        doc.setFontSize(10.5);
+        doc.setFontSize(9.2);
         doc.setTextColor(...k.text);
-        doc.text(k.val, kx + 3, startY + 11.2);
+        doc.text(k.val, kx + 2.8, startY + 10.3);
       });
 
-      startY += 19;
+      startY += 15.5;
+
+      // Active Paket Soal & Token Ujian Hari Ini Reference Box
+      const pkgLines = distinctPackages.map(
+        (d) =>
+          `[${d.mataPelajaran}] ${d.namaPaketSoal} (${d.kodePaket} - ${d.count} Siswa)  ->  TOKEN UJIAN HARI INI: ${d.tokenUjian}`
+      );
+      const bannerH = Math.min(18, 5.5 + Math.min(pkgLines.length, 3) * 3.8);
+      doc.setFillColor(255, 251, 235); // Amber-50
+      doc.setDrawColor(245, 158, 11); // Amber-500
+      doc.setLineWidth(0.35);
+      doc.roundedRect(marginX, startY, tableWidth, bannerH, 1.8, 1.8, 'FD');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(146, 64, 14);
+      doc.text(
+        'DAFTAR PAKET SOAL & TOKEN SESI UJIAN HARI INI (SESUAI DISTRIBUSI PESERTA):',
+        marginX + 3,
+        startY + 4.2
+      );
+
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7.2);
+      doc.setTextColor(15, 23, 42);
+      pkgLines.slice(0, 3).forEach((line, lIdx) => {
+        const cleanLine = cleanPdfText(line);
+        doc.text(
+          cleanLine.length > 105 ? cleanLine.slice(0, 103) + '...' : cleanLine,
+          marginX + 3,
+          startY + 8.2 + lIdx * 3.6
+        );
+      });
+
+      startY += bannerH + 3;
     }
 
-    // Table Header
-    const colWidths = [10, 62, 28, 22, 22, 22, 20]; // Total = 186mm
+    // Precision 7-Column Table Header (Total = 186mm)
+    // 1. NO (12mm) | 2. NAMA LENGKAP SISWA (48mm) | 3. KELAS (23mm) | 4. PAKET SOAL DIDAPAT (40mm) | 5. TOKEN LOGIN (20mm) | 6. TOKEN UJIAN (20mm) | 7. NILAI & STATUS (23mm)
+    const colWidths = [12, 48, 23, 40, 20, 20, 23];
     const headers = [
       'NO',
       'NAMA LENGKAP SISWA',
       'KELAS',
-      'TOKEN',
-      'PAKET',
-      'STATUS',
-      'NILAI',
+      'PAKET SOAL DIDAPAT',
+      'TOKEN LOGIN',
+      'TOKEN UJIAN',
+      'NILAI / STATUS',
     ];
 
     doc.setFillColor(30, 41, 59);
-    doc.rect(marginX, startY, pageWidth - marginX * 2, 8, 'F');
+    doc.rect(marginX, startY, tableWidth, 8, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.2);
+    doc.setFontSize(6.8);
     doc.setTextColor(255, 255, 255);
 
     let cx = marginX;
     headers.forEach((h, i) => {
-      doc.text(h, cx + 2, startY + 5.3);
+      doc.text(h, cx + 1.5, startY + 5.2);
       cx += colWidths[i];
     });
 
     startY += 8;
 
-    const slice = students.slice(p * rowsPerPage, (p + 1) * rowsPerPage);
-    slice.forEach((st, idx) => {
-      const globalIdx = p * rowsPerPage + idx + 1;
-      const res = resultsMap.get(Number(st.id));
+    const slice = records.slice(p * rowsPerPage, (p + 1) * rowsPerPage);
+    slice.forEach((rec, idx) => {
       const rowH = 7.4;
 
       if (idx % 2 === 1) {
         doc.setFillColor(248, 250, 252);
-        doc.rect(marginX, startY, pageWidth - marginX * 2, rowH, 'F');
+        doc.rect(marginX, startY, tableWidth, rowH, 'F');
       }
 
       doc.setDrawColor(226, 232, 240);
       doc.line(marginX, startY + rowH, pageWidth - marginX, startY + rowH);
 
       let rx = marginX;
-      doc.setFont('courier', 'normal');
-      doc.setFontSize(7.5);
+
+      // 1. NO ABSEN + GANJIL/GENAP
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(6.8);
       doc.setTextColor(71, 85, 105);
-      doc.text(String(globalIdx), rx + 2, startY + 5);
+      doc.text(
+        `${rec.noAbsen} ${rec.isGanjil ? 'Gjl' : 'Gnp'}`,
+        rx + 1.5,
+        startY + 5
+      );
       rx += colWidths[0];
 
+      // 2. NAMA LENGKAP SISWA
       doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.2);
       doc.setTextColor(15, 23, 42);
-      const nameStr = cleanPdfText(st.nama);
+      const nameStr = cleanPdfText(rec.student.nama);
       doc.text(
-        nameStr.length > 33 ? nameStr.slice(0, 31) + '...' : nameStr,
-        rx + 2,
+        nameStr.length > 27 ? nameStr.slice(0, 25) + '..' : nameStr,
+        rx + 1.5,
         startY + 5
       );
       rx += colWidths[1];
 
+      // 3. KELAS
       doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
       doc.setTextColor(51, 65, 85);
-      doc.text(cleanPdfText(st.kelas).slice(0, 15), rx + 2, startY + 5);
+      doc.text(cleanPdfText(rec.student.kelas).slice(0, 13), rx + 1.5, startY + 5);
       rx += colWidths[2];
 
-      doc.setFont('courier', 'bold');
-      doc.setTextColor(37, 99, 235);
-      doc.text(cleanPdfText(st.token_ujian), rx + 2, startY + 5);
-      rx += colWidths[3];
-
-      doc.setFont('courier', 'normal');
-      doc.setTextColor(71, 85, 105);
+      // 4. PAKET SOAL DIDAPAT (Kode Paket + Judul Paket Soal)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.6);
+      doc.setTextColor(55, 48, 163); // Indigo-800
+      const pkgText = cleanPdfText(`[${rec.kodePaket}] ${rec.namaPaketSoal}`);
       doc.text(
-        cleanPdfText(st.kode_soal || st.variasi_paket || 'PAKET-A'),
-        rx + 2,
+        pkgText.length > 25 ? pkgText.slice(0, 23) + '..' : pkgText,
+        rx + 1.5,
         startY + 5
       );
+      rx += colWidths[3];
+
+      // 5. TOKEN LOGIN AKUN SISWA
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(29, 78, 216); // Blue-700
+      doc.text(cleanPdfText(rec.tokenLogin).slice(0, 9), rx + 1.5, startY + 5);
       rx += colWidths[4];
 
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      const stStatus = cleanPdfText(st.status_ujian || 'Belum Mulai');
-      doc.text(stStatus, rx + 2, startY + 5);
+      // 6. TOKEN UJIAN HARI INI (SESUAI PAKET SOAL)
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(180, 83, 9); // Amber-700
+      doc.text(
+        cleanPdfText(rec.tokenUjianHariIni).slice(0, 9),
+        rx + 1.5,
+        startY + 5
+      );
       rx += colWidths[5];
 
-      doc.setFont('courier', 'bold');
-      doc.setFontSize(8.2);
-      if (res && typeof res.skor_angka === 'number') {
+      // 7. NILAI & STATUS
+      if (typeof rec.score === 'number') {
+        doc.setFont('courier', 'bold');
+        doc.setFontSize(7.4);
         doc.setTextColor(6, 95, 70);
-        doc.text(`${res.skor_angka}/100`, rx + 2, startY + 5);
+        const shortGrade =
+          rec.score >= 85
+            ? 'A'
+            : rec.score >= 70
+              ? 'B'
+              : rec.score >= 55
+                ? 'C'
+                : 'D';
+        doc.text(`${rec.score}/100 (${shortGrade})`, rx + 1.5, startY + 5);
       } else {
-        doc.setTextColor(148, 163, 184);
-        doc.text('-', rx + 2, startY + 5);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.6);
+        doc.setTextColor(100, 116, 139);
+        doc.text(cleanPdfText(rec.statusLabel).slice(0, 13), rx + 1.5, startY + 5);
       }
 
       startY += rowH;
@@ -610,6 +1191,8 @@ export function downloadSingleStudentResultPdf(
 ): void {
   const {
     student,
+    allStudents,
+    exams,
     exam,
     score,
     kategori,
@@ -621,6 +1204,13 @@ export function downloadSingleStudentResultPdf(
     questions = [],
     studentAnswers = {},
   } = params;
+
+  const precision = resolveStudentPrecisionRecord({
+    student,
+    allStudents: allStudents && allStudents.length > 0 ? allStudents : [student],
+    exams: exams && exams.length > 0 ? exams : exam ? [exam] : [],
+    preferredExamId: exam?.id ?? null,
+  });
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -661,7 +1251,7 @@ export function downloadSingleStudentResultPdf(
   doc.setFontSize(8.5);
   doc.setTextColor(219, 234, 254);
   doc.text(
-    'Sistem Asesmen & Evaluasi Kompetensi Sosiologi SMA Terverifikasi',
+    `Sistem Asesmen & Evaluasi Kompetensi SMA — Mapel: ${cleanPdfText(precision.mataPelajaran)}`,
     marginX + 22,
     27
   );
@@ -692,19 +1282,33 @@ export function downloadSingleStudentResultPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
   doc.setTextColor(37, 99, 235);
-  doc.text('IDENTITAS PESERTA & KARTU TOKEN UJIAN', marginX + 5, y + 6.5);
+  doc.text(
+    'IDENTITAS PESERTA, PAKET SOAL & TOKEN UJIAN',
+    marginX + 5,
+    y + 6.5
+  );
 
   doc.setDrawColor(226, 232, 240);
   doc.line(marginX + 5, y + 9, marginX + leftW - 5, y + 9);
 
   const infoRows: Array<[string, string]> = [
-    ['Nama Peserta', cleanPdfText(student.nama)],
-    ['Kelas / Rombel', cleanPdfText(student.kelas)],
-    ['Mata Ujian', cleanPdfText(exam?.judul_ujian || 'Asesmen Sosiologi SMA')],
     [
-      'Kode Paket Soal',
+      'Nama Peserta',
       cleanPdfText(
-        student.kode_soal || student.variasi_paket || exam?.kode_paket || 'PAKET-A'
+        `${student.nama} (Absen #${precision.noAbsen} ${precision.ganjilGenapLabel})`
+      ),
+    ],
+    ['Kelas / Rombel', cleanPdfText(student.kelas)],
+    [
+      'Paket Soal Didapat',
+      cleanPdfText(
+        `[${precision.kodePaket}] ${exam?.judul_ujian || precision.namaPaketSoal}`
+      ),
+    ],
+    [
+      'Token Login & Ujian',
+      cleanPdfText(
+        `Login: ${precision.tokenLogin}  |  Token Ujian: ${precision.tokenUjianHariIni}`
       ),
     ],
     [
@@ -718,31 +1322,51 @@ export function downloadSingleStudentResultPdf(
   let ry = y + 14.5;
   infoRows.forEach(([label, val]) => {
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFontSize(7.6);
     doc.setTextColor(100, 116, 139);
-    doc.text(label, marginX + 5, ry);
+    doc.text(label, marginX + 4.5, ry);
 
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
-    const trimmedVal = val.length > 36 ? val.slice(0, 34) + '...' : val;
-    doc.text(`:  ${trimmedVal}`, marginX + 34, ry);
+    const trimmedVal = val.length > 32 ? val.slice(0, 30) + '..' : val;
+    doc.text(`: ${trimmedVal}`, marginX + 31, ry);
     ry += 5.5;
   });
 
-  // Token Pill inside Left Box
+  // Two stacked precision token pills on the right of Left Box (Token Login & Token Ujian)
   doc.setFillColor(239, 246, 255);
   doc.setDrawColor(147, 197, 253);
-  doc.roundedRect(marginX + leftW - 34, y + 11.5, 29, 14, 2, 2, 'FD');
+  doc.roundedRect(marginX + leftW - 31, y + 11, 27, 14, 1.8, 1.8, 'FD');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(5.8);
+  doc.setFontSize(5.2);
   doc.setTextColor(37, 99, 235);
-  doc.text('TOKEN PESERTA', marginX + leftW - 19.5, y + 15.8, { align: 'center' });
+  doc.text('TOKEN LOGIN', marginX + leftW - 17.5, y + 15, { align: 'center' });
   doc.setFont('courier', 'bold');
-  doc.setFontSize(11.5);
+  doc.setFontSize(9.5);
   doc.setTextColor(15, 23, 42);
-  doc.text(cleanPdfText(student.token_ujian), marginX + leftW - 19.5, y + 22.8, {
-    align: 'center',
-  });
+  doc.text(
+    cleanPdfText(precision.tokenLogin).slice(0, 8),
+    marginX + leftW - 17.5,
+    y + 21.8,
+    { align: 'center' }
+  );
+
+  doc.setFillColor(255, 251, 235);
+  doc.setDrawColor(245, 158, 11);
+  doc.roundedRect(marginX + leftW - 31, y + 27, 27, 14, 1.8, 1.8, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.2);
+  doc.setTextColor(180, 83, 9);
+  doc.text('TOKEN UJIAN', marginX + leftW - 17.5, y + 31, { align: 'center' });
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(120, 53, 15);
+  doc.text(
+    cleanPdfText(precision.tokenUjianHariIni).slice(0, 8),
+    marginX + leftW - 17.5,
+    y + 37.8,
+    { align: 'center' }
+  );
 
   // Right Box: Hero Score Card
   const badgeStyle = getScoreBadgeColors(score);
@@ -971,7 +1595,7 @@ export function downloadSingleStudentResultPdf(
     doc.setDrawColor(226, 232, 240);
     doc.line(marginX, 281, pageWidth - marginX, 281);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.2);
+    doc.setFontSize(6.8);
     doc.setTextColor(71, 85, 105);
     doc.text(
       `Dokumen Resmi CBT — ${cleanPdfText(student.nama)} (${cleanPdfText(student.kelas)})`,
@@ -979,9 +1603,9 @@ export function downloadSingleStudentResultPdf(
       285.5
     );
     doc.setFont('courier', 'normal');
-    doc.setFontSize(7);
+    doc.setFontSize(6.5);
     doc.text(
-      `Token: ${cleanPdfText(student.token_ujian)} | Skor: ${score}/100 | Hal. ${pageNum}`,
+      `Login: ${cleanPdfText(precision.tokenLogin)} | Token Ujian: ${cleanPdfText(precision.tokenUjianHariIni)} | Paket: ${cleanPdfText(precision.kodePaket)} | Skor: ${score}/100 | Hal. ${pageNum}`,
       pageWidth - marginX,
       285.5,
       { align: 'right' }

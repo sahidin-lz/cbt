@@ -64,6 +64,7 @@ import {
 import {
   downloadStudentTokenCardsPdf,
   downloadSingleStudentResultPdf,
+  resolveStudentPrecisionRecord,
 } from '../utils/cbtPdfGenerator';
 import {
   auth,
@@ -928,30 +929,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const targetList = filteredStudents.length > 0 ? filteredStudents : students;
     const rows = targetList.map((st, idx) => {
       const tkt = extractTingkatFromKelas(st.kelas);
+      const rec = resolveStudentPrecisionRecord({
+        student: st,
+        allStudents: students,
+        exams,
+        questions,
+        results,
+      });
       return [
         idx + 1,
+        `${rec.noAbsen} (${rec.ganjilGenapLabel})`,
         st.nama,
         st.kelas,
         tkt === 'LAINNYA' ? 'Umum' : `Tingkat ${tkt}`,
-        st.token_ujian,
-        st.status_ujian,
+        rec.tokenLogin,
+        rec.kodePaket,
+        `${rec.namaPaketSoal} (${rec.mataPelajaran})`,
+        rec.tokenUjianHariIni,
+        rec.statusLabel,
+        rec.score !== null ? rec.score : '-',
+        rec.predikatLabel,
       ];
     });
     const html = buildExcelHtmlTable(
-      'Database Siswa CBT',
+      'Database Siswa, Token Login, Paket Soal, Token Ujian & Nilai CBT',
       [
         'No',
+        'No. Absen (Ganjil/Genap)',
         'nama_siswa',
         'kelas',
         'Tingkatan Kelas',
-        'Token Ujian (6 Karakter)',
+        'Token Login Akun',
+        'Kode Paket Soal',
+        'Nama Paket Soal & Mapel',
+        'Token Ujian Hari Ini',
         'Status Ujian',
+        'Nilai Akhir (0-100)',
+        'Predikat',
       ],
       rows
     );
     triggerBrowserDownload(
       html,
-      'Database_Siswa_dan_Token_CBT.xls',
+      'Database_Siswa_Token_Login_Token_Ujian_dan_Nilai_CBT.xls',
       'application/vnd.ms-excel;charset=utf-8;'
     );
   };
@@ -1092,31 +1112,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         : students;
     const rows = list.map((st, idx) => {
       const tkt = extractTingkatFromKelas(st.kelas);
+      const rec = resolveStudentPrecisionRecord({
+        student: st,
+        allStudents: students,
+        exams,
+        questions,
+        results,
+      });
       return [
         idx + 1,
+        `${rec.noAbsen} (${rec.ganjilGenapLabel})`,
         st.nama,
         st.kelas,
         tkt === 'LAINNYA' ? 'Umum' : `Tingkat ${tkt}`,
-        st.token_ujian,
-        st.status_ujian,
+        rec.tokenLogin,
+        rec.kodePaket,
+        `${rec.namaPaketSoal} (${rec.mataPelajaran})`,
+        rec.tokenUjianHariIni,
+        rec.statusLabel,
+        rec.score !== null ? rec.score : '-',
+        rec.predikatLabel,
       ];
     });
     const label = targetKelasName || 'Semua_Kelas';
     const html = buildExcelHtmlTable(
-      `Siswa ${label}`,
+      `Data Token Login, Token Ujian & Nilai Siswa ${label}`,
       [
         'No',
+        'No. Absen (Ganjil/Genap)',
         'nama_siswa',
         'kelas',
         'Tingkatan Kelas',
-        'Token Ujian (6 Karakter)',
+        'Token Login Akun',
+        'Kode Paket Soal',
+        'Nama Paket Soal & Mapel',
+        'Token Ujian Hari Ini',
         'Status Ujian',
+        'Nilai Akhir (0-100)',
+        'Predikat',
       ],
       rows
     );
     triggerBrowserDownload(
       html,
-      `Database_Siswa_${label.replace(/[^a-zA-Z0-9]+/g, '_')}.xls`,
+      `Database_Siswa_Token_dan_Nilai_${label.replace(/[^a-zA-Z0-9]+/g, '_')}.xls`,
       'application/vnd.ms-excel;charset=utf-8;'
     );
   };
@@ -1587,6 +1626,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const st = students.find((s) => s.id === resItem.student_id);
       const ex = exams.find((e) => e.id === resItem.exam_id);
       const tkt = st ? extractTingkatFromKelas(st.kelas) : 'LAINNYA';
+      const rec = st
+        ? resolveStudentPrecisionRecord({
+            student: st,
+            allStudents: students,
+            exams,
+            questions,
+            results,
+          })
+        : null;
       const ai = resItem.analisis_ai;
       const ketuntasan =
         resItem.skor_angka >= 70 ? 'Tuntas (>=70)' : 'Belum Tuntas (<70)';
@@ -1603,12 +1651,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .map(([qId, keys]) => `#${qId}:${(keys || []).join('')}`)
         .join(' ');
 
+      const kodePaket =
+        resItem.kode_soal ||
+        ex?.kode_paket ||
+        rec?.kodePaket ||
+        st?.kode_soal ||
+        'PAKET-A';
+      const tokenUjianSesi = ex
+        ? getEffectiveExamSessionToken(ex)
+        : rec?.tokenUjianHariIni || '-';
+
       return [
+        rec ? `${rec.noAbsen} (${rec.ganjilGenapLabel})` : '-',
         st?.nama || `Siswa #${resItem.student_id}`,
         st?.kelas || '-',
         tkt === 'LAINNYA' ? '-' : `Tingkat ${tkt}`,
-        st?.token_ujian || '-',
-        ex?.judul_ujian || `Ujian #${resItem.exam_id}`,
+        rec?.tokenLogin || st?.password_login || st?.token_ujian || '-',
+        kodePaket,
+        ex?.judul_ujian || rec?.namaPaketSoal || `Ujian #${resItem.exam_id}`,
+        tokenUjianSesi,
         resItem.skor_angka,
         kategori,
         ketuntasan,
@@ -1631,12 +1692,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     const pendingRows = pendingStudents.map((st) => {
       const tkt = extractTingkatFromKelas(st.kelas);
+      const rec = resolveStudentPrecisionRecord({
+        student: st,
+        allStudents: students,
+        exams,
+        questions,
+        results,
+      });
       return [
+        `${rec.noAbsen} (${rec.ganjilGenapLabel})`,
         st.nama,
         st.kelas,
         tkt === 'LAINNYA' ? '-' : `Tingkat ${tkt}`,
-        st.token_ujian,
-        '-',
+        rec.tokenLogin,
+        rec.kodePaket,
+        `${rec.namaPaketSoal} (${rec.mataPelajaran})`,
+        rec.tokenUjianHariIni,
         '-',
         st.status_ujian || 'Belum Mulai',
         'Belum Mengumpulkan Ujian',
@@ -1657,11 +1728,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const RESULT_REPORT_HEADERS = [
     'No',
+    'No. Absen (Ganjil/Genap)',
     'Nama Siswa',
     'Kelas',
     'Tingkatan',
-    'Token Ujian',
-    'Paket Ujian',
+    'Token Login Akun',
+    'Kode Paket Soal',
+    'Paket Soal & Mapel Didapat',
+    'Token Ujian Hari Ini',
     'Skor Akhir (0-100)',
     'Kategori / Status Ujian',
     'Status Ketuntasan',
@@ -3360,7 +3434,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   downloadStudentTokenCardsPdf(clsStudents, {
                                     kelasLabel: `Kelas ${clsItem.kelas}`,
                                     exams,
+                                    questions,
                                     results,
+                                    allStudents: students,
                                     includeSummaryPage: true,
                                   });
                                 }}
@@ -3441,7 +3517,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         ? `Kelas ${filterKelas}`
                         : 'Semua Kelas',
                     exams,
+                    questions,
                     results,
+                    allStudents: students,
                     includeSummaryPage: true,
                   })
                 }
@@ -3930,9 +4008,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
                         <th className="py-3 px-3.5">Nama Siswa</th>
-                        <th className="py-3 px-3.5">Kelas · Tingkat</th>
-                        <th className="py-3 px-3.5">Token</th>
-                        <th className="py-3 px-3.5">Kode Soal / Paket</th>
+                        <th className="py-3 px-3.5">Kelas · No. Absen</th>
+                        <th className="py-3 px-3.5">Token Login &amp; Token Ujian</th>
+                        <th className="py-3 px-3.5">Paket Soal &amp; Nilai</th>
                         <th className="py-3 px-3.5">Manajemen Status Ujian</th>
                         <th className="py-3 px-3.5 text-right">Aksi</th>
                       </tr>
@@ -3943,6 +4021,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         const isBlocked = st.status_ujian === 'Diblokir';
                         const isOngoing = st.status_ujian === 'Sedang Ujian';
                         const isFinished = st.status_ujian === 'Selesai';
+                        const rec = resolveStudentPrecisionRecord({
+                          student: st,
+                          allStudents: students,
+                          exams,
+                          questions,
+                          results,
+                        });
 
                         return (
                           <tr key={st.id} className="hover:bg-slate-50/80">
@@ -3955,35 +4040,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               )}
                             </td>
                             <td className="py-3 px-3.5 text-xs text-slate-700">
-                              <span className="font-semibold text-slate-900">
-                                {st.kelas}
-                              </span>
-                              {tkt !== 'LAINNYA' && (
-                                <span className="text-slate-500">
-                                  {' '}
-                                  · Tingkat {tkt}
+                              <div>
+                                <span className="font-semibold text-slate-900">
+                                  {st.kelas}
                                 </span>
-                              )}
-                            </td>
-                            <td className="py-3 px-3.5">
-                              <div className="flex flex-col gap-0.5">
-                                <code className="font-mono font-bold text-sm text-blue-700">
-                                  {st.token_ujian}
-                                </code>
-                                {st.password_login &&
-                                  st.password_login.toUpperCase() !==
-                                    st.token_ujian.toUpperCase() && (
-                                    <span className="text-[10px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
-                                      Pass: {st.password_login}
-                                    </span>
-                                  )}
+                                {tkt !== 'LAINNYA' && (
+                                  <span className="text-slate-500">
+                                    {' '}
+                                    · Tingkat {tkt}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-0.5 flex items-center gap-1">
+                                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                                  Absen #{rec.noAbsen} ({rec.ganjilGenapLabel})
+                                </span>
                               </div>
                             </td>
                             <td className="py-3 px-3.5">
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200">
-                                <Layers className="w-3 h-3 text-blue-600 shrink-0" />
-                                <span>{st.kode_soal || st.variasi_paket || 'PAKET-A'}</span>
-                              </span>
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[10px] font-bold uppercase text-slate-500 w-11">
+                                    Login:
+                                  </span>
+                                  <code className="font-mono font-bold text-xs text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
+                                    {rec.tokenLogin}
+                                  </code>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[10px] font-bold uppercase text-amber-800 w-11">
+                                    Ujian:
+                                  </span>
+                                  <code className="font-mono font-bold text-xs text-amber-900 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded">
+                                    {rec.tokenUjianHariIni}
+                                  </code>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 px-3.5">
+                              <div className="flex flex-col gap-1">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-xs font-bold bg-indigo-50 text-indigo-900 border border-indigo-200 w-fit">
+                                  <Layers className="w-3 h-3 text-indigo-600 shrink-0" />
+                                  <span>{rec.kodePaket}</span>
+                                </span>
+                                <span className="text-[11px] font-semibold text-slate-700 truncate max-w-[190px]" title={`${rec.namaPaketSoal} (${rec.mataPelajaran})`}>
+                                  {rec.namaPaketSoal} ({rec.mataPelajaran})
+                                </span>
+                                {rec.score !== null && (
+                                  <span className="text-[10px] font-mono font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
+                                    Nilai: {rec.score}/100 ({rec.predikatLabel})
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-3 px-3.5">
                               <div className="flex flex-wrap items-center gap-1.5">
@@ -4070,8 +4178,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     downloadStudentTokenCardsPdf([st], {
                                       kelasLabel: `Kelas ${st.kelas} - ${st.nama}`,
                                       exams,
+                                      questions,
                                       results,
-                                      includeSummaryPage: false,
+                                      allStudents: students,
+                                      includeSummaryPage: true,
                                     })
                                   }
                                   title={`Download Kartu Token & Nilai PDF untuk ${st.nama}`}
@@ -5817,7 +5927,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   downloadStudentTokenCardsPdf(students, {
                     kelasLabel: 'Semua Kelas',
                     exams,
+                    questions,
                     results,
+                    allStudents: students,
                     includeSummaryPage: true,
                   })
                 }
@@ -6096,7 +6208,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     downloadStudentTokenCardsPdf(clsStudents, {
                                       kelasLabel: `Kelas ${cls.kelas}`,
                                       exams,
+                                      questions,
                                       results,
+                                      allStudents: students,
                                       includeSummaryPage: true,
                                     });
                                   }}
@@ -6426,6 +6540,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                       aiAnalysis: resItem.analisis_ai,
                                       questions: examQuestionsForPdf,
                                       studentAnswers: syncedAnswersForPdf,
+                                      allStudents: students,
+                                      exams,
                                       submittedAt: resItem.created_at
                                         ? new Date(
                                             resItem.created_at
@@ -6501,6 +6617,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           exams={exams}
           questions={questions}
           students={students}
+          results={results}
           onRefreshData={onRefreshData}
         />
       )}

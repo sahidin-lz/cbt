@@ -2125,6 +2125,7 @@ export function resolveStudentExamPackagesBySubject<
   exams: TExam[];
   questions?: { exam_id: number | string }[];
   requireActive?: boolean;
+  onlyPackagesWithQuestions?: boolean;
 }): SubjectExamAllocationItem<TExam>[] {
   const {
     student,
@@ -2132,14 +2133,30 @@ export function resolveStudentExamPackagesBySubject<
     exams,
     questions,
     requireActive = true,
+    onlyPackagesWithQuestions = false,
   } = params;
   const studentKelas = (student?.kelas || '').trim();
   const absenInfo = getStudentAbsenInfoInClass(student, allStudents);
 
   // Filter exams matching this student's class
-  const classMatched = (exams || []).filter((ex) =>
+  let classMatched = (exams || []).filter((ex) =>
     isExamMatchedForStudentClass(ex, studentKelas, { requireActive })
   );
+
+  // Fallback to non-SELESAI (or any matching) exams if requireActive yielded 0 exams for this class
+  if (classMatched.length === 0 && requireActive && (exams || []).length > 0) {
+    const nonFinished = (exams || []).filter(
+      (ex) =>
+        (ex.status_ujian || '').toUpperCase().trim() !== 'SELESAI' &&
+        isExamMatchedForStudentClass(ex, studentKelas, { requireActive: false })
+    );
+    classMatched =
+      nonFinished.length > 0
+        ? nonFinished
+        : (exams || []).filter((ex) =>
+            isExamMatchedForStudentClass(ex, studentKelas, { requireActive: false })
+          );
+  }
 
   // Group by normalized Mata Pelajaran
   const subjectGroups = new Map<
@@ -2170,8 +2187,8 @@ export function resolveStudentExamPackagesBySubject<
       return Number(a.id) - Number(b.id);
     });
 
-    // If questions are provided and multiple packages exist in this subject, prefer packages that have questions
-    if (questions && questions.length > 0 && pool.length > 1) {
+    // Only filter by questions if explicitly requested
+    if (onlyPackagesWithQuestions && questions && questions.length > 0 && pool.length > 1) {
       const withQs = pool.filter((ex) =>
         questions.some((q) => Number(q.exam_id) === Number(ex.id))
       );
@@ -2274,13 +2291,18 @@ export function resolveStudentExamPackagesBySubject<
     } else if (chosenExam.mode_multi_paket) {
       assignedPackageCode = `PAKET-${letter}`;
     } else {
-      assignedPackageCode = (
-        chosenExam.kode_paket ||
-        student?.kode_soal ||
-        'PAKET-A'
-      )
-        .trim()
-        .toUpperCase();
+      const rawExamKode = (chosenExam.kode_paket || '').trim().toUpperCase();
+      const rawStudentKode = (student?.kode_soal || '').trim().toUpperCase();
+      const modeUpper = (chosenExam.distribusi_paket_mode || '').toUpperCase().trim();
+      if (modeUpper === 'KHUSUS_GENAP' && (!rawExamKode || rawExamKode === 'PAKET-A')) {
+        assignedPackageCode = 'PAKET-B';
+      } else if (rawExamKode && rawExamKode !== 'PAKET-A') {
+        assignedPackageCode = rawExamKode;
+      } else if (rawStudentKode) {
+        assignedPackageCode = rawStudentKode;
+      } else {
+        assignedPackageCode = rawExamKode || 'PAKET-A';
+      }
     }
 
     allocations.push({

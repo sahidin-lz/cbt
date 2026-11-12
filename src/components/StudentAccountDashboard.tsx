@@ -369,6 +369,8 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       aiAnalysis: localAiOverrides[resItem.id] || resItem.analisis_ai || null,
       questions: examQs,
       studentAnswers: syncedAns,
+      allStudents,
+      exams,
     });
   };
 
