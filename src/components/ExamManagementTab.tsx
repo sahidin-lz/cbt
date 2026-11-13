@@ -20,6 +20,10 @@ import {
   HelpCircle,
   Shuffle,
   Download,
+  ShieldAlert,
+  Activity,
+  Monitor,
+  Clock,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
 import {
@@ -88,6 +92,9 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     student: StudentItem;
     result: ResultItem | null;
   } | null>(null);
+
+  // Selected student for live web activity log modal
+  const [selectedTelemetryStudent, setSelectedTelemetryStudent] = useState<StudentItem | null>(null);
 
   // Expanded question list in item analysis
   const [expandedQuestionIds, setExpandedQuestionIds] = useState<Record<number, boolean>>({});
@@ -674,6 +681,236 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       {/* VIEW MODE 1: CARDS (Monitoring Siswa & Analisis Soal) */}
       {viewMode === 'cards' && (
         <div className="space-y-6">
+          {/* LIVE RADAR MONITORING AKTIVITAS WEB SISWA & ANTI-INSPECT ELEMENT */}
+          {(() => {
+            const monitoredStudents = filteredStudents.filter(
+              (s) =>
+                s.status_ujian === 'Sedang Ujian' ||
+                s.status_ujian === 'Diblokir' ||
+                Boolean(s.live_telemetry)
+            );
+            const activeCount = filteredStudents.filter(
+              (s) => s.status_ujian === 'Sedang Ujian'
+            ).length;
+            const inspectViolationCount = filteredStudents.filter(
+              (s) =>
+                (s.live_telemetry?.inspect_attempts || 0) > 0 ||
+                Boolean(s.live_telemetry?.devtools_open)
+            ).length;
+
+            return (
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 px-5 py-4 text-white flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping" />
+                      <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                        <Monitor className="w-4 h-4 text-emerald-300" />
+                        <span>
+                          Live Radar Monitoring Aktivitas Web Siswa &amp; Proteksi Anti-Inspect Element
+                        </span>
+                      </h3>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      Memantau posisi nomor soal aktif, progres jawaban, status layar penuh (Fullscreen), fokus tab browser, serta memblokir otomatis klik kanan / F12 / Inspect Element secara real-time.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/30 text-[11px] font-mono font-bold text-emerald-200">
+                      {activeCount} Sedang Ujian
+                    </span>
+                    <span
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-mono font-bold ${
+                        inspectViolationCount > 0
+                          ? 'bg-rose-500/25 border-rose-400/40 text-rose-200'
+                          : 'bg-white/10 border-white/15 text-slate-200'
+                      }`}
+                    >
+                      {inspectViolationCount} Terdeteksi Inspect/DevTools
+                    </span>
+                  </div>
+                </div>
+
+                {monitoredStudents.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-500 bg-slate-50/60">
+                    Belum ada aktivitas live web siswa yang sedang berlangsung pada filter kelas ini. Begitu siswa masuk ke lembar ujian, radar aktivitas layar dan sensor Anti-Inspect Element akan muncul otomatis secara real-time.
+                  </div>
+                ) : (
+                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 bg-slate-50/60 max-h-96 overflow-y-auto">
+                    {monitoredStudents.map((st) => {
+                      const tel = st.live_telemetry;
+                      const isBlocked = st.status_ujian === 'Diblokir';
+                      const isOngoing = st.status_ujian === 'Sedang Ujian';
+                      const hasInspectAlert =
+                        (tel?.inspect_attempts || 0) > 0 || Boolean(tel?.devtools_open);
+                      const minsLeft =
+                        typeof tel?.remaining_seconds === 'number'
+                          ? Math.max(0, Math.floor(tel.remaining_seconds / 60))
+                          : null;
+
+                      return (
+                        <div
+                          key={`radar-${st.id}`}
+                          className={`rounded-xl border p-3.5 bg-white shadow-2xs flex flex-col justify-between gap-2.5 transition-all ${
+                            isBlocked || hasInspectAlert
+                              ? 'border-rose-300 ring-1 ring-rose-200 bg-rose-50/20'
+                              : isOngoing
+                              ? 'border-emerald-300 bg-white'
+                              : 'border-slate-200 bg-white'
+                          }`}
+                        >
+                          <div className="space-y-1.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                                  <span>{st.nama}</span>
+                                </div>
+                                <div className="text-[10px] font-mono text-slate-500">
+                                  {st.kelas} · Kode: {tel?.kode_paket || st.kode_soal || 'PAKET-A'}
+                                </div>
+                              </div>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold shrink-0 ${
+                                  isBlocked
+                                    ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                    : isOngoing
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : 'bg-blue-100 text-blue-800 border border-blue-200'
+                                }`}
+                              >
+                                {st.status_ujian}
+                              </span>
+                            </div>
+
+                            {tel ? (
+                              <>
+                                <div className="grid grid-cols-3 gap-1.5 pt-1 text-[11px]">
+                                  <div className="bg-slate-50 border border-slate-200/80 rounded-lg px-2 py-1 text-center">
+                                    <div className="text-[9px] uppercase text-slate-400 font-bold">
+                                      Posisi Soal
+                                    </div>
+                                    <div className="font-mono font-extrabold text-indigo-900">
+                                      #{tel.current_question_no}/{tel.total_questions || '-'}
+                                    </div>
+                                  </div>
+                                  <div className="bg-slate-50 border border-slate-200/80 rounded-lg px-2 py-1 text-center">
+                                    <div className="text-[9px] uppercase text-slate-400 font-bold">
+                                      Terjawab
+                                    </div>
+                                    <div className="font-mono font-extrabold text-emerald-700">
+                                      {tel.answered_count}/{tel.total_questions || '-'}
+                                    </div>
+                                  </div>
+                                  <div className="bg-slate-50 border border-slate-200/80 rounded-lg px-2 py-1 text-center">
+                                    <div className="text-[9px] uppercase text-slate-400 font-bold">
+                                      Sisa Waktu
+                                    </div>
+                                    <div className="font-mono font-extrabold text-slate-800">
+                                      {minsLeft !== null ? `${minsLeft} mnt` : '-'}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-1 pt-1">
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                      tel.is_fullscreen
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                        : 'bg-amber-50 text-amber-800 border border-amber-200'
+                                    }`}
+                                  >
+                                    {tel.is_fullscreen ? 'Layar Penuh Aktif' : 'Bukan Fullscreen'}
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                      tel.is_focused
+                                        ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                        : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                    }`}
+                                  >
+                                    {tel.is_focused ? 'Fokus di Tab Ujian' : 'Keluar Fokus Tab!'}
+                                  </span>
+                                  {((tel.inspect_attempts || 0) > 0 || tel.devtools_open) && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white">
+                                      Inspect Element: {tel.inspect_attempts || 0}x
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="text-[11px] bg-indigo-50/60 border border-indigo-100 rounded-lg px-2.5 py-1.5 text-slate-700">
+                                  <div className="font-semibold text-indigo-950 truncate" title={tel.last_action}>
+                                    {tel.last_action}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 flex items-center justify-between mt-0.5">
+                                    <span>
+                                      Update:{' '}
+                                      {tel.last_active_at
+                                        ? new Date(tel.last_active_at).toLocaleTimeString('id-ID', {
+                                            hour: '2-digit',
+                                            minute: '2-digit',
+                                            second: '2-digit',
+                                          })
+                                        : '-'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedTelemetryStudent(st)}
+                                      className="font-bold text-indigo-700 hover:underline cursor-pointer"
+                                    >
+                                      Lihat Log Web ({tel.recent_logs?.length || 0})
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-[11px] text-slate-400 italic py-2">
+                                Menunggu sinyal aktivitas browser siswa...
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-slate-100">
+                            {isBlocked ? (
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(st, 'Sedang Ujian')}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md cursor-pointer"
+                              >
+                                <Unlock className="w-3 h-3" />
+                                <span>Buka Blokir</span>
+                              </button>
+                            ) : isOngoing ? (
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(st, 'Diblokir')}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md cursor-pointer"
+                              >
+                                <Lock className="w-3 h-3" />
+                                <span>Blokir Siswa</span>
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-slate-400">Sesi tidak aktif</span>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTelemetryStudent(st)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
+                            >
+                              <Activity className="w-3 h-3 text-indigo-600" />
+                              <span>Riwayat Aktivitas</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* TABEL 1: Monitoring Siswa yang Sedang Ujian & Nilai Akhir */}
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-5 py-4 text-white">
@@ -681,11 +918,11 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 <div>
                   <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
                     <Users className="w-4 h-4 text-amber-300" />
-                    <span>Daftar Siswa, Status Ujian &amp; Nilai Akhir</span>
+                    <span>Daftar Siswa, Monitoring Web Live &amp; Nilai Akhir</span>
                   </h3>
                   <p className="text-xs text-blue-200/90 mt-0.5">
                     Menampilkan status real-time siswa kelas{' '}
-                    <strong className="text-amber-300">{selectedClass}</strong> beserta nilai akhir, unduhan PDF pembahasan soal, dan kontrol pembukaan kunci.
+                    <strong className="text-amber-300">{selectedClass}</strong>, aktivitas pengerjaan soal di web, deteksi Inspect Element, nilai akhir, dan kontrol kunci sesi.
                   </p>
                 </div>
                 <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-[11px] font-mono font-bold text-amber-200">
@@ -782,7 +1019,8 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                     <th className="py-3 px-4">Token Ujian</th>
                     <th className="py-3 px-4 text-center">Kode Soal / Paket</th>
                     <th className="py-3 px-4 text-center">Status Ujian</th>
-                    <th className="py-3 px-4 text-center">Pelanggaran Tab</th>
+                    <th className="py-3 px-4">Aktivitas Web Live</th>
+                    <th className="py-3 px-4 text-center">Tab &amp; Anti-Inspect</th>
                     <th className="py-3 px-4 text-center">Nilai Akhir</th>
                     <th className="py-3 px-4 text-center">Predikat / Kategori</th>
                     <th className="py-3 px-4 text-center">Aksi Pengawas</th>
@@ -791,13 +1029,14 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredStudents.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="py-8 text-center text-slate-400 text-xs">
+                      <td colSpan={11} className="py-8 text-center text-slate-400 text-xs">
                         Tidak ada siswa yang sesuai dengan filter.
                       </td>
                     </tr>
                   ) : (
                     filteredStudents.map((st, idx) => {
                       const res = studentResultMap.get(st.id);
+                      const tel = st.live_telemetry;
                       const isBlocked = st.status_ujian === 'Diblokir';
                       const isOngoing = st.status_ujian === 'Sedang Ujian';
                       const isFinished = st.status_ujian === 'Selesai';
@@ -820,6 +1059,10 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                         st.kode_soal ||
                         allocPkg.packageCode ||
                         'PAKET-A';
+
+                      const tabCount =
+                        res?.pelanggaran_tab ?? tel?.tab_violations ?? 0;
+                      const inspectCount = tel?.inspect_attempts ?? 0;
 
                       return (
                         <tr
@@ -885,14 +1128,48 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                               </span>
                             )}
                           </td>
-                          <td className="py-3 px-4 text-center">
-                            {res?.pelanggaran_tab ? (
-                              <span className="font-mono font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                                {res.pelanggaran_tab}x
-                              </span>
+                          <td className="py-3 px-4">
+                            {tel ? (
+                              <div className="space-y-0.5 max-w-[210px]">
+                                <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-indigo-950">
+                                  <span>
+                                    Soal #{tel.current_question_no}/{tel.total_questions || '-'}
+                                  </span>
+                                  <span>·</span>
+                                  <span className="text-emerald-700">
+                                    Dijawab {tel.answered_count}/{tel.total_questions || '-'}
+                                  </span>
+                                </div>
+                                <div
+                                  className="text-[10px] text-slate-600 truncate"
+                                  title={tel.last_action}
+                                >
+                                  {tel.last_action}
+                                </div>
+                              </div>
                             ) : (
-                              <span className="text-slate-400">0</span>
+                              <span className="text-slate-400 text-[11px]">Belum ada aktivitas</span>
                             )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              {tabCount > 0 ? (
+                                <span className="font-mono font-bold text-[10px] text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                                  Tab: {tabCount}x
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400">Tab: 0</span>
+                              )}
+                              {inspectCount > 0 || tel?.devtools_open ? (
+                                <span className="font-mono font-extrabold text-[10px] text-white bg-rose-600 px-2 py-0.5 rounded">
+                                  Inspect: {inspectCount}x
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-emerald-700 font-medium">
+                                  Inspect: Aman
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3 px-4 text-center">
                             {res ? (
@@ -948,6 +1225,19 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                               >
                                 <RotateCcw className="w-3.5 h-3.5" />
                               </button>
+
+                              {/* View Live Web Activity Log Button */}
+                              {tel && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedTelemetryStudent(st)}
+                                  title="Lihat log aktivitas web & sensor Anti-Inspect Element siswa"
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded transition-colors cursor-pointer"
+                                >
+                                  <Activity className="w-3 h-3" />
+                                  <span>Log Web</span>
+                                </button>
+                              )}
 
                               {/* View Answers Sheet Button */}
                               {res && (
@@ -1699,6 +1989,150 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer ml-auto"
               >
                 Tutup Lembar Jawaban
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL LOG AKTIVITAS WEB & ANTI-INSPECT ELEMENT SISWA */}
+      {selectedTelemetryStudent && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4"
+          onClick={() => setSelectedTelemetryStudent(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-xl max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+              <div>
+                <div className="text-xs font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <Monitor className="w-4 h-4" />
+                  <span>Log Aktivitas Web Live &amp; Anti-Inspect Element</span>
+                </div>
+                <h4 className="text-base font-bold text-slate-900 mt-0.5">
+                  {selectedTelemetryStudent.nama} ({selectedTelemetryStudent.kelas})
+                </h4>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                  selectedTelemetryStudent.status_ujian === 'Diblokir'
+                    ? 'bg-rose-100 text-rose-800'
+                    : selectedTelemetryStudent.status_ujian === 'Sedang Ujian'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {selectedTelemetryStudent.status_ujian}
+              </span>
+            </div>
+
+            {selectedTelemetryStudent.live_telemetry ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                    <span className="text-slate-500">Soal Aktif:</span>
+                    <div className="font-mono font-extrabold text-slate-900 mt-0.5">
+                      #{selectedTelemetryStudent.live_telemetry.current_question_no} dari{' '}
+                      {selectedTelemetryStudent.live_telemetry.total_questions}
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                    <span className="text-slate-500">Progres Dijawab:</span>
+                    <div className="font-mono font-extrabold text-emerald-700 mt-0.5">
+                      {selectedTelemetryStudent.live_telemetry.answered_count} /{' '}
+                      {selectedTelemetryStudent.live_telemetry.total_questions} Soal
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                    <span className="text-slate-500">Percobaan Inspect:</span>
+                    <div className="font-mono font-extrabold text-rose-700 mt-0.5">
+                      {selectedTelemetryStudent.live_telemetry.inspect_attempts}x Diblokir
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                    <span className="text-slate-500">Pelanggaran Tab:</span>
+                    <div className="font-mono font-extrabold text-amber-800 mt-0.5">
+                      {selectedTelemetryStudent.live_telemetry.tab_violations}x Pindah Tab
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <h5 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Riwayat Aktivitas Web Real-Time Terbaru:</span>
+                  </h5>
+
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                    {(selectedTelemetryStudent.live_telemetry.recent_logs || []).length === 0 ? (
+                      <div className="text-xs text-slate-400 py-4 text-center">
+                        Belum ada catatan log detail.
+                      </div>
+                    ) : (
+                      (selectedTelemetryStudent.live_telemetry.recent_logs || []).map((log, i) => {
+                        const isInspectOrViolation =
+                          log.action.toLowerCase().includes('inspect') ||
+                          log.action.toLowerCase().includes('pelanggaran') ||
+                          log.action.toLowerCase().includes('blokir') ||
+                          log.detail.toLowerCase().includes('inspect') ||
+                          log.detail.toLowerCase().includes('tab');
+                        const isAnswer =
+                          log.action.toLowerCase().includes('jawab') ||
+                          log.detail.toLowerCase().includes('opsi');
+
+                        return (
+                          <div
+                            key={`${log.timestamp}-${i}`}
+                            className={`p-2.5 rounded-lg border text-xs flex items-center justify-between gap-3 ${
+                              isInspectOrViolation
+                                ? 'bg-rose-50/70 border-rose-200 text-rose-900 font-semibold'
+                                : isAnswer
+                                ? 'bg-emerald-50/60 border-emerald-200 text-emerald-950'
+                                : 'bg-slate-50 border-slate-200 text-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              {isInspectOrViolation ? (
+                                <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                              ) : (
+                                <Activity className="w-4 h-4 text-indigo-600 shrink-0" />
+                              )}
+                              <div>
+                                <div className="font-bold">{log.action}</div>
+                                {log.detail && (
+                                  <div className="text-[11px] opacity-85">{log.detail}</div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="font-mono text-[10px] text-slate-500 shrink-0">
+                              {new Date(log.timestamp).toLocaleTimeString('id-ID', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              })}
+                            </span>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="py-8 text-center text-slate-400 text-xs">
+                Belum ada telemetri aktivitas web untuk siswa ini.
+              </div>
+            )}
+
+            <div className="pt-3 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedTelemetryStudent(null)}
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+              >
+                Tutup Monitor Siswa
               </button>
             </div>
           </div>

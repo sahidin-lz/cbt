@@ -49,7 +49,7 @@ service cloud.firestore {
 
     function isValidStudent(data) {
       return data.keys().hasAll(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'kode_soal', 'variasi_paket', 'nisn', 'password_login', 'authorUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'kode_soal', 'variasi_paket', 'nisn', 'password_login', 'live_telemetry', 'authorUid', 'updatedAt']) &&
         data.id is number && data.id >= 1 &&
         data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 150 &&
         data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 64 &&
@@ -60,6 +60,7 @@ service cloud.firestore {
         (!('variasi_paket' in data) || (data.variasi_paket is string && data.variasi_paket.size() <= 64)) &&
         (!('nisn' in data) || (data.nisn is string && data.nisn.size() <= 40)) &&
         (!('password_login' in data) || (data.password_login is string && data.password_login.size() <= 40)) &&
+        (!('live_telemetry' in data) || data.live_telemetry is map) &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 

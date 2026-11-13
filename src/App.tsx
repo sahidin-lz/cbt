@@ -43,6 +43,59 @@ export default function App() {
       localStorage.setItem('cbt_active_portal', portalView);
     } catch {}
   }, [portalView]);
+
+  const [antiInspectBanner, setAntiInspectBanner] = useState<string | null>(null);
+
+  // Global Anti-Inspect Element & Right-Click Guard on Student Portal
+  useEffect(() => {
+    if (portalView !== 'student') {
+      setAntiInspectBanner(null);
+      return;
+    }
+
+    const showInspectWarning = (msg: string) => {
+      setAntiInspectBanner(msg);
+      window.setTimeout(() => {
+        setAntiInspectBanner((prev) => (prev === msg ? null : prev));
+      }, 3500);
+    };
+
+    const handleGlobalContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      showInspectWarning(
+        'Keamanan CBT Aktif: Klik kanan dan Inspect Element dinonaktifkan pada Ruang Ujian Siswa.'
+      );
+    };
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const key = (e.key || '').toUpperCase();
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      const isMacAltCmd = e.metaKey && e.altKey;
+
+      const isInspectCombo =
+        e.key === 'F12' ||
+        (isCtrlOrCmd && e.shiftKey && ['I', 'J', 'C', 'K', 'M'].includes(key)) ||
+        (isMacAltCmd && ['I', 'J', 'C', 'K', 'U'].includes(key)) ||
+        (isCtrlOrCmd && key === 'U');
+
+      if (isInspectCombo) {
+        e.preventDefault();
+        e.stopPropagation();
+        showInspectWarning(
+          'Keamanan CBT Aktif: Pintasan Inspect Element / Developer Tools (F12 / Ctrl+Shift+I) dilarang dan tercatat oleh sistem!'
+        );
+      }
+    };
+
+    document.addEventListener('contextmenu', handleGlobalContextMenu);
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+
+    return () => {
+      document.removeEventListener('contextmenu', handleGlobalContextMenu);
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
+    };
+  }, [portalView]);
+
   const [isStudentInExam, setIsStudentInExam] = useState(false);
   const [exams, setExams] = useState<ExamItem[]>([]);
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
@@ -294,6 +347,13 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {antiInspectBanner && portalView === 'student' && (
+        <div className="bg-rose-600 text-white px-4 py-2 text-xs font-bold text-center shadow-sm flex items-center justify-center gap-2">
+          <Lock className="w-3.5 h-3.5 shrink-0 text-amber-300" />
+          <span>{antiInspectBanner}</span>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1">

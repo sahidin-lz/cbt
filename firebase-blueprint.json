@@ -167,6 +167,10 @@
           "description": "Custom account login password/token set by the student.",
           "maxLength": 40
         },
+        "live_telemetry": {
+          "type": "object",
+          "description": "Real-time student web activity, current question, fullscreen/focus state, and anti-inspect element telemetry."
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",

@@ -15,6 +15,31 @@ export type ExamCategory =
 
 export type ExamStatus = 'AKTIF' | 'DRAF' | 'SELESAI';
 
+export interface StudentLiveTelemetryLog {
+  timestamp: string;
+  action: string;
+  detail: string;
+}
+
+export interface StudentLiveTelemetry {
+  exam_id?: number;
+  judul_ujian?: string;
+  kode_paket?: string;
+  current_question_no?: number;
+  answered_count?: number;
+  total_questions?: number;
+  remaining_seconds?: number;
+  is_fullscreen?: boolean;
+  is_focused?: boolean;
+  devtools_open?: boolean;
+  tab_violations?: number;
+  inspect_attempts?: number;
+  last_action?: string;
+  last_active_at?: string;
+  device_info?: string;
+  recent_logs?: StudentLiveTelemetryLog[];
+}
+
 export interface StudentItem {
   id: number;
   nama: string;
@@ -25,6 +50,7 @@ export interface StudentItem {
   variasi_paket?: string; // 'A' | 'B' | 'C' | 'D'
   nisn?: string; // Nomor Induk Siswa Nasional
   password_login?: string; // Password / Token Login Akun Siswa yang bisa diubah mandiri oleh siswa
+  live_telemetry?: StudentLiveTelemetry; // Real-time web activity & anti-inspect monitoring telemetry
   created_at?: string;
   authorUid?: string;
   updatedAt?: string;

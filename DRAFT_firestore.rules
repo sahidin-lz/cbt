@@ -21,25 +21,46 @@ service cloud.firestore {
 
     function isValidExam(data) {
       return data.keys().hasAll(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'authorUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'kategori_ujian', 'status_ujian', 'target_rombel', 'jadwal_mulai', 'jadwal_selesai', 'acak_soal', 'acak_opsi', 'kode_paket', 'mode_multi_paket', 'jumlah_paket', 'token_sesi', 'tampilkan_nilai', 'pengumuman', 'mata_pelajaran', 'distribusi_paket_mode', 'target_siswa_ids', 'authorUid', 'updatedAt']) &&
         data.id is number && data.id >= 1 &&
         data.judul_ujian is string && data.judul_ujian.size() >= 1 && data.judul_ujian.size() <= 200 &&
         data.durasi_menit is number && data.durasi_menit >= 1 && data.durasi_menit <= 300 &&
         data.target_tingkat is string && data.target_tingkat.size() >= 1 && data.target_tingkat.size() <= 16 &&
         (data.target_tingkat == '10' || data.target_tingkat == '11' || data.target_tingkat == '12' || data.target_tingkat == 'SEMUA') &&
         data.target_kelas is string && data.target_kelas.size() >= 1 && data.target_kelas.size() <= 64 &&
+        (!('kategori_ujian' in data) || (data.kategori_ujian is string && data.kategori_ujian.size() <= 64)) &&
+        (!('status_ujian' in data) || (data.status_ujian is string && data.status_ujian.size() <= 32)) &&
+        (!('target_rombel' in data) || (data.target_rombel is list && data.target_rombel.size() <= 50)) &&
+        (!('jadwal_mulai' in data) || (data.jadwal_mulai is string && data.jadwal_mulai.size() <= 64)) &&
+        (!('jadwal_selesai' in data) || (data.jadwal_selesai is string && data.jadwal_selesai.size() <= 64)) &&
+        (!('kode_paket' in data) || (data.kode_paket is string && data.kode_paket.size() <= 32)) &&
+        (!('acak_soal' in data) || data.acak_soal is bool) &&
+        (!('acak_opsi' in data) || data.acak_opsi is bool) &&
+        (!('mode_multi_paket' in data) || data.mode_multi_paket is bool) &&
+        (!('jumlah_paket' in data) || (data.jumlah_paket is number && data.jumlah_paket >= 1 && data.jumlah_paket <= 10)) &&
+        (!('token_sesi' in data) || (data.token_sesi is string && data.token_sesi.size() <= 20)) &&
+        (!('tampilkan_nilai' in data) || data.tampilkan_nilai is bool) &&
+        (!('pengumuman' in data) || (data.pengumuman is string && data.pengumuman.size() <= 600)) &&
+        (!('mata_pelajaran' in data) || (data.mata_pelajaran is string && data.mata_pelajaran.size() <= 80)) &&
+        (!('distribusi_paket_mode' in data) || (data.distribusi_paket_mode is string && data.distribusi_paket_mode.size() <= 40)) &&
+        (!('target_siswa_ids' in data) || (data.target_siswa_ids is list && data.target_siswa_ids.size() <= 1000)) &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 
     function isValidStudent(data) {
       return data.keys().hasAll(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'authorUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'nama', 'kelas', 'token_ujian', 'status_ujian', 'kode_soal', 'variasi_paket', 'nisn', 'password_login', 'live_telemetry', 'authorUid', 'updatedAt']) &&
         data.id is number && data.id >= 1 &&
         data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 150 &&
         data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 64 &&
         data.token_ujian is string && data.token_ujian.size() == 6 && data.token_ujian.matches('^[A-Z0-9]{6}$') &&
         data.status_ujian is string && data.status_ujian.size() >= 1 && data.status_ujian.size() <= 32 &&
         (data.status_ujian == 'Belum Mulai' || data.status_ujian == 'Sedang Ujian' || data.status_ujian == 'Selesai' || data.status_ujian == 'Diblokir') &&
+        (!('kode_soal' in data) || (data.kode_soal is string && data.kode_soal.size() <= 64)) &&
+        (!('variasi_paket' in data) || (data.variasi_paket is string && data.variasi_paket.size() <= 64)) &&
+        (!('nisn' in data) || (data.nisn is string && data.nisn.size() <= 40)) &&
+        (!('password_login' in data) || (data.password_login is string && data.password_login.size() <= 40)) &&
+        (!('live_telemetry' in data) || data.live_telemetry is map) &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 
@@ -57,12 +78,13 @@ service cloud.firestore {
 
     function isValidResult(data) {
       return data.keys().hasAll(['id', 'student_id', 'exam_id', 'skor_angka', 'pelanggaran_tab', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'student_id', 'exam_id', 'skor_angka', 'jawaban_siswa', 'analisis_ai', 'pelanggaran_tab', 'created_at', 'authorUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'student_id', 'exam_id', 'skor_angka', 'jawaban_siswa', 'analisis_ai', 'pelanggaran_tab', 'kode_soal', 'created_at', 'authorUid', 'updatedAt']) &&
         data.id is number && data.id >= 1 &&
         data.student_id is number && data.student_id >= 1 &&
         data.exam_id is number && data.exam_id >= 1 &&
         data.skor_angka is number && data.skor_angka >= 0 && data.skor_angka <= 100 &&
         data.pelanggaran_tab is number && data.pelanggaran_tab >= 0 && data.pelanggaran_tab <= 1000 &&
+        (!('kode_soal' in data) || (data.kode_soal is string && data.kode_soal.size() <= 32)) &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 

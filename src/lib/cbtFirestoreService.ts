@@ -24,6 +24,7 @@ import {
   ExamItem,
   QuestionItem,
   StudentItem,
+  StudentLiveTelemetry,
   ResultItem,
   AnalisisAI,
 } from '../types/cbt';
@@ -103,6 +104,45 @@ function buildCleanStudentFirestoreDoc(st: StudentItem, nowIso: string): Record<
   }
   if (st.password_login !== undefined && String(st.password_login).trim() !== '') {
     docObj.password_login = String(st.password_login).trim().slice(0, 40);
+  }
+  if (st.live_telemetry && typeof st.live_telemetry === 'object') {
+    const rawTel = st.live_telemetry;
+    const cleanTel: Record<string, any> = {};
+    if (rawTel.exam_id !== undefined) cleanTel.exam_id = Number(rawTel.exam_id) || 0;
+    if (rawTel.judul_ujian) cleanTel.judul_ujian = String(rawTel.judul_ujian).slice(0, 120);
+    if (rawTel.kode_paket) cleanTel.kode_paket = String(rawTel.kode_paket).slice(0, 32);
+    if (rawTel.current_question_no !== undefined) {
+      cleanTel.current_question_no = Math.max(0, Number(rawTel.current_question_no) || 0);
+    }
+    if (rawTel.answered_count !== undefined) {
+      cleanTel.answered_count = Math.max(0, Number(rawTel.answered_count) || 0);
+    }
+    if (rawTel.total_questions !== undefined) {
+      cleanTel.total_questions = Math.max(0, Number(rawTel.total_questions) || 0);
+    }
+    if (rawTel.remaining_seconds !== undefined) {
+      cleanTel.remaining_seconds = Math.max(0, Number(rawTel.remaining_seconds) || 0);
+    }
+    if (rawTel.is_fullscreen !== undefined) cleanTel.is_fullscreen = Boolean(rawTel.is_fullscreen);
+    if (rawTel.is_focused !== undefined) cleanTel.is_focused = Boolean(rawTel.is_focused);
+    if (rawTel.devtools_open !== undefined) cleanTel.devtools_open = Boolean(rawTel.devtools_open);
+    if (rawTel.tab_violations !== undefined) {
+      cleanTel.tab_violations = Math.max(0, Number(rawTel.tab_violations) || 0);
+    }
+    if (rawTel.inspect_attempts !== undefined) {
+      cleanTel.inspect_attempts = Math.max(0, Number(rawTel.inspect_attempts) || 0);
+    }
+    if (rawTel.last_action) cleanTel.last_action = String(rawTel.last_action).slice(0, 200);
+    if (rawTel.last_active_at) cleanTel.last_active_at = String(rawTel.last_active_at).slice(0, 64);
+    if (rawTel.device_info) cleanTel.device_info = String(rawTel.device_info).slice(0, 120);
+    if (Array.isArray(rawTel.recent_logs)) {
+      cleanTel.recent_logs = rawTel.recent_logs.slice(-12).map((l) => ({
+        timestamp: String(l?.timestamp || '').slice(0, 32),
+        action: String(l?.action || '').slice(0, 32),
+        detail: String(l?.detail || '').slice(0, 180),
+      }));
+    }
+    docObj.live_telemetry = cleanTel;
   }
   return docObj;
 }
@@ -1080,6 +1120,39 @@ export async function updateStudentStatusCbt(
   }
 
   return updated;
+}
+
+export async function syncStudentLiveTelemetryCbt(
+  student: StudentItem,
+  telemetryPatch: Partial<StudentLiveTelemetry>,
+  statusOverride?: string
+): Promise<void> {
+  if (!student || !student.id) return;
+  const nowIso = new Date().toISOString();
+  const mergedTelemetry: StudentLiveTelemetry = {
+    ...(student.live_telemetry || {}),
+    ...telemetryPatch,
+    last_active_at: telemetryPatch.last_active_at || nowIso,
+  };
+  const updatedStudent: StudentItem = {
+    ...student,
+    status_ujian: statusOverride || student.status_ujian || 'Sedang Ujian',
+    live_telemetry: mergedTelemetry,
+  };
+
+  if (db) {
+    try {
+      await setDoc(
+        doc(db, 'students', String(updatedStudent.id)),
+        buildCleanStudentFirestoreDoc(updatedStudent, nowIso),
+        { merge: true }
+      );
+    } catch (err) {
+      try {
+        handleFirestoreError(err, OperationType.WRITE, `students/${updatedStudent.id}`);
+      } catch {}
+    }
+  }
 }
 
 export async function bulkUpdateStudentStatusCbt(

@@ -30,6 +30,7 @@ import {
   submitStudentExamCbt,
   generateAiAnalysisCbt,
   updateStudentStatusCbt,
+  syncStudentLiveTelemetryCbt,
   subscribeToSingleStudentStatus,
   safeApiJson,
 } from '../lib/cbtFirestoreService';
@@ -78,6 +79,7 @@ export interface StudentExamProgress {
   currentIndex: number;
   remainingSeconds: number;
   tabViolations: number;
+  inspectAttempts?: number;
   logs: StudentActivityLog[];
   lastSavedAt: string;
 }
@@ -375,6 +377,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const [tabViolations, setTabViolations] = useState<number>(() => {
     return initialProgress?.tabViolations || 0;
   });
+  const [inspectAttempts, setInspectAttempts] = useState<number>(() => {
+    return initialProgress?.inspectAttempts || 0;
+  });
+  const [isDevToolsOpen, setIsDevToolsOpen] = useState(false);
   const [showCheatBanner, setShowCheatBanner] = useState(false);
   const [showCheatLockModal, setShowCheatLockModal] = useState<boolean>(() => {
     return initialSession?.student?.status_ujian === 'Diblokir';
@@ -386,6 +392,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const [lastViolationTime, setLastViolationTime] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const lastViolationTimestampRef = useRef<number>(0);
+  const lastInspectAttemptRef = useRef<number>(0);
+  const baselineWindowGapRef = useRef<{ wGap: number; hGap: number } | null>(null);
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -809,6 +817,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             : (session.exam?.durasi_menit || 60) * 60
         );
         setTabViolations(savedProgress.tabViolations || 0);
+        setInspectAttempts(savedProgress.inspectAttempts || 0);
         const resumedLogs: StudentActivityLog[] = [
           ...(savedProgress.logs || []),
           {
@@ -821,21 +830,71 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         setResumeNotice(
           `Sesi Ujian Dilanjutkan (${prepared.studentPackageCode})! Urutan soal, paket soal, dan jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis.`
         );
+        syncStudentLiveTelemetryCbt(
+          updatedStudent,
+          {
+            exam_id: session.exam.id,
+            judul_ujian: session.exam.judul_ujian,
+            kode_paket: prepared.studentPackageCode,
+            current_question_no: (savedProgress.currentIndex || 0) + 1,
+            answered_count: Object.keys(savedProgress.answers || {}).filter(
+              (k) => savedProgress.answers[k]?.length > 0
+            ).length,
+            total_questions: prepared.questions.length,
+            remaining_seconds:
+              savedProgress.remainingSeconds || (session.exam.durasi_menit || 60) * 60,
+            is_fullscreen: true,
+            is_focused: true,
+            devtools_open: false,
+            tab_violations: savedProgress.tabViolations || 0,
+            inspect_attempts: savedProgress.inspectAttempts || 0,
+            last_action: `Melanjutkan sesi ujian [${prepared.studentPackageCode}] di Soal No. ${(savedProgress.currentIndex || 0) + 1}`,
+            recent_logs: resumedLogs.slice(-12),
+          },
+          'Sedang Ujian'
+        );
       } else {
         setAnswers({});
         setCurrentIndex(0);
         setRemainingSeconds((session.exam?.durasi_menit || 60) * 60);
         setTabViolations(0);
-        setActivityLogs([
+        setInspectAttempts(0);
+        const startLogs: StudentActivityLog[] = [
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             action: 'login',
             detail: `Siswa memulai sesi ujian "${session.exam?.judul_ujian || targetExam.judul_ujian}" [${prepared.studentPackageCode}] setelah verifikasi Token Sesi Ujian.`,
           },
-        ]);
+        ];
+        setActivityLogs(startLogs);
         setResumeNotice(null);
+        syncStudentLiveTelemetryCbt(
+          updatedStudent,
+          {
+            exam_id: session.exam.id,
+            judul_ujian: session.exam.judul_ujian,
+            kode_paket: prepared.studentPackageCode,
+            current_question_no: 1,
+            answered_count: 0,
+            total_questions: prepared.questions.length,
+            remaining_seconds: (session.exam?.durasi_menit || 60) * 60,
+            is_fullscreen: true,
+            is_focused: true,
+            devtools_open: false,
+            tab_violations: 0,
+            inspect_attempts: 0,
+            last_action: `Memulai sesi ujian [${prepared.studentPackageCode}] · Soal No. 1`,
+            recent_logs: startLogs,
+          },
+          'Sedang Ujian'
+        );
       }
 
+      baselineWindowGapRef.current = {
+        wGap: Math.max(0, window.outerWidth - window.innerWidth),
+        hGap: Math.max(0, window.outerHeight - window.innerHeight),
+      };
+      setIsDevToolsOpen(false);
       setShowCheatBanner(false);
       setShowCheatLockModal(false);
       setIsStudentBlocked(session.student.status_ujian === 'Diblokir');
@@ -907,8 +966,39 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return () => unsubscribe();
   }, [activeStudent?.id, activeStudent?.token_ujian, activeExam, examQuestions, submittedSummary]);
 
+  const getBrowserDeviceSummary = useCallback(() => {
+    try {
+      const ua = navigator.userAgent || '';
+      const browser = ua.includes('Edg/')
+        ? 'Edge'
+        : ua.includes('Chrome/')
+          ? 'Chrome'
+          : ua.includes('Firefox/')
+            ? 'Firefox'
+            : ua.includes('Safari/')
+              ? 'Safari'
+              : 'Browser';
+      const os = ua.includes('Windows')
+        ? 'Windows'
+        : ua.includes('Android')
+          ? 'Android'
+          : ua.includes('Mac')
+            ? 'macOS'
+            : ua.includes('Linux')
+              ? 'Linux'
+              : 'OS';
+      return `${browser} · ${os} (${window.innerWidth}x${window.innerHeight})`;
+    } catch {
+      return 'Web Browser';
+    }
+  }, []);
+
   const triggerViolation = useCallback(
-    (reason = 'Terdeteksi berpindah tab browser atau keluar dari jendela ujian') => {
+    (
+      reason = 'Terdeteksi berpindah tab browser atau keluar dari jendela ujian',
+      extraInspectCount = 0,
+      devToolsDetected = false
+    ) => {
       if (!activeStudent || submittedSummary || isStudentBlocked) return;
 
       // Debounce rapid blur+visibilitychange events within 500ms
@@ -918,7 +1008,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
       const timeStr = new Date().toLocaleTimeString('id-ID');
       const nextCount = tabViolations + 1;
+      const nextInspectCount = inspectAttempts + extraInspectCount;
       setTabViolations(nextCount);
+      if (extraInspectCount > 0) {
+        setInspectAttempts(nextInspectCount);
+      }
+      if (devToolsDetected) {
+        setIsDevToolsOpen(true);
+      }
       setLastViolationTime(timeStr);
       setSecurityNotice(reason);
 
@@ -935,6 +1032,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       const updatedLogs = [...activityLogs, newLogItem, blockedLogItem];
       setActivityLogs(updatedLogs);
 
+      const currentAnsCount = Object.keys(answers).filter(
+        (k) => answers[k] && answers[k].length > 0
+      ).length;
+
       // Autosave answers & state so NOTHING is lost (Siswa tinggal melanjutkan!)
       saveLocalProgress(activeStudent.token_ujian, {
         studentId: activeStudent.id,
@@ -950,6 +1051,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         currentIndex,
         remainingSeconds,
         tabViolations: nextCount,
+        inspectAttempts: nextInspectCount,
         logs: updatedLogs,
         lastSavedAt: new Date().toISOString(),
       });
@@ -958,16 +1060,40 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setIsStudentBlocked(true);
       setShowCheatLockModal(true);
 
+      const blockedStudentObj: StudentItem = {
+        ...activeStudent,
+        status_ujian: 'Diblokir',
+        live_telemetry: {
+          exam_id: activeExam?.id || 0,
+          judul_ujian: activeExam?.judul_ujian || 'Ujian CBT',
+          kode_paket:
+            activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A',
+          current_question_no: currentIndex + 1,
+          answered_count: currentAnsCount,
+          total_questions: examQuestions.length,
+          remaining_seconds: remainingSeconds,
+          is_fullscreen: Boolean(document.fullscreenElement),
+          is_focused: false,
+          devtools_open: devToolsDetected || isDevToolsOpen,
+          tab_violations: nextCount,
+          inspect_attempts: nextInspectCount,
+          last_action: `DIBLOKIR: ${reason}`,
+          last_active_at: new Date().toISOString(),
+          device_info: getBrowserDeviceSummary(),
+          recent_logs: updatedLogs.slice(-12),
+        },
+      };
+
       if (activeExam) {
         saveActiveStudentSession({
-          student: { ...activeStudent, status_ujian: 'Diblokir' },
+          student: blockedStudentObj,
           exam: activeExam,
           questions: examQuestions,
         });
       }
 
-      // Persist blocked status to server / Firebase
-      updateStudentStatusCbt(activeStudent, 'Diblokir').then(() => {
+      // Persist blocked status & live telemetry to server / Firebase
+      updateStudentStatusCbt(blockedStudentObj, 'Diblokir').then(() => {
         onExamCompleted();
       });
 
@@ -979,9 +1105,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           nama: activeStudent.nama,
           kelas: activeStudent.kelas,
           pelanggaranTab: nextCount,
-          answeredCount: Object.keys(answers).filter(
-            (k) => answers[k] && answers[k].length > 0
-          ).length,
+          inspectAttempts: nextInspectCount,
+          answeredCount: currentAnsCount,
           status: 'Diblokir',
           reason,
         }),
@@ -995,16 +1120,69 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       currentIndex,
       remainingSeconds,
       tabViolations,
+      inspectAttempts,
+      isDevToolsOpen,
       activityLogs,
       submittedSummary,
       isStudentBlocked,
       onExamCompleted,
+      getBrowserDeviceSummary,
     ]
   );
 
-  // Strict Anti-Cheat: Detect window blur, visibilitychange, fullscreen change, right-click, selection, drag, copy/paste, shortcuts, and active focus polling
+  // Strict Anti-Cheat & Anti-Inspect Element: Detect window blur, visibilitychange, fullscreen change, right-click, DevTools shortcuts, docked DevTools panel, selection, drag, copy/paste
   useEffect(() => {
     if (!activeStudent || submittedSummary) return;
+
+    const recordInspectAttempt = (inspectReason: string, shouldBlockImmediately: boolean) => {
+      const now = Date.now();
+      if (now - lastInspectAttemptRef.current < 600) return;
+      lastInspectAttemptRef.current = now;
+
+      const nextInspect = inspectAttempts + 1;
+      setInspectAttempts(nextInspect);
+      const timeStr = new Date().toLocaleTimeString('id-ID');
+      const inspectLog: StudentActivityLog = {
+        timestamp: timeStr,
+        action: 'violation',
+        detail: `PERCOBAAN INSPECT ELEMENT #${nextInspect}: ${inspectReason}`,
+      };
+      const nextLogs = [...activityLogs.slice(-49), inspectLog];
+      setActivityLogs(nextLogs);
+      setSecurityNotice(
+        `DILARANG INSPECT ELEMENT! (${inspectReason}) — Tercatat di layar pengawas (${nextInspect}x).`
+      );
+
+      if (shouldBlockImmediately) {
+        triggerViolation(
+          `Terdeteksi mencoba Inspect Element / Developer Tools (${inspectReason})`,
+          1,
+          true
+        );
+      } else {
+        const currentAnsCount = Object.keys(answers).filter(
+          (k) => answers[k] && answers[k].length > 0
+        ).length;
+        syncStudentLiveTelemetryCbt(activeStudent, {
+          exam_id: activeExam?.id || 0,
+          judul_ujian: activeExam?.judul_ujian || 'Ujian CBT',
+          kode_paket:
+            activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A',
+          current_question_no: currentIndex + 1,
+          answered_count: currentAnsCount,
+          total_questions: examQuestions.length,
+          remaining_seconds: remainingSeconds,
+          is_fullscreen: Boolean(document.fullscreenElement),
+          is_focused: document.hasFocus() && document.visibilityState === 'visible',
+          devtools_open: isDevToolsOpen,
+          tab_violations: tabViolations,
+          inspect_attempts: nextInspect,
+          last_action: `PERINGATAN: ${inspectReason} (Soal #${currentIndex + 1})`,
+          device_info: getBrowserDeviceSummary(),
+          recent_logs: nextLogs.slice(-12),
+        });
+      }
+    };
 
     const handleBlur = () => {
       triggerViolation('Terdeteksi keluar dari fokus jendela ujian (Alt+Tab / Pindah Aplikasi / Layar Ganda)');
@@ -1026,7 +1204,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
-      setSecurityNotice('Klik kanan dinonaktifkan demi integritas keamanan ujian.');
+      e.stopPropagation();
+      recordInspectAttempt('Mencoba Klik Kanan / Inspect Element pada lembar soal', false);
     };
 
     const handleClipboard = (e: ClipboardEvent) => {
@@ -1045,20 +1224,37 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const key = e.key.toUpperCase();
+      const key = (e.key || '').toUpperCase();
       const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      const isMacAltCmd = e.metaKey && e.altKey;
 
-      const blockedCombo =
+      // 1. Strict Inspect Element & DevTools Shortcuts -> Block + Trigger Immediate Lockdown
+      const isInspectDevToolsShortcut =
         e.key === 'F12' ||
+        (isCtrlOrCmd && e.shiftKey && ['I', 'J', 'C', 'K', 'M'].includes(key)) ||
+        (isMacAltCmd && ['I', 'J', 'C', 'K', 'U'].includes(key)) ||
+        (isCtrlOrCmd && key === 'U');
+
+      if (isInspectDevToolsShortcut) {
+        e.preventDefault();
+        e.stopPropagation();
+        const comboLabel =
+          e.key === 'F12'
+            ? 'Tombol F12 (DevTools)'
+            : `${e.ctrlKey ? 'Ctrl+' : e.metaKey ? 'Cmd+' : ''}${e.shiftKey ? 'Shift+' : e.altKey ? 'Opt+' : ''}${key} (Inspect Element)`;
+        recordInspectAttempt(`Menekan pintasan ${comboLabel}`, true);
+        return;
+      }
+
+      // 2. Other blocked browser/navigation shortcuts
+      const blockedCombo =
         e.key === 'F5' ||
         e.key === 'F11' ||
         e.key === 'PrintScreen' ||
         e.key === 'Escape' ||
+        (isCtrlOrCmd && e.shiftKey && key === 'S') ||
         (isCtrlOrCmd &&
-          e.shiftKey &&
-          ['I', 'J', 'C', 'K', 'M', 'S'].includes(key)) ||
-        (isCtrlOrCmd &&
-          ['U', 'P', 'S', 'C', 'V', 'X', 'T', 'N', 'W', 'A', 'R', 'F', 'H', 'J', 'O'].includes(key)) ||
+          ['P', 'S', 'C', 'V', 'X', 'T', 'N', 'W', 'A', 'R', 'F', 'H', 'J', 'O'].includes(key)) ||
         (e.altKey && key === 'TAB') ||
         (e.altKey && ['ARROWLEFT', 'ARROWRIGHT', 'D', 'HOME', 'F4'].includes(key));
 
@@ -1071,10 +1267,27 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       }
     };
 
-    // Sensitive Active Polling: Check window focus & visibility every 1000ms
+    // Sensitive Active Polling: Check window focus, visibility, AND Docked DevTools panel every 1000ms
     const focusCheckInterval = setInterval(() => {
-      if (!isStudentBlocked && (!document.hasFocus() || document.visibilityState === 'hidden')) {
+      if (isStudentBlocked) return;
+
+      if (!document.hasFocus() || document.visibilityState === 'hidden') {
         triggerViolation('Terdeteksi kehilangan fokus jendela ujian (Aplikasi eksternal / Taskbar / Layar ganda)');
+        return;
+      }
+
+      // Detect if student opened Docked DevTools panel (Inspect Element side/bottom panel)
+      const baseGap = baselineWindowGapRef.current || { wGap: 24, hGap: 110 };
+      const currentWGap = Math.max(0, window.outerWidth - window.innerWidth);
+      const currentHGap = Math.max(0, window.outerHeight - window.innerHeight);
+      const dockedSideDevTools = currentWGap - baseGap.wGap > 180;
+      const dockedBottomDevTools = currentHGap - baseGap.hGap > 180;
+
+      if (dockedSideDevTools || dockedBottomDevTools) {
+        setIsDevToolsOpen(true);
+        recordInspectAttempt('Membuka Panel Inspect Element / Developer Tools Browser', true);
+      } else if (isDevToolsOpen) {
+        setIsDevToolsOpen(false);
       }
     }, 1000);
 
@@ -1096,6 +1309,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             currentIndex,
             remainingSeconds,
             tabViolations,
+            inspectAttempts,
             logs: activityLogs,
             lastSavedAt: new Date().toISOString(),
           });
@@ -1136,7 +1350,124 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       window.removeEventListener('keydown', handleKeyDown, true);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [activeStudent, activeExam, examQuestions, answers, currentIndex, remainingSeconds, tabViolations, activityLogs, isStudentBlocked, submittedSummary, triggerViolation]);
+  }, [
+    activeStudent,
+    activeExam,
+    examQuestions,
+    answers,
+    currentIndex,
+    remainingSeconds,
+    tabViolations,
+    inspectAttempts,
+    isDevToolsOpen,
+    activityLogs,
+    isStudentBlocked,
+    submittedSummary,
+    triggerViolation,
+    getBrowserDeviceSummary,
+  ]);
+
+  // Live Telemetry Heartbeat & Question Navigation Broadcaster (syncs to Admin screen in real time)
+  const latestTelemetryStateRef = useRef({
+    currentIndex,
+    answers,
+    remainingSeconds,
+    isFullscreen,
+    isDevToolsOpen,
+    tabViolations,
+    inspectAttempts,
+    activityLogs,
+    isStudentBlocked,
+  });
+
+  useEffect(() => {
+    latestTelemetryStateRef.current = {
+      currentIndex,
+      answers,
+      remainingSeconds,
+      isFullscreen,
+      isDevToolsOpen,
+      tabViolations,
+      inspectAttempts,
+      activityLogs,
+      isStudentBlocked,
+    };
+  }, [
+    currentIndex,
+    answers,
+    remainingSeconds,
+    isFullscreen,
+    isDevToolsOpen,
+    tabViolations,
+    inspectAttempts,
+    activityLogs,
+    isStudentBlocked,
+  ]);
+
+  // Push update when student switches question number
+  useEffect(() => {
+    if (!activeStudent || !activeExam || submittedSummary || isStudentBlocked) return;
+    const stRef = latestTelemetryStateRef.current;
+    const ansCount = Object.keys(stRef.answers).filter(
+      (k) => stRef.answers[k] && stRef.answers[k].length > 0
+    ).length;
+
+    const timer = window.setTimeout(() => {
+      syncStudentLiveTelemetryCbt(activeStudent, {
+        exam_id: activeExam.id,
+        judul_ujian: activeExam.judul_ujian,
+        kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+        current_question_no: currentIndex + 1,
+        answered_count: ansCount,
+        total_questions: examQuestions.length,
+        remaining_seconds: stRef.remainingSeconds,
+        is_fullscreen: Boolean(document.fullscreenElement),
+        is_focused: document.hasFocus() && document.visibilityState === 'visible',
+        devtools_open: stRef.isDevToolsOpen,
+        tab_violations: stRef.tabViolations,
+        inspect_attempts: stRef.inspectAttempts,
+        last_action: `Sedang mengerjakan Soal No. ${currentIndex + 1} (${ansCount}/${examQuestions.length} terjawab)`,
+        device_info: getBrowserDeviceSummary(),
+        recent_logs: stRef.activityLogs.slice(-12),
+      });
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [currentIndex, activeStudent?.id, activeExam?.id, examQuestions.length, submittedSummary, isStudentBlocked, getBrowserDeviceSummary]);
+
+  // Periodic 12-second live heartbeat to Admin Proctor Screen
+  useEffect(() => {
+    if (!activeStudent || !activeExam || submittedSummary) return;
+
+    const heartbeatInterval = window.setInterval(() => {
+      const stRef = latestTelemetryStateRef.current;
+      const ansCount = Object.keys(stRef.answers).filter(
+        (k) => stRef.answers[k] && stRef.answers[k].length > 0
+      ).length;
+      syncStudentLiveTelemetryCbt(
+        activeStudent,
+        {
+          exam_id: activeExam.id,
+          judul_ujian: activeExam.judul_ujian,
+          kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+          current_question_no: stRef.currentIndex + 1,
+          answered_count: ansCount,
+          total_questions: examQuestions.length,
+          remaining_seconds: stRef.remainingSeconds,
+          is_fullscreen: Boolean(document.fullscreenElement),
+          is_focused: document.hasFocus() && document.visibilityState === 'visible',
+          devtools_open: stRef.isDevToolsOpen,
+          tab_violations: stRef.tabViolations,
+          inspect_attempts: stRef.inspectAttempts,
+          device_info: getBrowserDeviceSummary(),
+          recent_logs: stRef.activityLogs.slice(-12),
+        },
+        stRef.isStudentBlocked ? 'Diblokir' : 'Sedang Ujian'
+      );
+    }, 12000);
+
+    return () => window.clearInterval(heartbeatInterval);
+  }, [activeStudent, activeExam, examQuestions.length, submittedSummary, getBrowserDeviceSummary]);
 
   const handleSubmitExam = useCallback(async () => {
     if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked) return;
@@ -1173,6 +1504,37 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       clearLocalProgress(activeStudent.token_ujian, activeExam.id);
       clearActiveStudentSession();
 
+      const finalLogs: StudentActivityLog[] = [
+        ...activityLogs,
+        {
+          timestamp: new Date().toLocaleTimeString('id-ID'),
+          action: 'submit',
+          detail: `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100.`,
+        },
+      ];
+
+      syncStudentLiveTelemetryCbt(
+        activeStudent,
+        {
+          exam_id: activeExam.id,
+          judul_ujian: activeExam.judul_ujian,
+          kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+          current_question_no: examQuestions.length,
+          answered_count: currentAnsweredCount,
+          total_questions: examQuestions.length,
+          remaining_seconds: remainingSeconds,
+          is_fullscreen: false,
+          is_focused: true,
+          devtools_open: false,
+          tab_violations: tabViolations,
+          inspect_attempts: inspectAttempts,
+          last_action: `Selesai & Mengumpulkan Ujian (Skor: ${outcome.skor}/100)`,
+          device_info: getBrowserDeviceSummary(),
+          recent_logs: finalLogs.slice(-12),
+        },
+        'Selesai'
+      );
+
       // Save complete receipt to student's history
       const finalReceipt: LocalExamReceipt = {
         resultId: outcome.resultId,
@@ -1190,14 +1552,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         totalQuestions: examQuestions.length,
         pelanggaranTab: tabViolations,
         jawabanSiswa: answers,
-        logs: [
-          ...activityLogs,
-          {
-            timestamp: new Date().toLocaleTimeString('id-ID'),
-            action: 'submit',
-            detail: `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100.`,
-          },
-        ],
+        logs: finalLogs,
         submittedAt: new Date().toISOString(),
       };
       saveLocalReceipt(finalReceipt);
@@ -1289,6 +1644,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         currentIndex,
         remainingSeconds,
         tabViolations,
+        inspectAttempts,
         logs: activityLogs,
         lastSavedAt: new Date().toISOString(),
       });
@@ -1297,14 +1653,35 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     });
 
     const timeStr = new Date().toLocaleTimeString('id-ID');
-    setActivityLogs((prev) => [
-      ...prev.slice(-49),
-      {
-        timestamp: timeStr,
-        action: 'answer',
-        detail: `Menjawab Soal #${currentIndex + 1} (${optionKey})`,
-      },
-    ]);
+    const newAnswerLog: StudentActivityLog = {
+      timestamp: timeStr,
+      action: 'answer',
+      detail: `Menjawab Soal #${currentIndex + 1} (${optionKey})`,
+    };
+    const nextLogs = [...activityLogs.slice(-49), newAnswerLog];
+    setActivityLogs(nextLogs);
+
+    const nextAnsCount = Object.keys(nextAnswersMap).filter(
+      (k) => nextAnswersMap[k] && nextAnswersMap[k].length > 0
+    ).length;
+
+    syncStudentLiveTelemetryCbt(activeStudent, {
+      exam_id: activeExam.id,
+      judul_ujian: activeExam.judul_ujian,
+      kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+      current_question_no: currentIndex + 1,
+      answered_count: nextAnsCount,
+      total_questions: examQuestions.length,
+      remaining_seconds: remainingSeconds,
+      is_fullscreen: Boolean(document.fullscreenElement),
+      is_focused: document.hasFocus() && document.visibilityState === 'visible',
+      devtools_open: isDevToolsOpen,
+      tab_violations: tabViolations,
+      inspect_attempts: inspectAttempts,
+      last_action: `Menjawab Soal No. ${currentIndex + 1} (${nextAnsCount}/${examQuestions.length} terjawab)`,
+      device_info: getBrowserDeviceSummary(),
+      recent_logs: nextLogs.slice(-12),
+    });
   };
 
   const handleRequestInstantAiEvaluation = async () => {

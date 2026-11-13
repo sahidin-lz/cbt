@@ -4094,79 +4094,98 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </div>
                             </td>
                             <td className="py-3 px-3.5">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <select
-                                  aria-label={`Ubah status ujian ${st.nama}`}
-                                  value={st.status_ujian}
-                                  onChange={(e) =>
-                                    handleUpdateStudentStatus(
-                                      st,
-                                      e.target.value
-                                    )
-                                  }
-                                  className={`px-2.5 py-1 text-xs font-semibold rounded-md border cursor-pointer ${
-                                    isBlocked
-                                      ? 'bg-red-50 text-red-700 border-red-300'
-                                      : isOngoing
-                                        ? 'bg-amber-50 text-amber-800 border-amber-300'
-                                        : isFinished
-                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                          : 'bg-slate-50 text-slate-700 border-slate-300'
-                                  }`}
-                                >
-                                  <option value="Belum Mulai">
-                                    Belum Mulai
-                                  </option>
-                                  <option value="Sedang Ujian">
-                                    Sedang Ujian
-                                  </option>
-                                  <option value="Selesai">Selesai</option>
-                                  <option value="Diblokir">Diblokir</option>
-                                </select>
-
-                                {isBlocked && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
+                              <div className="flex flex-col gap-1.5">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <select
+                                    aria-label={`Ubah status ujian ${st.nama}`}
+                                    value={st.status_ujian}
+                                    onChange={(e) =>
                                       handleUpdateStudentStatus(
                                         st,
-                                        'Sedang Ujian'
+                                        e.target.value
                                       )
                                     }
-                                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded cursor-pointer"
+                                    className={`px-2.5 py-1 text-xs font-semibold rounded-md border cursor-pointer ${
+                                      isBlocked
+                                        ? 'bg-red-50 text-red-700 border-red-300'
+                                        : isOngoing
+                                          ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                          : isFinished
+                                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                            : 'bg-slate-50 text-slate-700 border-slate-300'
+                                    }`}
                                   >
-                                    <Unlock className="w-3 h-3" />
-                                    Buka Kunci
-                                  </button>
-                                )}
+                                    <option value="Belum Mulai">
+                                      Belum Mulai
+                                    </option>
+                                    <option value="Sedang Ujian">
+                                      Sedang Ujian
+                                    </option>
+                                    <option value="Selesai">Selesai</option>
+                                    <option value="Diblokir">Diblokir</option>
+                                  </select>
 
-                                {isOngoing && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleUpdateStudentStatus(st, 'Diblokir')
-                                    }
-                                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded cursor-pointer"
-                                  >
-                                    <Ban className="w-3 h-3" />
-                                    Blokir
-                                  </button>
-                                )}
+                                  {isBlocked && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleUpdateStudentStatus(
+                                          st,
+                                          'Sedang Ujian'
+                                        )
+                                      }
+                                      className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded cursor-pointer"
+                                    >
+                                      <Unlock className="w-3 h-3" />
+                                      Buka Kunci
+                                    </button>
+                                  )}
 
-                                {(isFinished || isOngoing) && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleUpdateStudentStatus(
-                                        st,
-                                        'Belum Mulai'
-                                      )
-                                    }
-                                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
-                                  >
-                                    <RotateCcw className="w-3 h-3" />
-                                    Reset
-                                  </button>
+                                  {isOngoing && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleUpdateStudentStatus(st, 'Diblokir')
+                                      }
+                                      className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded cursor-pointer"
+                                    >
+                                      <Ban className="w-3 h-3" />
+                                      Blokir
+                                    </button>
+                                  )}
+
+                                  {(isFinished || isOngoing) && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleUpdateStudentStatus(
+                                          st,
+                                          'Belum Mulai'
+                                        )
+                                      }
+                                      className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                      Reset
+                                    </button>
+                                  )}
+                                </div>
+                                {st.live_telemetry && (
+                                  <div className="text-[11px] font-mono bg-slate-50 border border-slate-200 rounded px-2 py-1 flex flex-wrap items-center gap-1.5">
+                                    <span className="font-bold text-indigo-900">
+                                      Soal #{st.live_telemetry.current_question_no}/{st.live_telemetry.total_questions || '-'}
+                                    </span>
+                                    <span>·</span>
+                                    <span className="text-emerald-700 font-semibold">
+                                      Dijawab {st.live_telemetry.answered_count}/{st.live_telemetry.total_questions || '-'}
+                                    </span>
+                                    {((st.live_telemetry.inspect_attempts || 0) > 0 ||
+                                      st.live_telemetry.devtools_open) && (
+                                      <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white font-bold text-[10px]">
+                                        Inspect: {st.live_telemetry.inspect_attempts || 0}x
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </td>
