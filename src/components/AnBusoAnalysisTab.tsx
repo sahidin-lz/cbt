@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
 import {
+  getEffectiveMataPelajaran,
   isExamMatchedForStudentClass,
   buildSemicolonCsv,
   normalizeAnswerKeys,
@@ -71,19 +72,38 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
     );
   }, [students]);
 
+  const [selectedMapel, setSelectedMapel] = useState<string>('ALL');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [selectedExamId, setSelectedExamId] = useState<number>(() => {
     return exams.length > 0 ? exams[0].id : 0;
   });
 
-  // Keep selectedExamId valid when exams or class change
+  const availableMapels = useMemo(() => {
+    const set = new Set<string>();
+    exams.forEach((ex) => {
+      const m = getEffectiveMataPelajaran(ex);
+      if (m) set.add(m);
+    });
+    if (set.size === 0) set.add('Sosiologi');
+    return Array.from(set);
+  }, [exams]);
+
+  // Keep selectedExamId valid when exams, mapel, or class change
   const matchingExams = useMemo(() => {
-    if (selectedClass === 'ALL') return exams;
-    const matched = exams.filter((ex) =>
+    const byMapel =
+      selectedMapel === 'ALL'
+        ? exams
+        : exams.filter(
+            (ex) =>
+              getEffectiveMataPelajaran(ex).toUpperCase() ===
+              selectedMapel.toUpperCase()
+          );
+    if (selectedClass === 'ALL') return byMapel.length > 0 ? byMapel : exams;
+    const matched = byMapel.filter((ex) =>
       isExamMatchedForStudentClass(ex, selectedClass)
     );
-    return matched.length > 0 ? matched : exams;
-  }, [exams, selectedClass]);
+    return matched.length > 0 ? matched : byMapel.length > 0 ? byMapel : exams;
+  }, [exams, selectedClass, selectedMapel]);
 
   useEffect(() => {
     if (
@@ -123,6 +143,9 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
   useEffect(() => {
     setIdentity((prev) => ({
       ...prev,
+      mataPelajaran: activeExam
+        ? getEffectiveMataPelajaran(activeExam)
+        : prev.mataPelajaran,
       kelasRombel: selectedClass === 'ALL' ? 'Semua Kelas' : selectedClass,
       namaTes: activeExam?.judul_ujian || prev.namaTes,
     }));
@@ -368,14 +391,38 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
         </div>
 
         <div className="p-6 space-y-5">
-        {/* Source Selector: Paket Ujian + Filter Kelas + KKM Quick Control */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+        {/* Source Selector: Mata Pelajaran + Paket Ujian + Filter Kelas + KKM Quick Control */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+          <div>
+            <label
+              htmlFor="anbuso-mapel-select"
+              className="block text-xs font-bold text-slate-700 mb-1"
+            >
+              1. Filter Mata Pelajaran (Mapel)
+            </label>
+            <select
+              id="anbuso-mapel-select"
+              value={selectedMapel}
+              onChange={(e) => setSelectedMapel(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+            >
+              <option value="ALL">
+                Semua Mata Pelajaran ({availableMapels.length} Mapel)
+              </option>
+              {availableMapels.map((mp) => (
+                <option key={mp} value={mp}>
+                  Mapel: {mp}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div>
             <label
               htmlFor="anbuso-exam-select"
               className="block text-xs font-bold text-slate-700 mb-1"
             >
-              1. Pilih Paket Ujian yang Dianalisis
+              2. Pilih Paket Ujian yang Dianalisis
             </label>
             <select
               id="anbuso-exam-select"
@@ -389,7 +436,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                 ).length;
                 return (
                   <option key={ex.id} value={ex.id}>
-                    {ex.judul_ujian} ({qCount} Butir Soal · Kelas {ex.target_tingkat})
+                    {ex.judul_ujian} — {getEffectiveMataPelajaran(ex)} ({qCount} Soal · Kelas {ex.target_tingkat})
                   </option>
                 );
               })}
@@ -401,7 +448,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
               htmlFor="anbuso-class-select"
               className="block text-xs font-bold text-slate-700 mb-1"
             >
-              2. Filter Kelas / Rombel Peserta
+              3. Filter Kelas / Rombel Peserta
             </label>
             <select
               id="anbuso-class-select"
@@ -425,7 +472,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
               htmlFor="anbuso-kkm-input"
               className="block text-xs font-bold text-slate-700 mb-1"
             >
-              3. Batas KKM Ketuntasan Minimal (0–100)
+              4. Batas KKM Ketuntasan Minimal (0–100)
             </label>
             <div className="flex items-center gap-2">
               <input

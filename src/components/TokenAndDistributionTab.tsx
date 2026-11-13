@@ -93,11 +93,13 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
   const [isSavingDist, setIsSavingDist] = useState(false);
   const [distFeedback, setDistFeedback] = useState<string | null>(null);
 
-  // Live Preview Class & Subject State
+  // Live Preview Class, Subject & Exam Package State
   const classOptions = useMemo(() => getStudentLoginClasses(students), [students]);
   const [previewKelas, setPreviewKelas] = useState<string>(() =>
     classOptions.length > 0 ? classOptions[0].kelas : ''
   );
+  const [previewMapel, setPreviewMapel] = useState<string>('SEMUA');
+  const [previewExamId, setPreviewExamId] = useState<string>('SEMUA');
   const [isSyncingClassPackages, setIsSyncingClassPackages] = useState(false);
 
   // Sync editor fields when teacher picks a different exam in the distribution editor
@@ -304,41 +306,64 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
     setDistTargetSiswaIds(matchedIds);
   };
 
+  // Filtered exams for Bagian 3 preview based on previewMapel & previewExamId
+  const previewFilteredExams = useMemo(() => {
+    const byMapel =
+      previewMapel === 'SEMUA'
+        ? exams
+        : exams.filter(
+            (ex) =>
+              getEffectiveMataPelajaran(ex).toUpperCase() ===
+              previewMapel.toUpperCase()
+          );
+    if (previewExamId === 'SEMUA') return byMapel.length > 0 ? byMapel : exams;
+    const byId = byMapel.filter((ex) => String(ex.id) === previewExamId);
+    return byId.length > 0 ? byId : byMapel.length > 0 ? byMapel : exams;
+  }, [exams, previewMapel, previewExamId]);
+
   // Students in the selected preview class with their resolved packages per subject
   const previewClassStudents = useMemo(() => {
     const activeKls = previewKelas || (classOptions[0]?.kelas ?? '');
     if (!activeKls) return [];
-    const list = students
-      .filter((s) => s.kelas.trim().toLowerCase() === activeKls.trim().toLowerCase())
-      .sort((a, b) => a.nama.localeCompare(b.nama, 'id'));
+    const list =
+      activeKls === 'SEMUA'
+        ? [...students].sort((a, b) => {
+            const c = a.kelas.localeCompare(b.kelas, 'id', { numeric: true });
+            if (c !== 0) return c;
+            return a.nama.localeCompare(b.nama, 'id');
+          })
+        : students
+            .filter((s) => s.kelas.trim().toLowerCase() === activeKls.trim().toLowerCase())
+            .sort((a, b) => a.nama.localeCompare(b.nama, 'id'));
 
-    return list.map((st, idx) => {
-      const noAbsen = idx + 1;
-      const isGanjil = noAbsen % 2 === 1;
+    return list.map((st) => {
+      const absInfo = getStudentAbsenInfoInClass(st, students);
       const subjectAllocations = resolveStudentExamPackagesBySubject({
         student: st,
         allStudents: students,
-        exams,
+        exams: previewFilteredExams,
         questions,
         requireActive: false,
       });
       const precisionRec = resolveStudentPrecisionRecord({
         student: st,
         allStudents: students,
-        exams,
+        exams: previewFilteredExams,
         questions,
         results,
+        preferredExamId:
+          previewExamId !== 'SEMUA' ? Number(previewExamId) : undefined,
       });
       return {
         student: st,
-        noAbsen,
-        isGanjil,
-        ganjilGenapLabel: isGanjil ? 'GANJIL' : 'GENAP',
+        noAbsen: absInfo.noAbsen,
+        isGanjil: absInfo.isGanjil,
+        ganjilGenapLabel: absInfo.ganjilGenapLabel,
         subjectAllocations,
         precisionRec,
       };
     });
-  }, [previewKelas, classOptions, students, exams, questions, results]);
+  }, [previewKelas, classOptions, students, previewFilteredExams, previewExamId, questions, results]);
 
   const handleSyncPreviewClassToStudentDatabase = async () => {
     if (previewClassStudents.length === 0) return;
@@ -943,11 +968,16 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
                   downloadStudentTokenCardsPdf(
                     previewClassStudents.map((r) => r.student),
                     {
-                      kelasLabel: `Kelas ${previewKelas || classOptions[0]?.kelas || ''}`,
-                      exams,
+                      kelasLabel:
+                        previewKelas === 'SEMUA'
+                          ? 'Semua Kelas'
+                          : `Kelas ${previewKelas || classOptions[0]?.kelas || ''}`,
+                      exams: previewFilteredExams,
                       questions,
                       results,
                       allStudents: students,
+                      preferredExamId:
+                        previewExamId !== 'SEMUA' ? Number(previewExamId) : undefined,
                       includeSummaryPage: true,
                     }
                   )
@@ -955,7 +985,7 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
                 className="px-3.5 py-2 rounded-xl text-xs font-extrabold bg-amber-400 hover:bg-amber-300 text-slate-950 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Download PDF Kelas Ini</span>
+                <span>Download PDF Filter Ini</span>
               </button>
 
               <button
@@ -975,20 +1005,57 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
           </div>
 
           <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-bold text-slate-700">
-                Pilih Kelas / Rombel:
-              </label>
+            <div className="flex flex-wrap items-center gap-2">
               <select
+                aria-label="Pilih Kelas / Rombel"
                 value={previewKelas || (classOptions[0]?.kelas ?? '')}
                 onChange={(e) => setPreviewKelas(e.target.value)}
                 className="px-3 py-1.5 text-xs font-bold bg-white border border-slate-300 rounded-lg cursor-pointer"
               >
+                <option value="SEMUA">Semua Kelas ({students.length} Siswa)</option>
                 {classOptions.map((c) => (
                   <option key={c.kelas} value={c.kelas}>
-                    {c.kelas} ({c.studentCount} Siswa)
+                    Kelas {c.kelas} ({c.studentCount} Siswa)
                   </option>
                 ))}
+              </select>
+
+              <select
+                aria-label="Filter Mata Pelajaran"
+                value={previewMapel}
+                onChange={(e) => {
+                  setPreviewMapel(e.target.value);
+                  setPreviewExamId('SEMUA');
+                }}
+                className="px-3 py-1.5 text-xs font-bold bg-white border border-indigo-200 text-indigo-950 rounded-lg cursor-pointer"
+              >
+                <option value="SEMUA">Semua Mata Pelajaran ({availableSubjects.length} Mapel)</option>
+                {availableSubjects.map((mp) => (
+                  <option key={mp} value={mp}>
+                    Mapel: {mp}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                aria-label="Filter Paket Ujian"
+                value={previewExamId}
+                onChange={(e) => setPreviewExamId(e.target.value)}
+                className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 text-slate-800 rounded-lg cursor-pointer"
+              >
+                <option value="SEMUA">Semua Paket Ujian</option>
+                {exams
+                  .filter(
+                    (ex) =>
+                      previewMapel === 'SEMUA' ||
+                      getEffectiveMataPelajaran(ex).toUpperCase() ===
+                        previewMapel.toUpperCase()
+                  )
+                  .map((ex) => (
+                    <option key={ex.id} value={String(ex.id)}>
+                      {ex.judul_ujian} ({getEffectiveMataPelajaran(ex)})
+                    </option>
+                  ))}
               </select>
             </div>
 

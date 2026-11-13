@@ -29,6 +29,7 @@ import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
 import {
   calculateExamScore,
   classifyQuestionCognitiveLevel,
+  getEffectiveMataPelajaran,
   isExamMatchedForStudentClass,
   resolveSyncedStudentAnswersForExam,
   resolveProportionalStudentExamPackage,
@@ -82,7 +83,19 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
   const [studentSearch, setStudentSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [packageFilter, setPackageFilter] = useState<string>('ALL');
+  const [selectedMapel, setSelectedMapel] = useState<string>('ALL');
   const [isDistributing, setIsDistributing] = useState(false);
+
+  // Distinct Mata Pelajaran list from exams
+  const availableMapels = useMemo(() => {
+    const set = new Set<string>();
+    exams.forEach((ex) => {
+      const m = getEffectiveMataPelajaran(ex);
+      if (m) set.add(m);
+    });
+    if (set.size === 0) set.add('Sosiologi');
+    return Array.from(set);
+  }, [exams]);
 
   // Selected question modal / detail
   const [selectedQuestionDetail, setSelectedQuestionDetail] = useState<QuestionItem | null>(null);
@@ -120,15 +133,25 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     return students.filter((s) => s.kelas.trim() === selectedClass.trim());
   }, [students, selectedClass]);
 
-  // Find exams matched with this class
+  // Find exams matched with this class & selected Mapel
   const matchedExams = useMemo(() => {
-    if (selectedClass === 'ALL') return exams;
-    const directMatches = exams.filter((e) => isExamMatchedForStudentClass(e, selectedClass));
+    const byMapel =
+      selectedMapel === 'ALL'
+        ? exams
+        : exams.filter(
+            (e) =>
+              getEffectiveMataPelajaran(e).toUpperCase() ===
+              selectedMapel.toUpperCase()
+          );
+    if (selectedClass === 'ALL') return byMapel;
+    const directMatches = byMapel.filter((e) =>
+      isExamMatchedForStudentClass(e, selectedClass)
+    );
     if (directMatches.length > 0) return directMatches;
-    return exams;
-  }, [exams, selectedClass]);
+    return byMapel;
+  }, [exams, selectedClass, selectedMapel]);
 
-  // Currently focused exam for item analysis
+  // Currently focused exam for item analysis ('ALL' = null or specific exam ID)
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
 
   const activeExam = useMemo(() => {
@@ -458,10 +481,11 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                   selectedClass === 'ALL'
                     ? 'Semua Kelas'
                     : `Kelas ${selectedClass}`,
-                exams,
+                exams: matchedExams.length > 0 ? matchedExams : exams,
                 questions,
                 results,
                 allStudents: students,
+                preferredExamId: activeExam?.id,
                 includeSummaryPage: true,
               })
             }
@@ -658,25 +682,54 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
         </div>
       </div>
 
-      {/* Exam selector if multiple exams exist */}
-      {matchedExams.length > 1 && (
-        <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <span className="font-semibold text-slate-700">
-            Pilih Paket Ujian yang Ditinjau:
+      {/* Filter Bar Atas: Mata Pelajaran (Mapel) & Paket Ujian */}
+      <div className="bg-white border border-indigo-200/80 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs shadow-2xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-bold text-indigo-950">
+            Filter Mata Pelajaran &amp; Paket Ujian:
           </span>
           <select
-            value={activeExam ? activeExam.id : ''}
-            onChange={(e) => setSelectedExamId(Number(e.target.value))}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium cursor-pointer"
+            value={selectedMapel}
+            onChange={(e) => {
+              setSelectedMapel(e.target.value);
+              setSelectedExamId(null);
+            }}
+            aria-label="Filter Mata Pelajaran"
+            className="px-3 py-1.5 bg-indigo-50/70 border border-indigo-200 rounded-lg text-xs font-bold text-indigo-950 cursor-pointer"
           >
+            <option value="ALL">Semua Mata Pelajaran ({availableMapels.length} Mapel)</option>
+            {availableMapels.map((mp) => (
+              <option key={mp} value={mp}>
+                Mapel: {mp}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={selectedExamId !== null ? String(selectedExamId) : 'ALL'}
+            onChange={(e) =>
+              setSelectedExamId(e.target.value === 'ALL' ? null : Number(e.target.value))
+            }
+            aria-label="Pilih Paket Ujian"
+            className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 cursor-pointer"
+          >
+            <option value="ALL">
+              Semua Paket Ujian ({matchedExams.length} Paket)
+            </option>
             {matchedExams.map((ex) => (
               <option key={ex.id} value={ex.id}>
-                {ex.judul_ujian} (Tingkat {ex.target_tingkat || 'Semua'})
+                {ex.judul_ujian} — {getEffectiveMataPelajaran(ex)} (Tingkat {ex.target_tingkat || 'Semua'})
               </option>
             ))}
           </select>
         </div>
-      )}
+
+        {activeExam && (
+          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] font-semibold text-emerald-800">
+            Aktif Ditinjau: <strong>{activeExam.judul_ujian}</strong> ({getEffectiveMataPelajaran(activeExam)})
+          </span>
+        )}
+      </div>
 
       {/* VIEW MODE 1: CARDS (Monitoring Siswa & Analisis Soal) */}
       {viewMode === 'cards' && (
@@ -958,12 +1011,45 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 </select>
 
                 <select
+                  value={selectedMapel}
+                  onChange={(e) => {
+                    setSelectedMapel(e.target.value);
+                    setSelectedExamId(null);
+                  }}
+                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer font-semibold text-indigo-950"
+                  aria-label="Filter Mata Pelajaran Siswa"
+                >
+                  <option value="ALL">Semua Mapel</option>
+                  {availableMapels.map((mp) => (
+                    <option key={mp} value={mp}>
+                      Mapel: {mp}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={selectedExamId !== null ? String(selectedExamId) : 'ALL'}
+                  onChange={(e) =>
+                    setSelectedExamId(e.target.value === 'ALL' ? null : Number(e.target.value))
+                  }
+                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer font-medium text-slate-800"
+                  aria-label="Filter Paket Ujian Siswa"
+                >
+                  <option value="ALL">Semua Paket Ujian</option>
+                  {matchedExams.map((ex) => (
+                    <option key={ex.id} value={ex.id}>
+                      {ex.judul_ujian} ({getEffectiveMataPelajaran(ex)})
+                    </option>
+                  ))}
+                </select>
+
+                <select
                   value={packageFilter}
                   onChange={(e) => setPackageFilter(e.target.value)}
                   className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 cursor-pointer font-mono font-semibold"
                   aria-label="Filter Kode Soal Siswa"
                 >
-                  <option value="ALL">Semua Paket</option>
+                  <option value="ALL">Semua Kode Paket</option>
                   <option value="PAKET-A">Paket A</option>
                   <option value="PAKET-B">Paket B</option>
                   <option value="PAKET-C">Paket C</option>
@@ -1049,9 +1135,10 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                       const rec = resolveStudentPrecisionRecord({
                         student: st,
                         allStudents: students,
-                        exams,
+                        exams: matchedExams.length > 0 ? matchedExams : exams,
                         questions,
                         results,
+                        preferredExamId: activeExam?.id,
                       });
                       const displayKodePaket =
                         res?.kode_soal ||

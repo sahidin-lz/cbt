@@ -290,6 +290,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [inlineTokenEditValue, setInlineTokenEditValue] = useState<string>('');
   const [isDistributingPackages, setIsDistributingPackages] = useState(false);
   const [filterExamTingkat, setFilterExamTingkat] = useState<string>('SEMUA');
+  const [filterExamMapel, setFilterExamMapel] = useState<string>('SEMUA');
   const [editingExamId, setEditingExamId] = useState<number | null>(null);
   const [isSavingExam, setIsSavingExam] = useState(false);
   const [examFeedback, setExamFeedback] = useState<string | null>(null);
@@ -311,10 +312,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [replaceExistingStudents, setReplaceExistingStudents] = useState(false);
   const [isUploadingStudentsCsv, setIsUploadingStudentsCsv] = useState(false);
 
-  // Student Filters (3 Tingkatan + Specific Class + Exam Status)
+  // Student Filters (3 Tingkatan + Specific Class + Mapel + Paket Ujian + Exam Status)
   const [filterStudentTingkat, setFilterStudentTingkat] =
     useState<string>('SEMUA');
   const [filterKelas, setFilterKelas] = useState<string>('SEMUA');
+  const [filterStudentMapel, setFilterStudentMapel] = useState<string>('SEMUA');
+  const [filterStudentExamId, setFilterStudentExamId] = useState<string>('SEMUA');
   const [filterStudentStatus, setFilterStudentStatus] =
     useState<string>('SEMUA');
   const [isSavingStudent, setIsSavingStudent] = useState(false);
@@ -397,6 +400,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [filterResultTingkat, setFilterResultTingkat] =
     useState<string>('SEMUA');
   const [filterResultKelas, setFilterResultKelas] = useState<string>('SEMUA');
+  const [filterResultMapel, setFilterResultMapel] = useState<string>('SEMUA');
   const [filterResultExamId, setFilterResultExamId] =
     useState<string>('SEMUA');
   const [analyzingResultId, setAnalyzingResultId] = useState<number | null>(
@@ -455,26 +459,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return a.localeCompare(b);
   });
 
+  // Distinct Mata Pelajaran list across all exams
+  const availableMataPelajaran = Array.from(
+    new Set(
+      exams.map((ex) => getEffectiveMataPelajaran(ex)).filter(Boolean)
+    )
+  );
+  if (availableMataPelajaran.length === 0) {
+    availableMataPelajaran.push('Sosiologi');
+  }
+
+  // Exams filtered by filterResultMapel (for Laporan / Hasil Ujian tab)
+  const resultMapelMatchedExams =
+    filterResultMapel === 'SEMUA'
+      ? exams
+      : exams.filter(
+          (ex) =>
+            getEffectiveMataPelajaran(ex).toUpperCase() ===
+            filterResultMapel.toUpperCase()
+        );
+
+  const resultScopedListForAnalytics = results.filter((resItem) => {
+    const ex = exams.find((e) => Number(e.id) === Number(resItem.exam_id));
+    const resMapel = getEffectiveMataPelajaran(ex);
+    const matchMapel =
+      filterResultMapel === 'SEMUA' ||
+      resMapel.toUpperCase() === filterResultMapel.toUpperCase();
+    const matchExam =
+      filterResultExamId === 'SEMUA' ||
+      String(resItem.exam_id) === filterResultExamId;
+    return matchMapel && matchExam;
+  });
+
   const classAnalyticsData = computeClassAnalytics(
     students,
-    results,
+    resultScopedListForAnalytics,
     customClasses,
     questions
   );
 
   const filteredResults = results.filter((resItem) => {
     const st = students.find((s) => s.id === resItem.student_id);
+    const ex = exams.find((e) => Number(e.id) === Number(resItem.exam_id));
     const sKelas = st?.kelas || '';
     const sTingkat = extractTingkatFromKelas(sKelas);
+    const resMapel = getEffectiveMataPelajaran(ex);
     const matchTingkat =
       filterResultTingkat === 'SEMUA' || sTingkat === filterResultTingkat;
     const matchKelas =
       filterResultKelas === 'SEMUA' ||
       sKelas.trim().toLowerCase() === filterResultKelas.trim().toLowerCase();
+    const matchMapel =
+      filterResultMapel === 'SEMUA' ||
+      resMapel.toUpperCase() === filterResultMapel.toUpperCase();
     const matchExam =
       filterResultExamId === 'SEMUA' ||
       String(resItem.exam_id) === filterResultExamId;
-    return matchTingkat && matchKelas && matchExam;
+    return matchTingkat && matchKelas && matchMapel && matchExam;
   });
 
   const filteredExams = exams.filter((e) => {
@@ -482,14 +523,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       filterExamTingkat === 'SEMUA' ||
       e.target_tingkat === filterExamTingkat ||
       e.target_tingkat === 'SEMUA';
+    const matchMapel =
+      filterExamMapel === 'SEMUA' ||
+      getEffectiveMataPelajaran(e).toUpperCase() ===
+        filterExamMapel.toUpperCase();
     const matchKategori =
       filterExamKategori === 'SEMUA' ||
       (e.kategori_ujian || 'Penilaian Harian (PH / Kuis)') === filterExamKategori;
     const matchStatus =
       filterExamStatus === 'SEMUA' ||
       (e.status_ujian || 'DRAF') === filterExamStatus;
-    return matchTingkat && matchKategori && matchStatus;
+    return matchTingkat && matchMapel && matchKategori && matchStatus;
   });
+
+  // Exams scoped to Database Siswa filter (filterStudentMapel & filterStudentExamId)
+  const studentScopedExams = (() => {
+    const byMapel =
+      filterStudentMapel === 'SEMUA'
+        ? exams
+        : exams.filter(
+            (ex) =>
+              getEffectiveMataPelajaran(ex).toUpperCase() ===
+              filterStudentMapel.toUpperCase()
+          );
+    if (filterStudentExamId === 'SEMUA') return byMapel.length > 0 ? byMapel : exams;
+    const byId = byMapel.filter((ex) => String(ex.id) === filterStudentExamId);
+    return byId.length > 0 ? byId : byMapel.length > 0 ? byMapel : exams;
+  })();
 
   const filteredStudents = students.filter((s) => {
     const sTingkat = extractTingkatFromKelas(s.kelas);
@@ -2948,6 +3008,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* Filter Mata Pelajaran (Mapel) */}
+                  <select
+                    value={filterExamMapel}
+                    onChange={(e) => setFilterExamMapel(e.target.value)}
+                    className="px-3 py-1.5 text-xs font-bold bg-white border border-indigo-200 rounded-lg cursor-pointer text-indigo-950"
+                    aria-label="Filter Mata Pelajaran Ujian"
+                  >
+                    <option value="SEMUA">Semua Mata Pelajaran ({availableMataPelajaran.length} Mapel)</option>
+                    {availableMataPelajaran.map((mp) => (
+                      <option key={mp} value={mp}>
+                        Mapel: {mp}
+                      </option>
+                    ))}
+                  </select>
+
                   {/* Filter Status Ujian */}
                   <select
                     value={filterExamStatus}
@@ -3528,10 +3603,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       filterKelas !== 'SEMUA'
                         ? `Kelas ${filterKelas}`
                         : 'Semua Kelas',
-                    exams,
+                    exams: studentScopedExams,
                     questions,
                     results,
                     allStudents: students,
+                    preferredExamId:
+                      filterStudentExamId !== 'SEMUA'
+                        ? Number(filterStudentExamId)
+                        : undefined,
                     includeSummaryPage: true,
                   })
                 }
@@ -3972,12 +4051,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       onChange={(e) => setFilterKelas(e.target.value)}
                       className="px-3 py-1.5 text-xs font-semibold bg-white border border-indigo-200 rounded-lg text-slate-800"
                     >
-                      <option value="SEMUA">Semua Rombel</option>
+                      <option value="SEMUA">Semua Kelas / Rombel</option>
                       {uniqueClasses.map((kls) => (
                         <option key={kls} value={kls}>
                           {kls}
                         </option>
                       ))}
+                    </select>
+                  )}
+
+                  {/* Filter Mata Pelajaran (Mapel) */}
+                  <select
+                    aria-label="Filter Mata Pelajaran Siswa"
+                    value={filterStudentMapel}
+                    onChange={(e) => {
+                      setFilterStudentMapel(e.target.value);
+                      setFilterStudentExamId('SEMUA');
+                    }}
+                    className="px-3 py-1.5 text-xs font-bold bg-white border border-indigo-200 rounded-lg text-indigo-950"
+                  >
+                    <option value="SEMUA">Semua Mata Pelajaran ({availableMataPelajaran.length} Mapel)</option>
+                    {availableMataPelajaran.map((mp) => (
+                      <option key={mp} value={mp}>
+                        Mapel: {mp}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Filter Paket Ujian */}
+                  {exams.length > 0 && (
+                    <select
+                      aria-label="Filter Paket Ujian Siswa"
+                      value={filterStudentExamId}
+                      onChange={(e) => setFilterStudentExamId(e.target.value)}
+                      className="px-3 py-1.5 text-xs font-semibold bg-white border border-indigo-200 rounded-lg text-slate-800"
+                    >
+                      <option value="SEMUA">Semua Paket Ujian</option>
+                      {exams
+                        .filter(
+                          (ex) =>
+                            filterStudentMapel === 'SEMUA' ||
+                            getEffectiveMataPelajaran(ex).toUpperCase() ===
+                              filterStudentMapel.toUpperCase()
+                        )
+                        .map((ex) => (
+                          <option key={ex.id} value={String(ex.id)}>
+                            {ex.judul_ujian} ({getEffectiveMataPelajaran(ex)})
+                          </option>
+                        ))}
                     </select>
                   )}
 
@@ -4036,9 +4157,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         const rec = resolveStudentPrecisionRecord({
                           student: st,
                           allStudents: students,
-                          exams,
+                          exams: studentScopedExams,
                           questions,
                           results,
+                          preferredExamId:
+                            filterStudentExamId !== 'SEMUA'
+                              ? Number(filterStudentExamId)
+                              : undefined,
                         });
 
                         return (
@@ -6130,13 +6255,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Tabel Rekapitulasi Analisis & Download Per Kelas */}
             {classAnalyticsData.perClass.length > 0 && (
               <div className="space-y-2.5">
-                <div className="flex items-center justify-between bg-gradient-to-r from-indigo-50 via-blue-50 to-slate-50 px-4 py-2.5 rounded-xl border border-indigo-100">
-                  <h3 className="text-sm font-extrabold text-indigo-950">
-                    Tabel Analisis Capaian &amp; Download Hasil Ujian Per Kelas
-                  </h3>
-                  <span className="text-[11px] font-mono font-semibold text-indigo-700">
-                    {classAnalyticsData.perClass.length} Kelas Terdaftar
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-indigo-50 via-blue-50 to-slate-50 px-4 py-2.5 rounded-xl border border-indigo-100">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-indigo-950">
+                      Tabel Analisis Capaian &amp; Download Hasil Ujian Per Kelas
+                    </h3>
+                    <span className="text-[11px] font-mono font-semibold text-indigo-700">
+                      {classAnalyticsData.perClass.length} Kelas Terdaftar · Filter Mapel:{' '}
+                      {filterResultMapel === 'SEMUA' ? 'Semua Mata Pelajaran' : filterResultMapel}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      aria-label="Filter Rekap Kelas Per Mata Pelajaran"
+                      value={filterResultMapel}
+                      onChange={(e) => {
+                        setFilterResultMapel(e.target.value);
+                        setFilterResultExamId('SEMUA');
+                      }}
+                      className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-bold text-indigo-950 cursor-pointer"
+                    >
+                      <option value="SEMUA">
+                        Semua Mata Pelajaran ({availableMataPelajaran.length} Mapel)
+                      </option>
+                      {availableMataPelajaran.map((mp) => (
+                        <option key={mp} value={mp}>
+                          Mapel: {mp}
+                        </option>
+                      ))}
+                    </select>
+
+                    {resultMapelMatchedExams.length > 0 && (
+                      <select
+                        aria-label="Filter Rekap Kelas Per Paket Ujian"
+                        value={filterResultExamId}
+                        onChange={(e) => setFilterResultExamId(e.target.value)}
+                        className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-medium text-slate-800 cursor-pointer"
+                      >
+                        <option value="SEMUA">Semua Paket Ujian</option>
+                        {resultMapelMatchedExams.map((ex) => (
+                          <option key={ex.id} value={String(ex.id)}>
+                            {ex.judul_ujian} ({getEffectiveMataPelajaran(ex)})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 </div>
                 <div className="overflow-x-auto border border-indigo-100 rounded-xl">
                   <table className="w-full text-left border-collapse">
@@ -6166,7 +6331,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-200 text-xs">
                       {classAnalyticsData.perClass.map((cls) => {
-                        const clsResults = results.filter((r) => {
+                        const clsResults = resultScopedListForAnalytics.filter((r) => {
                           const st = students.find(
                             (s) => s.id === r.student_id
                           );
@@ -6238,10 +6403,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     );
                                     downloadStudentTokenCardsPdf(clsStudents, {
                                       kelasLabel: `Kelas ${cls.kelas}`,
-                                      exams,
+                                      exams:
+                                        resultMapelMatchedExams.length > 0
+                                          ? resultMapelMatchedExams
+                                          : exams,
                                       questions,
                                       results,
                                       allStudents: students,
+                                      preferredExamId:
+                                        filterResultExamId !== 'SEMUA'
+                                          ? Number(filterResultExamId)
+                                          : undefined,
                                       includeSummaryPage: true,
                                     });
                                   }}
@@ -6371,12 +6543,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   aria-label="Filter Hasil Per Kelas"
                   value={filterResultKelas}
                   onChange={(e) => setFilterResultKelas(e.target.value)}
-                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-semibold text-slate-800"
+                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-semibold text-slate-800 cursor-pointer"
                 >
                   <option value="SEMUA">Semua Kelas / Rombel</option>
                   {uniqueClasses.map((kls) => (
                     <option key={kls} value={kls}>
                       Kelas {kls}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Dropdown Filter Mata Pelajaran (Mapel) */}
+                <select
+                  aria-label="Filter Hasil Per Mata Pelajaran"
+                  value={filterResultMapel}
+                  onChange={(e) => {
+                    setFilterResultMapel(e.target.value);
+                    setFilterResultExamId('SEMUA');
+                  }}
+                  className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-bold text-indigo-950 cursor-pointer"
+                >
+                  <option value="SEMUA">Semua Mata Pelajaran ({availableMataPelajaran.length} Mapel)</option>
+                  {availableMataPelajaran.map((mp) => (
+                    <option key={mp} value={mp}>
+                      Mapel: {mp}
                     </option>
                   ))}
                 </select>
@@ -6387,12 +6577,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     aria-label="Filter Hasil Per Paket Ujian"
                     value={filterResultExamId}
                     onChange={(e) => setFilterResultExamId(e.target.value)}
-                    className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-medium text-slate-800"
+                    className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded-lg font-medium text-slate-800 cursor-pointer"
                   >
                     <option value="SEMUA">Semua Paket Ujian</option>
-                    {exams.map((ex) => (
+                    {resultMapelMatchedExams.map((ex) => (
                       <option key={ex.id} value={String(ex.id)}>
-                        {ex.judul_ujian}
+                        {ex.judul_ujian} ({getEffectiveMataPelajaran(ex)})
                       </option>
                     ))}
                   </select>

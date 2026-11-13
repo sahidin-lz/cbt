@@ -89,6 +89,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
   onLogout,
 }) => {
   const [activeMenu, setActiveMenu] = useState<StudentDashboardMenu>(initialMenu);
+  const [studentMapelFilter, setStudentMapelFilter] = useState<string>('SEMUA');
 
   // Modal state for entering Teacher's Exam Session Token when clicking "Mulai Ujian"
   const [tokenModalExam, setTokenModalExam] = useState<ExamItem | null>(null);
@@ -183,12 +184,46 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     );
   }, [activeSubjectAllocations, exams, student.kelas]);
 
+  const studentAvailableMapels = useMemo(() => {
+    const set = new Set<string>();
+    classMatchedExams.forEach((ex) => {
+      const m = getEffectiveMataPelajaran(ex);
+      if (m) set.add(m);
+    });
+    exams.forEach((ex) => {
+      const m = getEffectiveMataPelajaran(ex);
+      if (m) set.add(m);
+    });
+    if (set.size === 0) set.add('Sosiologi');
+    return Array.from(set);
+  }, [classMatchedExams, exams]);
+
+  const filteredClassMatchedExams = useMemo(() => {
+    if (studentMapelFilter === 'SEMUA') return classMatchedExams;
+    return classMatchedExams.filter(
+      (ex) =>
+        getEffectiveMataPelajaran(ex).toUpperCase() ===
+        studentMapelFilter.toUpperCase()
+    );
+  }, [classMatchedExams, studentMapelFilter]);
+
   // All submitted results belonging to this student
   const studentResults = useMemo(() => {
     return results
       .filter((r) => Number(r.student_id) === Number(student.id))
       .sort((a, b) => Number(b.id) - Number(a.id));
   }, [results, student.id]);
+
+  const filteredStudentResults = useMemo(() => {
+    if (studentMapelFilter === 'SEMUA') return studentResults;
+    return studentResults.filter((r) => {
+      const ex = exams.find((e) => Number(e.id) === Number(r.exam_id));
+      return (
+        getEffectiveMataPelajaran(ex).toUpperCase() ===
+        studentMapelFilter.toUpperCase()
+      );
+    });
+  }, [studentResults, studentMapelFilter, exams]);
 
   const completedExamIds = useMemo(() => {
     return new Set(studentResults.map((r) => Number(r.exam_id)));
@@ -845,25 +880,40 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 Pengawas.
               </p>
             </div>
-            <span className="px-3 py-1.5 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-300">
-              Kode Paket Anda: {assignedPackageBadge}
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Filter Mata Pelajaran Jadwal"
+                value={studentMapelFilter}
+                onChange={(e) => setStudentMapelFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-lg bg-white text-slate-900 text-xs font-bold border border-indigo-200 cursor-pointer"
+              >
+                <option value="SEMUA">Semua Mata Pelajaran ({studentAvailableMapels.length} Mapel)</option>
+                {studentAvailableMapels.map((mp) => (
+                  <option key={mp} value={mp}>
+                    Mapel: {mp}
+                  </option>
+                ))}
+              </select>
+              <span className="px-3 py-1.5 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-300">
+                Kode Paket Anda: {assignedPackageBadge}
+              </span>
+            </div>
           </div>
 
           <div className="p-6">
-            {classMatchedExams.length === 0 ? (
+            {filteredClassMatchedExams.length === 0 ? (
               <div className="py-12 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
                 <p className="text-sm font-bold text-slate-700">
-                  Belum Ada Jadwal Ujian untuk Kelas {student.kelas}
+                  Belum Ada Jadwal Ujian untuk Kelas {student.kelas} pada Filter Mapel Ini
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
                   Jadwal ujian akan otomatis muncul di halaman ini segera
-                  setelah ditambahkan oleh Guru Sosiologi.
+                  setelah ditambahkan oleh Guru.
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {classMatchedExams.map((ex) => {
+                {filteredClassMatchedExams.map((ex) => {
                   const isAktif = (ex.status_ujian || 'AKTIF') === 'AKTIF';
                   const isSelesaiStatus = ex.status_ujian === 'SELESAI';
                   const qCount = questions.filter(
@@ -1031,14 +1081,27 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 PDF.
               </p>
             </div>
+            <select
+              aria-label="Filter Mata Pelajaran Hasil"
+              value={studentMapelFilter}
+              onChange={(e) => setStudentMapelFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-lg bg-white text-slate-900 text-xs font-bold border border-indigo-200 cursor-pointer"
+            >
+              <option value="SEMUA">Semua Mata Pelajaran ({studentAvailableMapels.length} Mapel)</option>
+              {studentAvailableMapels.map((mp) => (
+                <option key={mp} value={mp}>
+                  Mapel: {mp}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="p-6 space-y-5">
-            {studentResults.length === 0 ? (
+            {filteredStudentResults.length === 0 ? (
               <div className="py-12 text-center space-y-3 border border-dashed border-slate-200 rounded-xl">
                 <Award className="w-10 h-10 text-slate-400 mx-auto" />
                 <p className="text-sm font-bold text-slate-700">
-                  Belum Ada Hasil Nilai Ujian yang Tersimpan
+                  Belum Ada Hasil Nilai Ujian pada Filter Mata Pelajaran Ini
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
                   Setelah Anda menyelesaikan ujian di menu{' '}
@@ -1054,7 +1117,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 </button>
               </div>
             ) : (
-              studentResults.map((resItem) => {
+              filteredStudentResults.map((resItem) => {
                 const examObj = exams.find(
                   (e) => Number(e.id) === Number(resItem.exam_id)
                 );
@@ -1235,6 +1298,19 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 Riwayat Ujian Lengkap (Selesai &amp; Belum Dikerjakan)
               </h2>
             </div>
+            <select
+              aria-label="Filter Mata Pelajaran Riwayat"
+              value={studentMapelFilter}
+              onChange={(e) => setStudentMapelFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-lg bg-white text-slate-900 text-xs font-bold border border-indigo-200 cursor-pointer"
+            >
+              <option value="SEMUA">Semua Mata Pelajaran ({studentAvailableMapels.length} Mapel)</option>
+              {studentAvailableMapels.map((mp) => (
+                <option key={mp} value={mp}>
+                  Mapel: {mp}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="p-6">
@@ -1252,7 +1328,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-xs">
-                  {classMatchedExams.length === 0 ? (
+                  {filteredClassMatchedExams.length === 0 ? (
                     <tr>
                       <td
                         colSpan={7}
@@ -1262,7 +1338,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                       </td>
                     </tr>
                   ) : (
-                    classMatchedExams.map((ex, idx) => {
+                    filteredClassMatchedExams.map((ex, idx) => {
                       const resItem = studentResults.find(
                         (r) => Number(r.exam_id) === Number(ex.id)
                       );
