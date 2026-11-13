@@ -2195,8 +2195,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onClick={() => setActiveTab('manajemen')}
               className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
                 activeTab === 'manajemen'
-                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white border-indigo-700 shadow-xs'
-                  : 'bg-white hover:bg-indigo-50/70 text-slate-700 border-slate-200/90 hover:border-indigo-300'
+                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white border-indigo-700 shadow-xs ring-2 ring-indigo-300'
+                  : 'bg-indigo-50/70 hover:bg-indigo-100/80 text-indigo-950 border-indigo-300'
               }`}
             >
               <span className="flex items-center gap-2 truncate">
@@ -2205,18 +2205,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     activeTab === 'manajemen' ? 'text-emerald-300' : 'text-indigo-600'
                   }`}
                 />
-                <span className="truncate">Manajemen Ujian</span>
+                <span className="truncate">Live Monitor &amp; Kelas</span>
               </span>
               <span
-                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
+                className={`px-2 py-0.5 text-[10px] font-mono tabular-nums rounded-md font-extrabold shrink-0 ${
                   activeTab === 'manajemen'
                     ? 'bg-white/20 text-white'
                     : activeStudentsCount > 0
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
+                      ? 'bg-emerald-600 text-white animate-pulse'
+                      : 'bg-indigo-600 text-white'
                 }`}
               >
-                {activeStudentsCount > 0 ? `${activeStudentsCount} Aktif` : 'Kelas'}
+                {activeStudentsCount > 0 ? `${activeStudentsCount} LIVE` : 'RADAR'}
               </span>
             </button>
 
@@ -2397,7 +2397,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {/* Quiet Footer Status Bar inside Console Header */}
         <div className="px-6 py-2.5 bg-gradient-to-r from-emerald-50/80 via-slate-50 to-blue-50/70 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider">
               Live Sync Aktif
             </span>
@@ -2406,11 +2406,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 'Perubahan jadwal, peserta, bank soal, dan hasil tersimpan otomatis'}
             </span>
           </div>
-          {syncPulse?.lastSyncedAt && (
-            <span className="font-mono tabular-nums font-semibold text-indigo-800">
-              Update Terakhir: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-3">
+            {activeTab !== 'manajemen' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('manajemen')}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] shadow-2xs transition-colors cursor-pointer"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 animate-ping" />
+                <span>Buka Live Radar Monitor Web Siswa</span>
+              </button>
+            )}
+            {syncPulse?.lastSyncedAt && (
+              <span className="font-mono tabular-nums font-semibold text-indigo-800">
+                Update Terakhir: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
