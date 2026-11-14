@@ -2718,6 +2718,233 @@ export function prepareStudentExamQuestions<T extends {
 }
 
 /**
+ * Strict exact-match legacy score calculator (0 points on PG Kompleks if any option is missed or wrong).
+ * Used to accurately detect historical exam results recorded when the stricter scoring rule was active.
+ */
+export function calculateStrictLegacyExamScore(
+  questionsList: ScoredQuestionItem[],
+  studentAnswers: Record<string, string[]>
+): number {
+  let rawEarned = 0;
+  let rawMax = 0;
+
+  for (const q of questionsList) {
+    const qId = String(q.id);
+    const correctKeys = normalizeAnswerKeys(q.kunci_jawaban);
+    const chosenKeys = normalizeAnswerKeys(studentAnswers[qId] || []);
+    const isKompleks =
+      q.tipe_soal.toLowerCase().includes('kompleks') ||
+      correctKeys.length > 1;
+    const defaultMax = isKompleks ? 3 : 2;
+    const maxPoints = q.bobot && q.bobot > 0 ? q.bobot : defaultMax;
+    rawMax += maxPoints;
+
+    if (chosenKeys.length === 0 || correctKeys.length === 0) continue;
+
+    const matchedCount = chosenKeys.filter((k) => correctKeys.includes(k)).length;
+    const wrongCount = chosenKeys.filter((k) => !correctKeys.includes(k)).length;
+    if (matchedCount === correctKeys.length && wrongCount === 0) {
+      rawEarned += maxPoints;
+    }
+  }
+
+  return rawMax > 0 ? Math.round((rawEarned / rawMax) * 100) : 0;
+}
+
+/**
+ * Aligns historical `jawaban_siswa` keys to the current `questions` IDs for an exam.
+ * If all or some keys already match `String(q.id)`, returns them directly.
+ * If 0 keys match `String(q.id)` (e.g. because the question bank CSV was re-uploaded with new IDs),
+ * aligns answers by `id_soal_csv` or by sorted positional order (`idx -> sortedQuestions[idx].id`).
+ */
+export function alignHistoricalAnswerKeysToQuestions<
+  TQuestion extends {
+    id: number | string;
+    data_opsi?: {
+      id_soal_csv?: string;
+    } | null;
+  }
+>(
+  questions: TQuestion[],
+  rawAnswers: Record<string, string[]>
+): Record<string, string[]> {
+  if (!questions || questions.length === 0 || !rawAnswers) return rawAnswers || {};
+  const rawEntries = Object.entries(rawAnswers).filter(
+    ([, val]) => Array.isArray(val) && val.length > 0
+  );
+  if (rawEntries.length === 0) return rawAnswers;
+
+  const qIdSet = new Set(questions.map((q) => String(q.id)));
+  const directMatchCount = rawEntries.filter(([k]) => qIdSet.has(String(k))).length;
+  if (directMatchCount > 0) {
+    return rawAnswers;
+  }
+
+  const sortedQuestions = [...questions].sort(
+    (a, b) => Number(a.id) - Number(b.id)
+  );
+  const csvCodeMap = new Map<string, string>();
+  sortedQuestions.forEach((q) => {
+    const csvCode = (q.data_opsi?.id_soal_csv || '').trim().toUpperCase();
+    if (csvCode) {
+      csvCodeMap.set(csvCode, String(q.id));
+    }
+  });
+
+  const sortedRawEntries = [...rawEntries].sort(([kA], [kB]) => {
+    const nA = Number(String(kA).replace(/[^0-9]/g, ''));
+    const nB = Number(String(kB).replace(/[^0-9]/g, ''));
+    if (!isNaN(nA) && !isNaN(nB) && nA !== nB) return nA - nB;
+    return String(kA).localeCompare(String(kB), undefined, { numeric: true });
+  });
+
+  const aligned: Record<string, string[]> = {};
+  sortedRawEntries.forEach(([rawKey, val], idx) => {
+    const cleanUpper = String(rawKey).trim().toUpperCase();
+    const byCsv = csvCodeMap.get(cleanUpper);
+    if (byCsv) {
+      aligned[byCsv] = normalizeAnswerKeys(val);
+    } else if (idx < sortedQuestions.length) {
+      aligned[String(sortedQuestions[idx].id)] = normalizeAnswerKeys(val);
+    }
+  });
+
+  return Object.keys(aligned).length > 0 ? aligned : rawAnswers;
+}
+
+/**
+ * Builds a complete, deterministic Humane Cognitive & Item Analysis (`AnalisisAI`)
+ * reflecting the Humane & Anti-Guessing PG Kompleks scoring formula.
+ */
+export function buildHumaneAnalysisForResult(params: {
+  studentName: string;
+  questions: {
+    id: number | string;
+    teks_soal: string;
+    tipe_soal: 'PG' | 'Kompleks' | string;
+    kunci_jawaban: string[];
+    bobot?: number;
+  }[];
+  canonicalAnswers: Record<string, string[]>;
+  scoreSummary?: ExamScoreSummary;
+  finalScore: number;
+  finalKategori: ExamScoreSummary['kategoriNilai'];
+  existingAi?: any;
+}): {
+  nama_siswa: string;
+  skor_akhir: number;
+  kategori_nilai: ExamScoreSummary['kategoriNilai'];
+  analisis_kompetensi: {
+    kekuatan: string[];
+    kelemahan: string[];
+  };
+  evaluasi_hots: string;
+  rekomendasi_belajar: string[];
+} {
+  const summary =
+    params.scoreSummary ||
+    calculateExamScore(params.questions, params.canonicalAnswers);
+
+  const lh = calculateStudentLotsVsHots(
+    params.questions,
+    params.canonicalAnswers,
+    params.finalScore,
+    params.existingAi
+  );
+
+  const detailItems = params.questions.map((q, idx) => {
+    const qId = String(q.id);
+    const breakdownItem = summary.breakdown.find((b) => b.questionId === qId);
+    const cleanText = String(q.teks_soal || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return {
+      nomor: idx + 1,
+      tipe_soal: q.tipe_soal,
+      teks_soal: cleanText,
+      status_jawaban: breakdownItem?.status || 'Salah',
+      poin_diperoleh: breakdownItem?.earnedPoints ?? 0,
+      bobot_maksimal: breakdownItem?.maxPoints ?? q.bobot ?? 2,
+    };
+  });
+
+  const benarPenuhItems = detailItems.filter(
+    (d) => d.status_jawaban === 'Benar Penuh'
+  );
+  const benarSebagianItems = detailItems.filter(
+    (d) => d.status_jawaban === 'Benar Sebagian'
+  );
+  const salahItems = detailItems.filter((d) => d.status_jawaban === 'Salah');
+
+  const kekuatanList: string[] = [
+    ...benarPenuhItems.slice(0, 6).map(
+      (b) =>
+        `Menguasai penuh Soal #${b.nomor} (${b.tipe_soal}): "${b.teks_soal.slice(
+          0,
+          75
+        )}${b.teks_soal.length > 75 ? '...' : ''}" dengan skor penuh (${
+          b.poin_diperoleh
+        }/${b.bobot_maksimal} poin).`
+    ),
+    ...benarSebagianItems.slice(0, 6).map(
+      (s) =>
+        `Apresiasi Penilaian Humanis pada Soal #${s.nomor} (${s.tipe_soal} Multi-Opsi): berhasil mengidentifikasi opsi benar dan memperoleh ${s.poin_diperoleh}/${s.bobot_maksimal} poin.`
+    ),
+  ];
+
+  if (kekuatanList.length === 0) {
+    kekuatanList.push(
+      'Telah menyelesaikan rangkaian sesi ujian dan menjawab butir soal sesuai alokasi waktu.'
+    );
+  }
+
+  const kelemahanList: string[] = [
+    ...benarSebagianItems.slice(0, 5).map(
+      (s) =>
+        `Penguatan ketelitian opsi pada Soal #${s.nomor} (${s.tipe_soal}): telah memperoleh poin parsial humanis (${s.poin_diperoleh}/${s.bobot_maksimal} poin), namun masih ada opsi kunci yang belum lengkap.`
+    ),
+    ...salahItems.slice(0, 5).map(
+      (w) =>
+        `Perlu pendalaman konsep pada Soal #${w.nomor} (${w.tipe_soal}): "${w.teks_soal.slice(
+          0,
+          70
+        )}${w.teks_soal.length > 70 ? '...' : ''}".`
+    ),
+  ];
+
+  if (kelemahanList.length === 0) {
+    kelemahanList.push(
+      'Tidak ditemukan kelemahan signifikan; akurasi jawaban sangat konsisten pada soal PG Tunggal maupun PG Kompleks.'
+    );
+  }
+
+  const evaluasiHots =
+    params.finalScore >= 80
+      ? `Berdasarkan Standar Penilaian Humanis (LOTS: ${lh.lotsScore}/100 · HOTS: ${lh.hotsScore}/100), kemampuan berpikir tingkat tinggi (HOTS - Analisis & Evaluasi) sangat kuat. Siswa mampu mengintegrasikan wacana dengan tepat (${benarPenuhItems.length} soal benar penuh dan ${benarSebagianItems.length} soal PG Kompleks mendapat poin apresiasi parsial humanis).`
+      : params.finalScore >= 65
+        ? `Berdasarkan Standar Penilaian Humanis (LOTS: ${lh.lotsScore}/100 · HOTS: ${lh.hotsScore}/100), penguasaan konsep dasar sudah baik dan siswa memperoleh apresiasi poin proporsional pada ${benarSebagianItems.length} soal HOTS PG Kompleks (${benarPenuhItems.length} soal benar penuh). Ketelitian memverifikasi seluruh pernyataan benar pada soal multi-opsi dapat terus ditingkatkan.`
+        : `Berdasarkan Standar Penilaian Humanis (LOTS: ${lh.lotsScore}/100 · HOTS: ${lh.hotsScore}/100), siswa telah memperoleh apresiasi poin pada ${benarPenuhItems.length} soal benar penuh dan ${benarSebagianItems.length} soal PG Kompleks parsial, namun masih memerlukan bimbingan terstruktur dalam menganalisis wacana kasus HOTS.`;
+
+  const rekomendasiBelajar = [
+    'Tinjau kembali pembahasan butir soal Pilihan Ganda Kompleks yang memperoleh poin parsial humanis agar pada ujian berikutnya dapat meraih poin maksimal.',
+    'Gunakan teknik verifikasi satu per satu terhadap setiap pernyataan opsi (A–E) berdasarkan kata kunci pada teks wacana.',
+    'Diskusikan studi kasus kontekstual bersama guru untuk mempertajam penalaran analitis (HOTS) dan penguasaan konsep esensial.',
+  ];
+
+  return {
+    nama_siswa: params.studentName,
+    skor_akhir: params.finalScore,
+    kategori_nilai: params.finalKategori,
+    analisis_kompetensi: {
+      kekuatan: kekuatanList,
+      kelemahan: kelemahanList,
+    },
+    evaluasi_hots: evaluasiHots,
+    rekomendasi_belajar: rekomendasiBelajar,
+  };
+}
+
+/**
  * Ensures a student's saved `jawaban_siswa` is 100% synchronized with the canonical
  * Bank Soal `questions`. If a historical result was saved with shuffled option keys,
  * this deterministically reconstructs the student's option map and translates the answers
@@ -2761,14 +2988,19 @@ export function resolveSyncedStudentAnswersForExam<
   } | null;
   recordedScore?: number | null;
 }): Record<string, string[]> {
-  const rawAnswers = params.jawabanSiswa || {};
+  const initialRaw = params.jawabanSiswa || {};
   if (
     !params.questions ||
     params.questions.length === 0 ||
-    Object.keys(rawAnswers).length === 0
+    Object.keys(initialRaw).length === 0
   ) {
-    return rawAnswers;
+    return initialRaw;
   }
+
+  const rawAnswers = alignHistoricalAnswerKeysToQuestions(
+    params.questions,
+    initialRaw
+  );
 
   if (
     params.student &&
@@ -2776,55 +3008,116 @@ export function resolveSyncedStudentAnswersForExam<
     params.exam.acak_opsi !== false &&
     typeof params.recordedScore === 'number'
   ) {
-    const directNewScore = calculateExamScore(params.questions, rawAnswers).normalizedScore;
-    const directLegacyScore = calculateLegacyExamScore(params.questions, rawAnswers);
+    const sortedBaseQuestions = [...params.questions].sort(
+      (a, b) => Number(a.id) - Number(b.id)
+    );
+    const directNewScore = calculateExamScore(
+      sortedBaseQuestions,
+      rawAnswers
+    ).normalizedScore;
+    const directLegacyScore = calculateLegacyExamScore(
+      sortedBaseQuestions,
+      rawAnswers
+    );
+    const directStrictScore = calculateStrictLegacyExamScore(
+      sortedBaseQuestions,
+      rawAnswers
+    );
 
-    // If rawAnswers already matches recordedScore under either the new or legacy formula, it is already in canonical space
+    // Check if rawAnswers already matches recordedScore under Humane, Semi-Legacy, or Strict-Legacy formula
     const directDiff = Math.min(
       Math.abs(directNewScore - params.recordedScore),
-      Math.abs(directLegacyScore - params.recordedScore)
+      Math.abs(directLegacyScore - params.recordedScore),
+      Math.abs(directStrictScore - params.recordedScore)
     );
 
     if (directDiff > 0) {
       const candidateSeeds = [
-        hashStudentSeed(params.student.id, params.student.token_ujian, params.exam.id),
         hashStudentSeed(
-          `${params.student.id}_${params.student.kode_soal || params.exam.kode_paket || 'PAKET-A'}`,
+          params.student.id,
           params.student.token_ujian,
           params.exam.id
         ),
-        hashStudentSeed(`${params.student.id}_PAKET-A`, params.student.token_ujian, params.exam.id),
-        hashStudentSeed(`${params.student.id}_PAKET-B`, params.student.token_ujian, params.exam.id),
+        hashStudentSeed(
+          `${params.student.id}_${
+            params.student.kode_soal || params.exam.kode_paket || 'PAKET-A'
+          }`,
+          params.student.token_ujian,
+          params.exam.id
+        ),
+        hashStudentSeed(
+          `${params.student.id}_PAKET-A`,
+          params.student.token_ujian,
+          params.exam.id
+        ),
+        hashStudentSeed(
+          `${params.student.id}_PAKET-B`,
+          params.student.token_ujian,
+          params.exam.id
+        ),
+        hashStudentSeed(
+          `${params.student.id}_PAKET-C`,
+          params.student.token_ujian,
+          params.exam.id
+        ),
+        hashStudentSeed(
+          `${params.student.id}_PAKET-D`,
+          params.student.token_ujian,
+          params.exam.id
+        ),
       ];
 
       let bestRemapped = rawAnswers;
       let bestDiff = directDiff;
+      let bestHumaneScore = directNewScore;
 
       for (const seed of candidateSeeds) {
-        const qRng = createSeededRandom(seed);
-        let working = [...params.questions];
-        if (params.exam.acak_soal !== false && working.length > 1) {
-          working = shuffleArrayDeterministic(working, qRng);
-        }
-        working = working.map((q, idx) => {
-          const optSeed = (seed + Number(q.id) * 37 + idx * 13) >>> 0;
-          const optRng = createSeededRandom(optSeed);
-          return shuffleQuestionOptions(q, optRng);
-        });
+        for (const shuffleQuestionsMode of [
+          params.exam.acak_soal !== false,
+          false,
+        ]) {
+          const qRng = createSeededRandom(seed);
+          let working = [...sortedBaseQuestions];
+          if (shuffleQuestionsMode && working.length > 1) {
+            working = shuffleArrayDeterministic(working, qRng);
+          }
+          working = working.map((q, idx) => {
+            const optSeed = (seed + Number(q.id) * 37 + idx * 13) >>> 0;
+            const optRng = createSeededRandom(optSeed);
+            return shuffleQuestionOptions(q, optRng);
+          });
 
-        const remapped = mapStudentAnswersToCanonicalKeys(working, rawAnswers);
-        const remappedNewScore = calculateExamScore(params.questions, remapped).normalizedScore;
-        const remappedLegacyScore = calculateLegacyExamScore(params.questions, remapped);
-        const diff = Math.min(
-          Math.abs(remappedNewScore - params.recordedScore),
-          Math.abs(remappedLegacyScore - params.recordedScore)
-        );
+          const remapped = mapStudentAnswersToCanonicalKeys(
+            working,
+            rawAnswers
+          );
+          const remappedNewScore = calculateExamScore(
+            sortedBaseQuestions,
+            remapped
+          ).normalizedScore;
+          const remappedLegacyScore = calculateLegacyExamScore(
+            sortedBaseQuestions,
+            remapped
+          );
+          const remappedStrictScore = calculateStrictLegacyExamScore(
+            sortedBaseQuestions,
+            remapped
+          );
+          const diff = Math.min(
+            Math.abs(remappedNewScore - params.recordedScore),
+            Math.abs(remappedLegacyScore - params.recordedScore),
+            Math.abs(remappedStrictScore - params.recordedScore)
+          );
 
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          bestRemapped = remapped;
+          if (
+            diff < bestDiff ||
+            (diff === bestDiff && remappedNewScore > bestHumaneScore)
+          ) {
+            bestDiff = diff;
+            bestRemapped = remapped;
+            bestHumaneScore = remappedNewScore;
+          }
         }
-        if (diff === 0) break;
       }
 
       return bestRemapped;
@@ -2835,10 +3128,11 @@ export function resolveSyncedStudentAnswersForExam<
 }
 
 /**
- * Retroactively recalculates and upgrades scores for all students who have already
- * completed the exam (including those from previous days) using the new Humane & Anti-Guessing
- * PG Kompleks scoring formula.
- * Guarantees that every student's canonical answers are aligned and their score is updated fairly.
+ * Retroactively recalculates and upgrades scores AND humane cognitive evaluations (`analisis_ai`)
+ * for all students who have already completed the exam (including classes such as 11 Soshum Putri,
+ * 10 Abu Bakar, and exams from previous days before the humane scoring rule was introduced).
+ * Guarantees that every student's canonical answers are aligned, their score is upgraded fairly,
+ * and their competency analysis reflects the Humane & Anti-Guessing PG Kompleks formula.
  */
 export function recalculateHistoricalResults<
   TResult extends {
@@ -2865,6 +3159,10 @@ export function recalculateHistoricalResults<
   exams: {
     id: number | string;
     judul_ujian: string;
+    target_tingkat?: string;
+    target_kelas?: string;
+    target_rombel?: string[];
+    status_ujian?: string;
     acak_soal?: boolean;
     acak_opsi?: boolean;
     kode_paket?: string;
@@ -2903,12 +3201,52 @@ export function recalculateHistoricalResults<
     const student = params.students.find(
       (s) => Number(s.id) === Number(resItem.student_id)
     );
-    const exam = params.exams.find(
+    let exam = params.exams.find(
       (e) => Number(e.id) === Number(resItem.exam_id)
     );
-    const examQuestions = params.questions.filter(
+
+    // 1. Resolve question set for this historical result (supporting direct exam_id, answer-key ID match, or student class match)
+    let examQuestions = params.questions.filter(
       (q) => Number(q.exam_id) === Number(resItem.exam_id)
     );
+
+    const ansIdSet = new Set(answeredKeys.map((k) => String(k)));
+    const directOverlapCount = examQuestions.filter((q) =>
+      ansIdSet.has(String(q.id))
+    ).length;
+
+    if (examQuestions.length === 0 || directOverlapCount === 0) {
+      const matchedQuestionByKey = params.questions.find((q) =>
+        ansIdSet.has(String(q.id))
+      );
+      if (matchedQuestionByKey) {
+        const matchedExamId = Number(matchedQuestionByKey.exam_id);
+        const byMatchedExam = params.questions.filter(
+          (q) => Number(q.exam_id) === matchedExamId
+        );
+        if (byMatchedExam.length > 0) {
+          examQuestions = byMatchedExam;
+          if (!exam) {
+            exam = params.exams.find((e) => Number(e.id) === matchedExamId);
+          }
+        }
+      } else if (examQuestions.length === 0 && student) {
+        const classExam = params.exams.find((ex) =>
+          isExamMatchedForStudentClass(ex, student.kelas, {
+            requireActive: false,
+          })
+        );
+        if (classExam) {
+          const classQs = params.questions.filter(
+            (q) => Number(q.exam_id) === Number(classExam.id)
+          );
+          if (classQs.length > 0) {
+            examQuestions = classQs;
+            if (!exam) exam = classExam;
+          }
+        }
+      }
+    }
 
     if (examQuestions.length === 0) return resItem;
 
@@ -2933,10 +3271,21 @@ export function recalculateHistoricalResults<
     else if (nextSkor >= 55) nextKategori = 'Cukup (C)';
 
     const scoreChanged = nextSkor !== Number(resItem.skor_angka);
-    const aiChanged =
-      resItem.analisis_ai &&
-      (resItem.analisis_ai.skor_akhir !== nextSkor ||
-        resItem.analisis_ai.kategori_nilai !== nextKategori);
+
+    // Check if analysis needs to be generated or upgraded to the Humane Evaluation standard
+    const hasPartialHumaneItems = newSummary.breakdown.some(
+      (b) => b.status === 'Benar Sebagian'
+    );
+    const existingAi = resItem.analisis_ai;
+    const isExistingAiMissing = !existingAi && nextSkor > 0;
+    const isExistingAiOutdated =
+      Boolean(existingAi) &&
+      (existingAi.skor_akhir !== nextSkor ||
+        existingAi.kategori_nilai !== nextKategori ||
+        (hasPartialHumaneItems &&
+          typeof existingAi.evaluasi_hots === 'string' &&
+          !existingAi.evaluasi_hots.includes('Standar Penilaian Humanis')));
+
     const rawKeys = Object.keys(rawAns);
     const canonKeys = Object.keys(canonicalAnswers);
     const answersChanged =
@@ -2949,21 +3298,40 @@ export function recalculateHistoricalResults<
         return a !== b;
       });
 
-    if (!scoreChanged && !aiChanged && !answersChanged) {
+    if (!scoreChanged && !isExistingAiMissing && !isExistingAiOutdated && !answersChanged) {
       return resItem;
+    }
+
+    let nextAnalisisAi = existingAi || null;
+    if (nextSkor > 0 && (isExistingAiMissing || isExistingAiOutdated || scoreChanged)) {
+      if (
+        existingAi &&
+        (!existingAi.analisis_kompetensi ||
+          !Array.isArray(existingAi.analisis_kompetensi.kekuatan))
+      ) {
+        nextAnalisisAi = {
+          ...existingAi,
+          skor_akhir: nextSkor,
+          kategori_nilai: nextKategori,
+        };
+      } else {
+        nextAnalisisAi = buildHumaneAnalysisForResult({
+          studentName: student?.nama || existingAi?.nama_siswa || `Siswa #${resItem.student_id}`,
+          questions: examQuestions,
+          canonicalAnswers,
+          scoreSummary: newSummary,
+          finalScore: nextSkor,
+          finalKategori: nextKategori,
+          existingAi,
+        });
+      }
     }
 
     const updatedItem: TResult = {
       ...resItem,
       skor_angka: nextSkor,
       jawaban_siswa: canonicalAnswers,
-      analisis_ai: resItem.analisis_ai
-        ? {
-            ...resItem.analisis_ai,
-            skor_akhir: nextSkor,
-            kategori_nilai: nextKategori,
-          }
-        : null,
+      analisis_ai: nextAnalisisAi,
     };
 
     changedResults.push(updatedItem);

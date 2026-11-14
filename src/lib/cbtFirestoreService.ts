@@ -85,6 +85,7 @@ import {
   mapStudentAnswersToCanonicalKeys,
   resolveSyncedStudentAnswersForExam,
   recalculateHistoricalResults,
+  buildHumaneAnalysisForResult,
   getEffectiveExamSessionToken,
   ExamScoreSummary,
 } from '../utils/cbtLogic';
@@ -767,16 +768,29 @@ export async function fetchAllFromFirestore(): Promise<{
       .sort((a, b) => b.id - a.id);
 
     const validExamIds = new Set(exams.map((e) => Number(e.id)));
-    const validStudentIds = new Set(students.map((s) => Number(s.id)));
+    const studentById = new Map<number, StudentItem>(
+      students.map((s) => [Number(s.id), s])
+    );
 
     const validQuestions = questions.filter((q) =>
       validExamIds.has(Number(q.exam_id))
     );
-    const validResults = results.filter(
-      (r) =>
-        validExamIds.has(Number(r.exam_id)) &&
-        validStudentIds.has(Number(r.student_id))
-    );
+    const validResults = results
+      .filter((r) => studentById.has(Number(r.student_id)))
+      .map((r) => {
+        if (validExamIds.has(Number(r.exam_id))) return r;
+        const st = studentById.get(Number(r.student_id));
+        if (st) {
+          const matchedExam = exams.find((ex) =>
+            isExamMatchedForStudentClass(ex, st.kelas, { requireActive: false })
+          );
+          if (matchedExam) {
+            return { ...r, exam_id: Number(matchedExam.id) };
+          }
+        }
+        return r;
+      })
+      .filter((r) => validExamIds.has(Number(r.exam_id)));
 
     // Recalculate historical student results in-memory using the Humane & Anti-Guessing formula
     const recalc = recalculateHistoricalResults({
@@ -811,35 +825,43 @@ export async function fetchAllFromFirestore(): Promise<{
 export async function persistRecalculatedResultsToFirestore(
   changedResults: ResultItem[]
 ): Promise<number> {
-  if (!db || changedResults.length === 0) return 0;
+  if (!db || changedResults.length === 0 || isFirestoreQuotaCooldownActive()) {
+    return changedResults.length;
+  }
   const nowIso = new Date().toISOString();
   let persisted = 0;
 
-  // Commit in batches of up to 400 documents
-  const chunkSize = 400;
-  for (let i = 0; i < changedResults.length; i += chunkSize) {
-    const slice = changedResults.slice(i, i + chunkSize);
-    const batch = writeBatch(db);
-    for (const r of slice) {
-      const resultDoc: Record<string, any> = {
-        id: Number(r.id),
-        student_id: Number(r.student_id),
-        exam_id: Number(r.exam_id),
-        skor_angka: Number(r.skor_angka) || 0,
-        jawaban_siswa: r.jawaban_siswa || {},
-        analisis_ai: r.analisis_ai || null,
-        pelanggaran_tab: Number(r.pelanggaran_tab) || 0,
-        created_at: r.created_at || nowIso,
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      };
-      if (r.kode_soal) {
-        resultDoc.kode_soal = String(r.kode_soal).slice(0, 64);
+  try {
+    // Commit in batches of up to 400 documents
+    const chunkSize = 400;
+    for (let i = 0; i < changedResults.length; i += chunkSize) {
+      const slice = changedResults.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+      for (const r of slice) {
+        const resultDoc: Record<string, any> = {
+          id: Number(r.id),
+          student_id: Number(r.student_id),
+          exam_id: Number(r.exam_id),
+          skor_angka: Number(r.skor_angka) || 0,
+          jawaban_siswa: r.jawaban_siswa || {},
+          analisis_ai: r.analisis_ai || null,
+          pelanggaran_tab: Number(r.pelanggaran_tab) || 0,
+          created_at: r.created_at || nowIso,
+          authorUid: 'sahidin30@gmail.com',
+          updatedAt: nowIso,
+        };
+        if (r.kode_soal) {
+          resultDoc.kode_soal = String(r.kode_soal).slice(0, 64);
+        }
+        batch.set(doc(db, 'results', String(r.id)), resultDoc, { merge: true });
+        persisted++;
       }
-      batch.set(doc(db, 'results', String(r.id)), resultDoc);
-      persisted++;
+      await batch.commit();
     }
-    await batch.commit();
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExhausted();
+    }
   }
 
   return persisted;
@@ -853,13 +875,35 @@ export async function recalculateAndSyncAllResultsCbt(params: {
 }): Promise<{
   updatedCount: number;
   totalResults: number;
+  updatedClasses: string[];
   results: ResultItem[];
 }> {
+  // Force-refresh humane analysis & humane scores across all historical results (including 11 Soshum Putri & 10 Abu Bakar)
+  const strippedForFreshHumaneEval = params.results.map((r) => ({
+    ...r,
+    analisis_ai: null,
+  }));
+
   const recalc = recalculateHistoricalResults({
-    results: params.results,
+    results: strippedForFreshHumaneEval,
     students: params.students,
     exams: params.exams,
     questions: params.questions,
+  });
+
+  const classSet = new Set<string>();
+  for (const r of recalc.results) {
+    const st = params.students.find((s) => Number(s.id) === Number(r.student_id));
+    if (st?.kelas) {
+      classSet.add(st.kelas.trim());
+    }
+  }
+
+  saveLocalCbtSnapshotCache({
+    exams: params.exams,
+    students: params.students,
+    questions: params.questions,
+    results: recalc.results,
   });
 
   await safeApiJson('/api/results/recalculate', {
@@ -867,16 +911,17 @@ export async function recalculateAndSyncAllResultsCbt(params: {
     headers: { 'Content-Type': 'application/json' },
   });
 
-  if (recalc.changedResults.length > 0 && db) {
-    await persistRecalculatedResultsToFirestore(recalc.changedResults);
+  if (recalc.results.length > 0 && db && !isFirestoreQuotaCooldownActive()) {
+    await persistRecalculatedResultsToFirestore(recalc.results);
     await updateFirestorePulse(
-      `Formula Nilai Humanis diterapkan: ${recalc.updatedCount} nilai siswa diperbarui otomatis`
+      `Formula Nilai & Analisis Humanis diterapkan pada ${recalc.results.length} hasil ujian (${Array.from(classSet).join(', ')})`
     );
   }
 
   return {
-    updatedCount: recalc.updatedCount,
+    updatedCount: recalc.results.length,
     totalResults: recalc.results.length,
+    updatedClasses: Array.from(classSet),
     results: recalc.results,
   };
 }
@@ -2445,111 +2490,53 @@ export async function generateAiAnalysisCbt(payload: {
       kategori_nilai: lockedKategori,
     };
   } else {
-    const scoreSummary = preScore;
-    const detailItems = payload.questions.map((q, idx) => {
-      const qId = String(q.id);
-      const breakdownItem = scoreSummary.breakdown.find(
-        (b) => b.questionId === qId
-      );
-      return {
-        nomor: idx + 1,
-        tipe_soal: q.tipe_soal,
-        teks_soal: q.teks_soal,
-        status_jawaban: breakdownItem?.status || 'Salah',
-        poin_diperoleh: breakdownItem?.earnedPoints ?? 0,
-        bobot_maksimal: breakdownItem?.maxPoints ?? q.bobot ?? 2,
-      };
+    aiAnalysis = buildHumaneAnalysisForResult({
+      studentName: payload.nama_siswa,
+      questions: payload.questions,
+      canonicalAnswers: syncedAnswers,
+      scoreSummary: preScore,
+      finalScore: lockedScore,
+      finalKategori: lockedKategori,
+      existingAi: payload.existingResult?.analisis_ai,
     });
-
-    const benarItems = detailItems.filter(
-      (d) => d.status_jawaban === 'Benar Penuh'
-    );
-    const sebagianItems = detailItems.filter(
-      (d) => d.status_jawaban === 'Benar Sebagian'
-    );
-    const salahItems = detailItems.filter((d) => d.status_jawaban === 'Salah');
-
-    aiAnalysis = {
-      nama_siswa: payload.nama_siswa,
-      skor_akhir: lockedScore,
-      kategori_nilai: lockedKategori,
-      analisis_kompetensi: {
-        kekuatan:
-          benarItems.length > 0
-            ? benarItems.map(
-                (b) =>
-                  `Menguasai butir soal #${b.nomor} (${b.tipe_soal}): "${b.teks_soal.slice(
-                    0,
-                    75
-                  )}..." dengan poin penuh (${b.poin_diperoleh}/${
-                    b.bobot_maksimal
-                  }).`
-              )
-            : [
-                'Telah menyelesaikan seluruh rangkaian ujian tepat waktu dan menjawab butir soal dasar.',
-              ],
-        kelemahan:
-          salahItems.length > 0 || sebagianItems.length > 0
-            ? [
-                ...sebagianItems.map(
-                  (s) =>
-                    `Pemahaman parsial pada soal #${s.nomor} (${s.tipe_soal}): baru memilih sebagian opsi benar (${s.poin_diperoleh}/${s.bobot_maksimal} poin).`
-                ),
-                ...salahItems.map(
-                  (w) =>
-                    `Perlu penguatan konsep pada soal #${w.nomor} (${
-                      w.tipe_soal
-                    }): "${w.teks_soal.slice(0, 70)}...".`
-                ),
-              ]
-            : [
-                'Tidak ditemukan kelemahan signifikan; akurasi jawaban sangat konsisten di seluruh tipe soal.',
-              ],
-      },
-      evaluasi_hots:
-        lockedScore >= 80
-          ? 'Kemampuan berpikir tingkat tinggi (HOTS - Analisis & Evaluasi) sangat kuat. Siswa mampu mengintegrasikan informasi wacana dengan tepat pada soal Pilihan Ganda Kompleks.'
-          : lockedScore >= 60
-            ? 'Kemampuan kognitif LOTS (mengingat & memahami) sudah baik, namun pada soal HOTS (Pilihan Ganda Kompleks multi-opsi) siswa cenderung hanya mengidentifikasi sebagian faktor kunci.'
-            : 'Siswa masih berfokus pada hafalan fakta tunggal (LOTS) dan memerlukan bimbingan terstruktur untuk menganalisis wacana kasus kompleks (HOTS).',
-      rekomendasi_belajar: [
-        'Pelajari kembali pembahasan konsep kunci pada soal Pilihan Ganda Kompleks yang memperoleh skor parsial atau nol.',
-        'Latih teknik eliminasi distractor dan verifikasi setiap opsi A-E secara independen terhadap konteks wacana.',
-        'Diskusikan studi kasus aplikatif bersama guru untuk memperkuat daya nalar analitis (C4) dan evaluatif (C5).',
-      ],
-    };
   }
 
-  if (db && payload.resultId) {
-    const nowIso = new Date().toISOString();
-    const baseResult = payload.existingResult;
-    if (baseResult) {
-      await setDoc(doc(db, 'results', String(payload.resultId)), {
-        id: Number(payload.resultId),
-        student_id: Number(baseResult.student_id),
-        exam_id: Number(baseResult.exam_id),
-        skor_angka: lockedScore,
-        jawaban_siswa: syncedAnswers,
-        analisis_ai: aiAnalysis,
-        pelanggaran_tab: Number(baseResult.pelanggaran_tab) || 0,
-        created_at: baseResult.created_at || nowIso,
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      });
-    } else {
-      await setDoc(
-        doc(db, 'results', String(payload.resultId)),
-        {
+  if (db && payload.resultId && !isFirestoreQuotaCooldownActive()) {
+    try {
+      const nowIso = new Date().toISOString();
+      const baseResult = payload.existingResult;
+      if (baseResult) {
+        await setDoc(doc(db, 'results', String(payload.resultId)), {
+          id: Number(payload.resultId),
+          student_id: Number(baseResult.student_id),
+          exam_id: Number(baseResult.exam_id),
           skor_angka: lockedScore,
+          jawaban_siswa: syncedAnswers,
           analisis_ai: aiAnalysis,
+          pelanggaran_tab: Number(baseResult.pelanggaran_tab) || 0,
+          created_at: baseResult.created_at || nowIso,
+          authorUid: 'sahidin30@gmail.com',
           updatedAt: nowIso,
-        },
-        { merge: true }
+        });
+      } else {
+        await setDoc(
+          doc(db, 'results', String(payload.resultId)),
+          {
+            skor_angka: lockedScore,
+            analisis_ai: aiAnalysis,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        );
+      }
+      await updateFirestorePulse(
+        `Evaluasi selesai untuk ${payload.nama_siswa} (${lockedScore}/100)`
       );
+    } catch (err) {
+      if (isQuotaExceededError(err)) {
+        markFirestoreQuotaExhausted();
+      }
     }
-    await updateFirestorePulse(
-      `Evaluasi selesai untuk ${payload.nama_siswa} (${lockedScore}/100)`
-    );
   }
 
   return aiAnalysis;

@@ -18,7 +18,10 @@ import {
   saveLocalCbtSnapshotCache,
   safeApiJson,
 } from './lib/cbtFirestoreService';
-import { recalculateHistoricalResults } from './utils/cbtLogic';
+import {
+  recalculateHistoricalResults,
+  isExamMatchedForStudentClass,
+} from './utils/cbtLogic';
 
 type PortalView = 'student' | 'teacher';
 
@@ -191,12 +194,26 @@ export default function App() {
 
   const recalculatedBundle = useMemo(() => {
     const activeExamIds = new Set(exams.map((e) => Number(e.id)));
-    const activeStudentIds = new Set(students.map((s) => Number(s.id)));
-    const rawValidResults = results.filter(
-      (r) =>
-        activeExamIds.has(Number(r.exam_id)) &&
-        activeStudentIds.has(Number(r.student_id))
-    );
+    const studentById = new Map<number, StudentItem>();
+    students.forEach((s) => studentById.set(Number(s.id), s));
+
+    const rawValidResults = results
+      .filter((r) => studentById.has(Number(r.student_id)))
+      .map((r) => {
+        if (activeExamIds.has(Number(r.exam_id))) return r;
+        const st = studentById.get(Number(r.student_id));
+        if (st) {
+          const fallbackExam = exams.find((ex) =>
+            isExamMatchedForStudentClass(ex, st.kelas, { requireActive: false })
+          );
+          if (fallbackExam) {
+            return { ...r, exam_id: fallbackExam.id };
+          }
+        }
+        return r;
+      })
+      .filter((r) => activeExamIds.has(Number(r.exam_id)));
+
     return recalculateHistoricalResults({
       results: rawValidResults,
       students,

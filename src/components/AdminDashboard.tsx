@@ -240,10 +240,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         exams,
       });
       await onRefreshData();
+      const classSummary =
+        outcome.updatedClasses && outcome.updatedClasses.length > 0
+          ? ` (Kelas: ${outcome.updatedClasses.join(', ')})`
+          : '';
       setRecalcFeedback(
         outcome.updatedCount > 0
-          ? `Berhasil memperbarui & menyinkronkan ${outcome.updatedCount} dari ${outcome.totalResults} nilai peserta ujian sebelumnya dengan Formula Humanis PG Kompleks.`
-          : `Seluruh ${outcome.totalResults} nilai peserta ujian (termasuk ujian hari sebelumnya) sudah tersinkronisasi optimal dengan Formula Humanis PG Kompleks.`
+          ? `Berhasil memperbarui & menyinkronkan ${outcome.updatedCount} dari ${outcome.totalResults} nilai serta Analisis Humanis peserta ujian sebelumnya${classSummary} dengan Standar Penilaian Humanis PG Kompleks.`
+          : `Seluruh ${outcome.totalResults} nilai & Analisis Kognitif Humanis peserta ujian${classSummary} (termasuk Kelas 11 Soshum Putri & 10 Abu Bakar) sudah tersinkronisasi optimal.`
       );
     } catch (err: any) {
       setRecalcFeedback(err?.message || 'Gagal menghitung ulang nilai siswa.');

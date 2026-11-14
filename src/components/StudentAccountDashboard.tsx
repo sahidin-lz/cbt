@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Home,
   Calendar,
@@ -188,15 +188,38 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     });
   }, [student, allStudents, exams, questions]);
 
-  // All exams distributed to this student's class/grade (filtered so if multiple packages exist for a subject, the student receives their assigned Ganjil/Genap package)
+  // All submitted results belonging to this student
+  const studentResults = useMemo(() => {
+    return results
+      .filter((r) => Number(r.student_id) === Number(student.id))
+      .sort((a, b) => Number(b.id) - Number(a.id));
+  }, [results, student.id]);
+
+  // All exams distributed to this student's class/grade (filtered so if multiple packages exist for a subject, the student receives their assigned Ganjil/Genap package, while always preserving any exam package the student already completed)
   const classMatchedExams = useMemo(() => {
-    if (allSubjectAllocations.length > 0) {
-      return allSubjectAllocations.map((a) => a.assignedExam);
-    }
-    return exams.filter((ex) =>
-      isExamMatchedForStudentClass(ex, student.kelas, { requireActive: false })
-    );
-  }, [allSubjectAllocations, exams, student.kelas]);
+    const baseList =
+      allSubjectAllocations.length > 0
+        ? allSubjectAllocations.map((a) => a.assignedExam)
+        : exams.filter((ex) =>
+            isExamMatchedForStudentClass(ex, student.kelas, {
+              requireActive: false,
+            })
+          );
+
+    const byId = new Map<number, ExamItem>();
+    baseList.forEach((ex) => byId.set(Number(ex.id), ex));
+
+    studentResults.forEach((r) => {
+      const completedExam = exams.find(
+        (e) => Number(e.id) === Number(r.exam_id)
+      );
+      if (completedExam && !byId.has(Number(completedExam.id))) {
+        byId.set(Number(completedExam.id), completedExam);
+      }
+    });
+
+    return Array.from(byId.values());
+  }, [allSubjectAllocations, exams, student.kelas, studentResults]);
 
   // Active exams available right now for this student's class (per subject)
   const activeClassExams = useMemo(() => {
@@ -231,13 +254,6 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     );
   }, [classMatchedExams, studentMapelFilter]);
 
-  // All submitted results belonging to this student
-  const studentResults = useMemo(() => {
-    return results
-      .filter((r) => Number(r.student_id) === Number(student.id))
-      .sort((a, b) => Number(b.id) - Number(a.id));
-  }, [results, student.id]);
-
   const filteredStudentResults = useMemo(() => {
     if (studentMapelFilter === 'SEMUA') return studentResults;
     return studentResults.filter((r) => {
@@ -267,6 +283,46 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     proportionalAlloc?.packageCode ||
     student.variasi_paket ||
     'PAKET-A';
+
+  // Helper to resolve question list for a result/exam even if question package IDs were updated
+  const resolveQuestionsForExamOrResult = useCallback(
+    (examId: number, resItem?: ResultItem | null): QuestionItem[] => {
+      const directQs = questions.filter(
+        (q) => Number(q.exam_id) === Number(examId)
+      );
+      if (directQs.length > 0) return directQs;
+
+      if (resItem) {
+        const resQs = questions.filter(
+          (q) => Number(q.exam_id) === Number(resItem.exam_id)
+        );
+        if (resQs.length > 0) return resQs;
+
+        const ansKeys = Object.keys(resItem.jawaban_siswa || {});
+        if (ansKeys.length > 0) {
+          const byId = new Map<string, QuestionItem>();
+          questions.forEach((q) => byId.set(String(q.id), q));
+          const matchedAnsQs = ansKeys
+            .map((k) => byId.get(String(k)))
+            .filter((q): q is QuestionItem => Boolean(q));
+          if (matchedAnsQs.length > 0) return matchedAnsQs;
+        }
+      }
+
+      const fallbackExam = exams.find((ex) =>
+        isExamMatchedForStudentClass(ex, student.kelas, {
+          requireActive: false,
+        })
+      );
+      if (fallbackExam) {
+        return questions.filter(
+          (q) => Number(q.exam_id) === Number(fallbackExam.id)
+        );
+      }
+      return [];
+    },
+    [questions, exams, student.kelas]
+  );
 
   // Comprehensive Student Progress & Competency Profile Analytics
   const studentCompetencyProfile = useMemo(() => {
@@ -307,8 +363,15 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     const subjectRows = classMatchedExams.map((ex) => {
       const mapel = getEffectiveMataPelajaran(ex);
       const resItem =
-        studentResults.find((r) => Number(r.exam_id) === Number(ex.id)) || null;
-      const examQs = questions.filter((q) => Number(q.exam_id) === Number(ex.id));
+        studentResults.find((r) => Number(r.exam_id) === Number(ex.id)) ||
+        studentResults.find((r) => {
+          const rEx = exams.find((e) => Number(e.id) === Number(r.exam_id));
+          return (
+            getEffectiveMataPelajaran(rEx).toUpperCase() === mapel.toUpperCase()
+          );
+        }) ||
+        null;
+      const examQs = resolveQuestionsForExamOrResult(ex.id, resItem);
       const prog = hasSavedProgressForExam(ex.id);
 
       let lotsScore = 0;
@@ -513,7 +576,8 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     studentResults,
     completedExamIds,
     hasSavedProgressForExam,
-    questions,
+    resolveQuestionsForExamOrResult,
+    exams,
     student,
     localAiOverrides,
     assignedPackageBadge,
@@ -625,10 +689,11 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
   };
 
   const handleRequestAiForResult = async (resItem: ResultItem) => {
-    const examObj = exams.find((e) => Number(e.id) === Number(resItem.exam_id));
-    const examQs = questions.filter(
-      (q) => Number(q.exam_id) === Number(resItem.exam_id)
-    );
+    const examObj =
+      exams.find((e) => Number(e.id) === Number(resItem.exam_id)) ||
+      classMatchedExams[0] ||
+      null;
+    const examQs = resolveQuestionsForExamOrResult(resItem.exam_id, resItem);
     if (examQs.length === 0) return;
 
     setGeneratingAiResultId(resItem.id);
@@ -640,7 +705,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
         jawaban_siswa: resItem.jawaban_siswa || {},
         existingResult: resItem,
         student,
-        exam: examObj || null,
+        exam: examObj,
       });
       setLocalAiOverrides((prev) => ({ ...prev, [resItem.id]: aiData }));
       onRefreshData();
@@ -653,10 +718,10 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
 
   const handleDownloadResultPdf = (resItem: ResultItem) => {
     const examObj =
-      exams.find((e) => Number(e.id) === Number(resItem.exam_id)) || null;
-    const examQs = questions.filter(
-      (q) => Number(q.exam_id) === Number(resItem.exam_id)
-    );
+      exams.find((e) => Number(e.id) === Number(resItem.exam_id)) ||
+      classMatchedExams[0] ||
+      null;
+    const examQs = resolveQuestionsForExamOrResult(resItem.exam_id, resItem);
     const syncedAns = resolveSyncedStudentAnswersForExam({
       questions: examQs,
       jawabanSiswa: resItem.jawaban_siswa || {},
@@ -2274,12 +2339,16 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
               </div>
             ) : (
               filteredStudentResults.map((resItem) => {
-                const examObj = exams.find(
-                  (e) => Number(e.id) === Number(resItem.exam_id)
-                );
+                const examObj =
+                  exams.find(
+                    (e) => Number(e.id) === Number(resItem.exam_id)
+                  ) ||
+                  classMatchedExams[0] ||
+                  undefined;
                 const isScoreVisible = examObj?.tampilkan_nilai !== false;
-                const examQs = questions.filter(
-                  (q) => Number(q.exam_id) === Number(resItem.exam_id)
+                const examQs = resolveQuestionsForExamOrResult(
+                  resItem.exam_id,
+                  resItem
                 );
                 const aiData =
                   localAiOverrides[resItem.id] || resItem.analisis_ai || null;
