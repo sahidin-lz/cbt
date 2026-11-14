@@ -250,8 +250,8 @@ export default function App() {
 
       {/* Top Bar Contract: Zone 1 Brand Wordmark — Zone 2 Separated Student/Teacher Portal Links — Zone 3 Primary Portal Switch */}
       <header className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white border-b border-indigo-800/70 shadow-sm sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4">
-          {/* Zone 1: Brand Identity (Single-line clean institutional lockup) */}
+        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          {/* Zone 1: Institutional Identity */}
           <a
             href="#top"
             onClick={(e) => {
@@ -266,66 +266,77 @@ export default function App() {
               isStudentInExam ? 'cursor-default pointer-events-none' : ''
             }`}
           >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 via-indigo-500 to-emerald-400 text-white flex items-center justify-center font-extrabold text-xs font-mono tracking-wider shadow-xs border border-white/20">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 via-indigo-500 to-emerald-400 text-white flex items-center justify-center font-extrabold text-xs font-mono tracking-wider shadow-xs border border-white/25">
               CBT
             </div>
-            <div className="flex items-center gap-2.5">
-              <span className="text-base sm:text-lg font-extrabold tracking-tight text-white">
-                CBT Sosiologi
-              </span>
-              <span className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/30 text-[10px] font-mono font-bold text-emerald-300 uppercase tracking-wider">
-                SMA / MA
-              </span>
-              <span className="hidden lg:inline-block text-indigo-400/60">|</span>
-              <span className="hidden lg:inline-block text-xs font-medium text-blue-200">
-                Sistem Ujian &amp; Asesmen Berbasis Komputer
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-sm sm:text-base font-extrabold tracking-tight text-white leading-none">
+                  Pusat Kendali Asesmen CBT
+                </span>
+                <span className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/30 text-[10px] font-mono font-bold text-emerald-300 uppercase tracking-wider">
+                  SMA / MA
+                </span>
+              </div>
+              <span className="hidden md:inline-block text-[11px] font-medium text-blue-200/85 mt-0.5">
+                Sistem Ujian Multi-Mapel, Progres Kemampuan Siswa &amp; Analisis Butir
               </span>
             </div>
           </a>
 
           {/* Zone 2: Primary Portal Navigation (Clean Segmented Switcher or Exam Lock Status) */}
           {isStudentInExam ? (
-            <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/40 text-xs font-semibold text-amber-200">
+            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500/20 border border-amber-400/40 text-xs font-semibold text-amber-200">
               <Lock className="w-3.5 h-3.5 text-amber-300 shrink-0" />
               <span className="whitespace-nowrap">Sesi Ujian Berlangsung — Navigasi Terkunci</span>
             </div>
           ) : (
             <nav
-              aria-label="Navigasi Portal"
-              className="flex items-center p-1 bg-white/10 border border-white/15 rounded-xl backdrop-blur-xs"
+              aria-label="Navigasi Portal Utama"
+              className="flex items-center p-1 bg-slate-900/70 border border-white/15 rounded-xl backdrop-blur-xs gap-1"
             >
               <button
                 type="button"
                 onClick={() => setPortalView('student')}
-                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
                   portalView === 'student'
-                    ? 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-xs'
-                    : 'text-blue-100 hover:text-white hover:bg-white/5'
+                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-xs ring-1 ring-cyan-300/40'
+                    : 'text-blue-100/90 hover:text-white hover:bg-white/10'
                 }`}
               >
-                Ruang Ujian Siswa
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    portalView === 'student' ? 'bg-amber-300' : 'bg-blue-400/50'
+                  }`}
+                />
+                <span>Portal Siswa &amp; Laporan</span>
               </button>
               <button
                 type="button"
                 onClick={() => setPortalView('teacher')}
-                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
                   portalView === 'teacher'
-                    ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-xs'
-                    : 'text-blue-100 hover:text-white hover:bg-white/5'
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xs ring-1 ring-emerald-300/40'
+                    : 'text-blue-100/90 hover:text-white hover:bg-white/10'
                 }`}
               >
-                Portal Guru &amp; Pengawas
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    portalView === 'teacher' ? 'bg-amber-300' : 'bg-emerald-400/50'
+                  }`}
+                />
+                <span>Konsol Guru &amp; Pengawas</span>
               </button>
             </nav>
           )}
 
           {/* Zone 3: Contextual Action */}
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="hidden sm:flex items-center gap-3 shrink-0">
             {isStudentInExam ? (
               <button
                 type="button"
                 disabled
-                className="px-3.5 py-1.5 text-xs font-semibold text-slate-300 bg-white/10 border border-white/15 rounded-lg cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                className="px-3.5 py-2 text-xs font-semibold text-slate-300 bg-white/10 border border-white/15 rounded-xl cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 title="Dilarang beralih ke Portal Guru selama sesi ujian aktif berlangsung"
               >
                 <Lock className="w-3.5 h-3.5 text-amber-300" />
@@ -337,11 +348,11 @@ export default function App() {
                 onClick={() =>
                   setPortalView(portalView === 'student' ? 'teacher' : 'student')
                 }
-                className="px-3.5 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                className="px-3.5 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
               >
                 {portalView === 'student'
-                  ? 'Masuk Halaman Guru'
-                  : 'Layar Ujian Siswa'}
+                  ? 'Buka Konsol Guru →'
+                  : '← Buka Portal Siswa'}
               </button>
             )}
           </div>

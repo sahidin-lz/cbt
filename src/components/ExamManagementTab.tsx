@@ -429,42 +429,51 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Banner & Control Bar */}
-      <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 border border-indigo-800/80 rounded-2xl p-5 shadow-md text-white flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div className="space-y-1">
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-400/15 border border-amber-400/30 text-[11px] font-bold uppercase tracking-wider text-amber-300">
-            <Layers className="w-3.5 h-3.5 text-amber-400" />
-            <span>Pusat Kendali Asesmen CBT</span>
+      <div className="bg-white border border-indigo-200/90 rounded-2xl overflow-hidden shadow-xs">
+        <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+          <div className="space-y-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[11px] font-extrabold uppercase tracking-wider shadow-2xs">
+                <Layers className="w-3.5 h-3.5" />
+                <span>Pusat Kendali Asesmen CBT</span>
+              </div>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/30 text-[11px] font-bold text-emerald-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping" />
+                <span>{kpiStats.sedangUjian} Siswa Aktif Ujian</span>
+              </span>
+            </div>
+            <h2 className="text-base sm:text-lg font-extrabold text-white tracking-tight leading-snug">
+              Manajemen Ujian, Live Radar Siswa &amp; Analisis Butir Soal Kelas
+            </h2>
+            <p className="text-xs text-blue-200/90 leading-relaxed max-w-3xl">
+              Pantau aktivitas web siswa yang sedang ujian secara real-time, evaluasi nilai akhir, serta analisis ketuntasan setiap butir soal yang dijawab benar vs salah per kelas.
+            </p>
           </div>
-          <h2 className="text-lg sm:text-xl font-extrabold text-white tracking-tight">
-            Manajemen Ujian & Analisis Butir Soal Kelas
-          </h2>
-          <p className="text-xs text-blue-200/90 leading-relaxed max-w-2xl">
-            Pantau siswa yang sedang ujian secara real-time, evaluasi nilai akhir, serta analisis ketuntasan setiap soal yang dijawab benar vs salah per kelas.
-          </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        {/* Dedicated Action & View Mode Toolbar */}
+        <div className="px-5 py-3 bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-slate-50 border-t border-indigo-100 flex flex-wrap items-center justify-between gap-3">
           {/* View mode toggle */}
-          <div className="flex items-center p-1 bg-slate-950/60 rounded-xl border border-white/15 backdrop-blur-xs">
+          <div className="flex items-center p-1 bg-white rounded-xl border border-indigo-200 shadow-2xs">
             <button
               type="button"
               onClick={() => setViewMode('cards')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                 viewMode === 'cards'
-                  ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-sm'
-                  : 'text-blue-200 hover:text-white hover:bg-white/5'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50/70'
               }`}
             >
               <LayoutList className="w-3.5 h-3.5" />
-              <span>Daftar & Analisis Soal</span>
+              <span>Daftar &amp; Analisis Soal</span>
             </button>
             <button
               type="button"
               onClick={() => setViewMode('matrix')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
                 viewMode === 'matrix'
-                  ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-sm'
-                  : 'text-blue-200 hover:text-white hover:bg-white/5'
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50/70'
               }`}
             >
               <Table className="w-3.5 h-3.5" />
@@ -472,42 +481,48 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             </button>
           </div>
 
-          <button
-            type="button"
-            disabled={classStudents.length === 0}
-            onClick={() =>
-              downloadStudentTokenCardsPdf(classStudents, {
-                kelasLabel:
-                  selectedClass === 'ALL'
-                    ? 'Semua Kelas'
-                    : `Kelas ${selectedClass}`,
-                exams: matchedExams.length > 0 ? matchedExams : exams,
-                questions,
-                results,
-                allStudents: students,
-                preferredExamId: activeExam?.id,
-                includeSummaryPage: true,
-              })
-            }
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-xl transition-all cursor-pointer disabled:opacity-50 shadow-sm"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>
-              {selectedClass === 'ALL'
-                ? 'Kartu Token & Nilai (.PDF)'
-                : `Kartu & Nilai Kelas ${selectedClass} (.PDF)`}
-            </span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={classStudents.length === 0}
+              onClick={() =>
+                downloadStudentTokenCardsPdf(classStudents, {
+                  kelasLabel:
+                    selectedClass === 'ALL'
+                      ? 'Semua Kelas'
+                      : `Kelas ${selectedClass}`,
+                  exams: matchedExams.length > 0 ? matchedExams : exams,
+                  questions,
+                  results,
+                  allStudents: students,
+                  preferredExamId: activeExam?.id,
+                  includeSummaryPage: true,
+                })
+              }
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-xl transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>
+                {selectedClass === 'ALL'
+                  ? 'Kartu Token & Nilai (.PDF)'
+                  : `Kartu & Nilai Kelas ${selectedClass} (.PDF)`}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={handleManualRefresh}
-            disabled={isRefreshing}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-white bg-white/10 hover:bg-white/20 border border-white/20 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-amber-300' : 'text-sky-300'}`} />
-            <span>{isRefreshing ? 'Memperbarui...' : 'Segarkan Data'}</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-indigo-900 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-xl transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  isRefreshing ? 'animate-spin text-indigo-600' : 'text-indigo-600'
+                }`}
+              />
+              <span>{isRefreshing ? 'Memperbarui...' : 'Segarkan Data'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1260,7 +1275,17 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                           </td>
                           <td className="py-3 px-4 text-center">
                             {res ? (
-                              <span className="font-mono text-base font-black text-slate-900">
+                              <span
+                                className={`inline-flex items-center justify-center px-2.5 py-1 rounded-lg font-mono text-sm font-black border ${
+                                  res.skor_angka >= 85
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : res.skor_angka >= 70
+                                    ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                    : res.skor_angka >= 55
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                    : 'bg-rose-50 text-rose-800 border-rose-200'
+                                }`}
+                              >
                                 {res.skor_angka}
                               </span>
                             ) : (
@@ -1268,12 +1293,38 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                             )}
                           </td>
                           <td className="py-3 px-4 text-center">
-                            {res?.analisis_ai?.kategori_nilai ? (
-                              <span className="font-semibold text-slate-700">
-                                {res.analisis_ai.kategori_nilai}
-                              </span>
-                            ) : res ? (
-                              <span className="text-slate-500">Tuntas</span>
+                            {res ? (
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                    res.skor_angka >= 85
+                                      ? 'text-emerald-800 bg-emerald-100/70'
+                                      : res.skor_angka >= 70
+                                      ? 'text-blue-800 bg-blue-100/70'
+                                      : res.skor_angka >= 55
+                                      ? 'text-amber-800 bg-amber-100/70'
+                                      : 'text-rose-800 bg-rose-100/70'
+                                  }`}
+                                >
+                                  {res.analisis_ai?.kategori_nilai ||
+                                    (res.skor_angka >= 85
+                                      ? 'Sangat Baik (A)'
+                                      : res.skor_angka >= 70
+                                      ? 'Baik (B)'
+                                      : res.skor_angka >= 55
+                                      ? 'Cukup (C)'
+                                      : 'Perlu Bimbingan (D)')}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-semibold ${
+                                    res.skor_angka >= 70
+                                      ? 'text-emerald-700'
+                                      : 'text-rose-600'
+                                  }`}
+                                >
+                                  {res.skor_angka >= 70 ? 'Tuntas (≥70)' : 'Remedial (<70)'}
+                                </span>
+                              </div>
                             ) : (
                               <span className="text-slate-400">-</span>
                             )}
@@ -1916,9 +1967,16 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                     <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                      <span className="text-slate-500">Kategori Nilai:</span>
+                      <span className="text-slate-500">Kategori &amp; Predikat:</span>
                       <div className="font-bold text-slate-800 mt-0.5">
-                        {selectedStudentForModal.result.analisis_ai?.kategori_nilai || 'Selesai'}
+                        {selectedStudentForModal.result.analisis_ai?.kategori_nilai ||
+                          (selectedStudentForModal.result.skor_angka >= 85
+                            ? 'Sangat Baik (A)'
+                            : selectedStudentForModal.result.skor_angka >= 70
+                            ? 'Baik (B)'
+                            : selectedStudentForModal.result.skor_angka >= 55
+                            ? 'Cukup (C)'
+                            : 'Perlu Bimbingan (D)')}
                       </div>
                     </div>
                     <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">

@@ -398,22 +398,28 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
       {/* BAGIAN 1: MENU KHUSUS TOMBOL TOKEN SESI UJIAN (SEMUA MAPEL & PAKET)    */}
       {/* ===================================================================== */}
       <div className="bg-white border border-indigo-200 rounded-2xl overflow-hidden shadow-xs">
-        <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-5 text-white flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white">
           <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[11px] font-extrabold uppercase tracking-wider">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[11px] font-extrabold uppercase tracking-wider shadow-2xs">
               <KeyRound className="w-3.5 h-3.5" />
-              <span>Menu Khusus Token Sesi Ujian &amp; Multi-Mapel</span>
+              <span>Pusat Kendali Token Asesmen &amp; Multi-Mapel</span>
             </div>
-            <h2 className="text-lg sm:text-xl font-extrabold text-white">
+            <h2 className="text-base sm:text-lg font-extrabold text-white tracking-tight">
               Pusat Kendali Token Ujian (Diberikan Guru Setiap Akan Ujian)
             </h2>
-            <p className="text-xs text-blue-200 max-w-3xl leading-relaxed">
+            <p className="text-xs text-blue-200/90 max-w-3xl leading-relaxed">
               Di menu ini Bapak/Ibu Guru dapat melihat, menyalin, mengubah manual, atau mengacak ulang{' '}
-              <strong>Token Sesi Ujian</strong> untuk setiap Mata Pelajaran dan Paket Soal tanpa perlu mencari di menu lain.
+              <strong className="text-amber-300">Token Sesi Ujian</strong> untuk setiap Mata Pelajaran dan Paket Soal secara presisi.
             </p>
           </div>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        {/* Dedicated Action Toolbar for Token PDF & Batch Randomize */}
+        <div className="px-6 py-3 bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
+          <span className="text-xs font-bold text-indigo-950">
+            Aksi Cepat Kartu Token &amp; Acak Massal:
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               disabled={students.length === 0}
@@ -427,19 +433,19 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
                   includeSummaryPage: true,
                 })
               }
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
             >
-              <Download className="w-4 h-4" />
+              <Download className="w-3.5 h-3.5" />
               <span>Download PDF Token Login, Token Ujian &amp; Nilai (.PDF)</span>
             </button>
             <button
               type="button"
               onClick={handleBatchRandomizeAllActiveTokens}
               disabled={isBatchRandomizingTokens || exams.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-extrabold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors cursor-pointer disabled:opacity-50 shadow-2xs"
             >
               <RefreshCw
-                className={`w-4 h-4 ${isBatchRandomizingTokens ? 'animate-spin' : ''}`}
+                className={`w-3.5 h-3.5 ${isBatchRandomizingTokens ? 'animate-spin' : ''}`}
               />
               <span>
                 {isBatchRandomizingTokens

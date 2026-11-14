@@ -1535,7 +1535,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         'Selesai'
       );
 
-      // Save complete receipt to student's history
+      // Save complete receipt to student's history (with canonical Bank Soal option keys)
       const finalReceipt: LocalExamReceipt = {
         resultId: outcome.resultId,
         studentId: activeStudent.id,
@@ -1551,7 +1551,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         answeredCount: currentAnsweredCount,
         totalQuestions: examQuestions.length,
         pelanggaranTab: tabViolations,
-        jawabanSiswa: answers,
+        jawabanSiswa: outcome.canonicalAnswers || answers,
         logs: finalLogs,
         submittedAt: new Date().toISOString(),
       };
@@ -1750,33 +1750,52 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   // 1. RENDER COMPLETED EXAM SUMMARY SCREEN
   if (activeStudent && submittedSummary) {
+    const completedMapel = getEffectiveMataPelajaran(activeExam);
+    const completedPkg =
+      activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A';
     return (
       <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6">
-        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
           {/* Colorful Top Celebration Strip */}
           <div className="h-2 w-full bg-gradient-to-r from-emerald-500 via-blue-600 to-indigo-600" />
           <div className="p-6 sm:p-8">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Ujian Selesai Dikerjakan · Token {activeStudent.token_ujian}</span>
-                </p>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Ujian Selesai Dikerjakan</span>
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-md bg-indigo-100 text-indigo-900 font-mono">
+                    {completedPkg}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200">
+                    Mapel: {completedMapel}
+                  </span>
+                </div>
                 <h1 className="text-2xl font-extrabold text-slate-900 mt-1">
                   Hasil Ujian: {activeStudent.nama}
                 </h1>
-                <p className="text-sm text-slate-600 mt-0.5">
-                  Kelas {activeStudent.kelas} · {activeExam?.judul_ujian}
+                <p className="text-sm text-slate-600">
+                  Kelas {activeStudent.kelas} · {activeExam?.judul_ujian} · Token{' '}
+                  <strong className="font-mono text-indigo-700">
+                    {activeStudent.token_ujian}
+                  </strong>
                 </p>
               </div>
-              <div className="text-left sm:text-right bg-gradient-to-br from-blue-50 via-indigo-50/70 to-emerald-50/60 border border-blue-200/80 rounded-xl px-5 py-3.5">
-                <div className="text-xs font-semibold text-indigo-800">Nilai Akhir CBT Sosiologi</div>
+              <div className="text-left sm:text-right bg-gradient-to-br from-blue-50 via-indigo-50/70 to-emerald-50/60 border border-blue-200/80 rounded-2xl px-5 py-3.5 shadow-2xs">
+                <div className="text-xs font-bold text-indigo-900 uppercase tracking-wider">
+                  Nilai Akhir CBT {completedMapel}
+                </div>
                 <div className="text-4xl font-extrabold font-mono tabular-nums text-blue-700 mt-0.5">
                   {submittedSummary.skor}
                   <span className="text-lg text-slate-400 font-normal">/100</span>
                 </div>
-                <div className="text-xs font-medium text-emerald-800 mt-0.5">
+                <div className="text-xs font-bold text-emerald-800 mt-0.5">
                   Predikat: {submittedSummary.kategori}
+                </div>
+                <div className="text-[11px] font-mono font-semibold text-slate-600 mt-0.5">
+                  Poin Bobot: {submittedSummary.rawEarned} / {submittedSummary.rawMax} Poin
                 </div>
               </div>
             </div>
@@ -1994,14 +2013,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               <div className="flex items-center justify-between gap-2 text-xs text-amber-300 font-bold uppercase tracking-wider">
                 <span className="flex items-center gap-1.5">
                   <LogIn className="w-3.5 h-3.5" />
-                  <span>Portal Login Akun Siswa CBT Sosiologi SMA</span>
+                  <span>Portal Login Akun Siswa &amp; Asesmen CBT Multi-Mapel SMA</span>
                 </span>
                 <span className="font-mono text-white/90 bg-white/15 backdrop-blur-xs px-2.5 py-0.5 rounded-md">
                   Sistem Akun &amp; Token Sesi
                 </span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mt-1">
-                Selamat Datang di Portal Akun Siswa Sosiologi
+                Selamat Datang di Portal Akun Siswa CBT
               </h1>
               <p className="text-xs text-slate-100 mt-1 leading-relaxed max-w-2xl">
                 Pilih <strong>Kelas</strong>, pilih <strong>Nama Lengkap</strong>, lalu masukkan <strong>Password Login Akun</strong> (atau <strong>Token Bawaan Sistem</strong>) untuk mengakses Beranda, Jadwal Ujian, Nilai, Riwayat, dan Profil Siswa.
@@ -2401,20 +2420,26 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
           <div
             className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border whitespace-nowrap shrink-0 ${
-              tabViolations > 0
+              tabViolations > 0 || inspectAttempts > 0
                 ? 'bg-amber-50 border-amber-300 text-amber-900'
-                : 'bg-slate-50 border-slate-200 text-slate-600'
+                : 'bg-emerald-50/70 border-emerald-200 text-emerald-800'
             }`}
           >
             <ShieldAlert
               className={`w-3.5 h-3.5 shrink-0 ${
-                tabViolations > 0 ? 'text-amber-600' : 'text-slate-400'
+                tabViolations > 0 || inspectAttempts > 0
+                  ? 'text-amber-600'
+                  : 'text-emerald-600'
               }`}
             />
             <span>
-              Pengawasan:{' '}
+              Anti-Cheat:{' '}
               <strong className="font-mono tabular-nums text-slate-900">
-                {tabViolations > 0 ? `${tabViolations}/${MAX_TAB_VIOLATIONS} Peringatan` : 'Aktif'}
+                {tabViolations > 0
+                  ? `${tabViolations}x Tab`
+                  : inspectAttempts > 0
+                  ? `${inspectAttempts}x Inspect`
+                  : 'Aktif & Aman'}
               </strong>
             </span>
           </div>
@@ -2557,10 +2582,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   <span className="px-2.5 py-1 rounded-md bg-indigo-50 border border-indigo-200 font-mono text-xs font-extrabold text-indigo-800">
                     {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
                   </span>
-                  <span className="text-xs sm:text-sm font-semibold text-slate-600">
+                  <span className="px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800">
                     {isKompleks
-                      ? 'PG Kompleks (Pilih >1 Jawaban · Bobot Maks 3)'
-                      : 'PG Biasa (Pilih 1 Jawaban · Bobot 2)'}
+                      ? `PG Kompleks (Pilih >1 Jawaban · Bobot ${currentQuestion.bobot || 3} Poin)`
+                      : `PG Biasa (Pilih 1 Jawaban · Bobot ${currentQuestion.bobot || 2} Poin)`}
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-500">
@@ -2618,7 +2643,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 <div className="bg-gradient-to-br from-indigo-50/60 via-blue-50/40 to-amber-50/30 border border-indigo-200/80 rounded-xl p-5 sm:p-6 space-y-2.5">
                   <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold uppercase tracking-wider text-indigo-800">
                     <BookOpen className="w-4 h-4 text-indigo-600" />
-                    <span>Wacana &amp; Stimulus Sosiologi</span>
+                    <span>Wacana &amp; Stimulus Soal ({activeMataPelajaran})</span>
                   </div>
                   <div
                     className={`text-slate-800 leading-relaxed ${
@@ -2895,7 +2920,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     Anda <strong>TIDAK DAPAT LOGIN SENDIRI</strong> sampai Guru/Pengawas membuka blokir. Silakan segera lapor kepada Guru Pengawas di ruang kelas.
                   </p>
                   <div className="p-2 bg-white/70 rounded border border-red-200 font-mono text-[11px] text-red-800">
-                    Guru membuka via: Dashboard Guru → Database Siswa → Klik [Buka Kunci]
+                    Guru membuka via: Konsol Guru → Menu 03 (Live Monitor) atau Menu 04 (Database Siswa) → Klik [Buka Kunci]
                   </div>
                 </div>
 

@@ -1242,10 +1242,15 @@ export function downloadSingleStudentResultPdf(
   doc.text('CBT', marginX + 10, 25.5, { align: 'center' });
 
   // Banner Text
+  const mapelUpper = cleanPdfText(precision.mataPelajaran || 'SOSIOLOGI').toUpperCase();
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13.5);
+  doc.setFontSize(13);
   doc.setTextColor(255, 255, 255);
-  doc.text('KARTU HASIL NILAI & TOKEN UJIAN CBT SOSIOLOGI', marginX + 22, 21);
+  doc.text(
+    `KARTU HASIL NILAI & TOKEN UJIAN CBT ${mapelUpper}`.slice(0, 52),
+    marginX + 22,
+    21
+  );
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
@@ -1377,11 +1382,16 @@ export function downloadSingleStudentResultPdf(
   doc.roundedRect(rightX, y, rightW, 46, 2.5, 2.5, 'FD');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
+  doc.setFontSize(7.2);
   doc.setTextColor(...badgeStyle.text);
-  doc.text('NILAI AKHIR CBT SOSIOLOGI', rightX + rightW / 2, y + 8, {
-    align: 'center',
-  });
+  doc.text(
+    `NILAI AKHIR CBT ${mapelUpper}`.slice(0, 26),
+    rightX + rightW / 2,
+    y + 8,
+    {
+      align: 'center',
+    }
+  );
 
   doc.setFont('courier', 'bold');
   doc.setFontSize(28);

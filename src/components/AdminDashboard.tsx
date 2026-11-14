@@ -206,6 +206,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch {}
   }, [activeTab]);
 
+  // Collapsible / Minimizable Left Sidebar State
+  const [isSidebarMinimized, setIsSidebarMinimized] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('cbt_admin_sidebar_minimized') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'cbt_admin_sidebar_minimized',
+        String(isSidebarMinimized)
+      );
+    } catch {}
+  }, [isSidebarMinimized]);
+
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
   const [isRecalculatingScores, setIsRecalculatingScores] = useState(false);
   const [recalcFeedback, setRecalcFeedback] = useState<string | null>(null);
@@ -2120,371 +2139,472 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (s) => s.status_ujian === 'Sedang Ujian'
   ).length;
 
+  const teacherSidebarMenus = [
+    {
+      id: 'ujian' as const,
+      num: '01',
+      title: 'Distribusi & Jadwal',
+      subtitle: 'Atur Paket & Kelas',
+      badge: `${exams.length}`,
+      icon: ClipboardList,
+      activeClass:
+        'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-500 shadow-xs ring-2 ring-blue-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-blue-50 text-blue-600 border border-blue-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-blue-50 text-blue-700 border border-blue-200/70',
+    },
+    {
+      id: 'token_distribusi' as const,
+      num: '02',
+      title: 'Token Ujian & Mapel',
+      subtitle: 'Token Harian & PDF',
+      badge: 'TOKEN',
+      icon: KeyRound,
+      activeClass:
+        'bg-gradient-to-r from-rose-600 to-amber-600 text-white border-rose-500 shadow-xs ring-2 ring-amber-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-200',
+      iconBoxIdle: 'bg-rose-50 text-rose-600 border border-rose-200/70',
+      badgeActive: 'bg-white/25 text-white',
+      badgeIdle: 'bg-rose-600 text-white',
+    },
+    {
+      id: 'manajemen' as const,
+      num: '03',
+      title: 'Live Monitor & Kelas',
+      subtitle: 'Radar Web & Anti-Cheat',
+      badge: activeStudentsCount > 0 ? `${activeStudentsCount} LIVE` : 'RADAR',
+      icon: Layers,
+      activeClass:
+        'bg-gradient-to-r from-indigo-600 to-violet-600 text-white border-indigo-500 shadow-xs ring-2 ring-indigo-300/60',
+      iconBoxActive: 'bg-white/20 text-emerald-300',
+      iconBoxIdle: 'bg-indigo-50 text-indigo-600 border border-indigo-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle:
+        activeStudentsCount > 0
+          ? 'bg-emerald-600 text-white animate-pulse'
+          : 'bg-indigo-600 text-white',
+    },
+    {
+      id: 'siswa' as const,
+      num: '04',
+      title: 'Database Siswa',
+      subtitle: 'Data Rombel & Akun',
+      badge: `${students.length}`,
+      icon: Users,
+      activeClass:
+        'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-xs ring-2 ring-emerald-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-200',
+      iconBoxIdle: 'bg-emerald-50 text-emerald-600 border border-emerald-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-emerald-50 text-emerald-800 border border-emerald-200/70',
+    },
+    {
+      id: 'soal' as const,
+      num: '05',
+      title: 'Bank Soal & Word',
+      subtitle: 'Soal, Rumus & Gambar',
+      badge: `${questions.length}`,
+      icon: FileSpreadsheet,
+      activeClass:
+        'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-500 shadow-xs ring-2 ring-amber-300/60',
+      iconBoxActive: 'bg-white/20 text-white',
+      iconBoxIdle: 'bg-amber-50 text-amber-600 border border-amber-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-amber-50 text-amber-800 border border-amber-200/70',
+    },
+    {
+      id: 'laporan' as const,
+      num: '06',
+      title: 'Hasil & Evaluasi',
+      subtitle: 'Nilai, LOTS/HOTS & PDF',
+      badge: `${results.length}`,
+      icon: Sparkles,
+      activeClass:
+        'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-500 shadow-xs ring-2 ring-purple-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-purple-50 text-purple-600 border border-purple-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-purple-50 text-purple-800 border border-purple-200/70',
+    },
+    {
+      id: 'anbuso' as const,
+      num: '07',
+      title: 'Analisis Butir (AnBuso)',
+      subtitle: 'Daya Beda & Remedial',
+      badge: 'AnBuso',
+      icon: BarChart3,
+      activeClass:
+        'bg-gradient-to-r from-cyan-600 to-blue-700 text-white border-cyan-500 shadow-xs ring-2 ring-cyan-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-cyan-50 text-cyan-600 border border-cyan-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-cyan-50 text-cyan-800 border border-cyan-200/70',
+    },
+  ];
+
+  const activeMenuObj =
+    teacherSidebarMenus.find((m) => m.id === activeTab) ||
+    teacherSidebarMenus[0];
+
   return (
-    <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 space-y-6">
-      {/* Executive Colorful Institutional Console Header & Dedicated Navigation Bar */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
-        {/* Top Row: Royal Blue & Indigo Hero Identity Banner + System Actions */}
-        <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white px-6 py-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-indigo-800">
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="px-2.5 py-0.5 rounded-md bg-amber-400/20 border border-amber-300/40 text-amber-300 font-bold uppercase tracking-wider">
-                Konsol Guru &amp; Pengawas CBT
-              </span>
-              <span className="text-indigo-300">·</span>
-              <span className="text-blue-100">
-                Pengawas Aktif:{' '}
-                <strong className="text-white font-bold">
-                  {teacherProfile.name}
-                </strong>{' '}
-                <span className="text-blue-200/80">({teacherProfile.email})</span>
-              </span>
-            </div>
-            <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-              Pusat Kendali Distribusi Ujian, Database Siswa &amp; Evaluasi Sosiologi
-            </h1>
-          </div>
+    <div className="max-w-[1440px] mx-auto py-5 px-3 sm:px-6">
+      <div className="flex flex-col lg:flex-row items-start gap-5">
+        {/* ================================================================= */}
+        {/* LEFT COLLAPSIBLE / MINIMIZABLE SIDEBAR NAVIGATION (MENU UTAMA)    */}
+        {/* ================================================================= */}
+        <aside
+          aria-label="Menu Utama Konsol Guru Samping Kiri"
+          className={`w-full lg:sticky lg:top-20 shrink-0 transition-all duration-300 ease-in-out ${
+            isSidebarMinimized ? 'lg:w-20' : 'lg:w-72'
+          }`}
+        >
+          <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+            {/* Sidebar Header with Minimize / Expand Toggle */}
+            <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white p-3.5 border-b border-indigo-900 flex items-center justify-between gap-2">
+              {!isSidebarMinimized && (
+                <div className="min-w-0">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
+                    Menu Utama Guru
+                  </div>
+                  <div className="text-xs font-bold text-white truncate">
+                    7 Modul Kendali CBT
+                  </div>
+                </div>
+              )}
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {onManualFirebaseSync && (
+              {/* Desktop Minimize / Expand Button */}
               <button
                 type="button"
-                onClick={onManualFirebaseSync}
-                disabled={isSyncingFirebase}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-white/15 hover:bg-white/25 border border-white/25 disabled:opacity-50 rounded-xl transition-all whitespace-nowrap shrink-0 cursor-pointer backdrop-blur-xs"
+                onClick={() => setIsSidebarMinimized((prev) => !prev)}
+                title={
+                  isSidebarMinimized
+                    ? 'Buka / Perlebar Menu Samping Kiri'
+                    : 'Minimize / Kecilkan Menu Samping Kiri'
+                }
+                className={`hidden lg:inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white font-bold text-xs transition-all cursor-pointer ${
+                  isSidebarMinimized ? 'w-full py-2 px-2 flex-col' : 'px-2.5 py-1.5'
+                }`}
               >
-                <RefreshCw
-                  className={`w-3.5 h-3.5 text-emerald-300 ${
-                    isSyncingFirebase ? 'animate-spin' : ''
-                  }`}
-                />
-                <span>
-                  {isSyncingFirebase ? 'Menyinkronkan...' : 'Sinkronkan Data'}
-                </span>
+                {isSidebarMinimized ? (
+                  <>
+                    <PanelLeftOpen className="w-4 h-4 text-amber-300" />
+                    <span className="text-[9px] uppercase tracking-wider text-amber-300">
+                      Buka
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <PanelLeftClose className="w-4 h-4 text-amber-300" />
+                    <span className="text-[11px]">Minimize</span>
+                  </>
+                )}
               </button>
-            )}
 
-            <button
-              type="button"
-              onClick={() => {
-                setIsAuthenticated(false);
-                try {
-                  localStorage.removeItem('cbt_teacher_auth');
-                  localStorage.removeItem('cbt_teacher_active_tab');
-                } catch {}
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 border border-rose-400/40 rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Keluar Guru</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Second Row: Dedicated Full-Width Colorful 7-Tab Navigation Menu Bar */}
-        <div className="bg-gradient-to-r from-slate-100 via-blue-50/50 to-indigo-50/50 p-3 border-b border-slate-200">
-          <div
-            role="tablist"
-            aria-label="Menu Utama Konsol Guru"
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'ujian'}
-              onClick={() => setActiveTab('ujian')}
-              className={`px-3 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
-                activeTab === 'ujian'
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-700 shadow-xs'
-                  : 'bg-white hover:bg-blue-50/70 text-slate-700 border-slate-200/90 hover:border-blue-300'
-              }`}
-            >
-              <span className="flex items-center gap-1.5 truncate">
-                <ClipboardList
-                  className={`w-4 h-4 shrink-0 ${
-                    activeTab === 'ujian' ? 'text-amber-300' : 'text-blue-600'
-                  }`}
-                />
-                <span className="truncate">Distribusi Ujian</span>
-              </span>
-              <span
-                className={`px-1.5 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
-                  activeTab === 'ujian'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                }`}
-              >
-                {exams.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'token_distribusi'}
-              onClick={() => setActiveTab('token_distribusi')}
-              className={`px-3 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
-                activeTab === 'token_distribusi'
-                  ? 'bg-gradient-to-r from-rose-600 to-amber-600 text-white border-rose-700 shadow-xs ring-2 ring-amber-300'
-                  : 'bg-amber-50/90 hover:bg-amber-100 text-amber-950 border-amber-300'
-              }`}
-            >
-              <span className="flex items-center gap-1.5 truncate">
-                <KeyRound
-                  className={`w-4 h-4 shrink-0 ${
-                    activeTab === 'token_distribusi' ? 'text-amber-200' : 'text-rose-600'
-                  }`}
-                />
-                <span className="truncate">Token Ujian &amp; Mapel</span>
-              </span>
-              <span
-                className={`px-1.5 py-0.5 text-[10px] font-mono rounded-md font-extrabold shrink-0 ${
-                  activeTab === 'token_distribusi'
-                    ? 'bg-white/25 text-white'
-                    : 'bg-rose-600 text-white'
-                }`}
-              >
-                TOKEN
-              </span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'manajemen'}
-              onClick={() => setActiveTab('manajemen')}
-              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
-                activeTab === 'manajemen'
-                  ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white border-indigo-700 shadow-xs ring-2 ring-indigo-300'
-                  : 'bg-indigo-50/70 hover:bg-indigo-100/80 text-indigo-950 border-indigo-300'
-              }`}
-            >
-              <span className="flex items-center gap-2 truncate">
-                <Layers
-                  className={`w-4 h-4 shrink-0 ${
-                    activeTab === 'manajemen' ? 'text-emerald-300' : 'text-indigo-600'
-                  }`}
-                />
-                <span className="truncate">Live Monitor &amp; Kelas</span>
-              </span>
-              <span
-                className={`px-2 py-0.5 text-[10px] font-mono tabular-nums rounded-md font-extrabold shrink-0 ${
-                  activeTab === 'manajemen'
-                    ? 'bg-white/20 text-white'
-                    : activeStudentsCount > 0
-                      ? 'bg-emerald-600 text-white animate-pulse'
-                      : 'bg-indigo-600 text-white'
-                }`}
-              >
-                {activeStudentsCount > 0 ? `${activeStudentsCount} LIVE` : 'RADAR'}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'siswa'}
-              onClick={() => setActiveTab('siswa')}
-              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
-                activeTab === 'siswa'
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-700 shadow-xs'
-                  : 'bg-white hover:bg-emerald-50/70 text-slate-700 border-slate-200/90 hover:border-emerald-300'
-              }`}
-            >
-              <span className="flex items-center gap-2 truncate">
-                <Users
-                  className={`w-4 h-4 shrink-0 ${
-                    activeTab === 'siswa' ? 'text-amber-200' : 'text-emerald-600'
-                  }`}
-                />
-                <span className="truncate">Database Siswa</span>
-              </span>
-              <span
-                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
-                  activeTab === 'siswa'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200/60'
-                }`}
-              >
-                {students.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'soal'}
-              onClick={() => {
-                setActiveTab('soal');
-                setIsBankSoalDetailOpen(false);
-              }}
-              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
-                activeTab === 'soal'
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-600 shadow-xs'
-                  : 'bg-white hover:bg-amber-50/70 text-slate-700 border-slate-200/90 hover:border-amber-300'
-              }`}
-            >
-              <span className="flex items-center gap-2 truncate">
-                <FileSpreadsheet
-                  className={`w-4 h-4 shrink-0 ${
-                    activeTab === 'soal' ? 'text-white' : 'text-amber-600'
-                  }`}
-                />
-                <span className="truncate">Bank Soal</span>
-              </span>
-              <span
-                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
-                  activeTab === 'soal'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-amber-50 text-amber-800 border border-amber-200/60'
-                }`}
-              >
-                {questions.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'laporan'}
-              onClick={() => setActiveTab('laporan')}
-              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
-                activeTab === 'laporan'
-                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-700 shadow-xs'
-                  : 'bg-white hover:bg-purple-50/70 text-slate-700 border-slate-200/90 hover:border-purple-300'
-              }`}
-            >
-              <span className="flex items-center gap-2 truncate">
-                <Sparkles
-                  className={`w-4 h-4 shrink-0 ${
-                    activeTab === 'laporan' ? 'text-amber-300' : 'text-purple-600'
-                  }`}
-                />
-                <span className="truncate">Hasil &amp; Evaluasi</span>
-              </span>
-              <span
-                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
-                  activeTab === 'laporan'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-purple-50 text-purple-800 border border-purple-200/60'
-                }`}
-              >
-                {results.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'anbuso'}
-              onClick={() => setActiveTab('anbuso')}
-              className={`px-3.5 py-3 text-xs font-bold rounded-xl border transition-all flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer ${
-                activeTab === 'anbuso'
-                  ? 'bg-gradient-to-r from-cyan-600 to-blue-700 text-white border-cyan-700 shadow-xs'
-                  : 'bg-white hover:bg-cyan-50/70 text-slate-700 border-slate-200/90 hover:border-cyan-300'
-              }`}
-            >
-              <span className="flex items-center gap-2 truncate">
-                <BarChart3
-                  className={`w-4 h-4 shrink-0 ${
-                    activeTab === 'anbuso' ? 'text-amber-300' : 'text-cyan-600'
-                  }`}
-                />
-                <span className="truncate">Analisis Butir (AnBuso)</span>
-              </span>
-              <span
-                className={`px-2 py-0.5 text-[11px] font-mono tabular-nums rounded-md font-bold shrink-0 ${
-                  activeTab === 'anbuso'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-cyan-50 text-cyan-800 border border-cyan-200/60'
-                }`}
-              >
-                AnBuso
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {/* Third Row: Colorful 4-Metric Institutional Summary Cards */}
-        <div className="p-4 bg-white grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-blue-50 via-blue-50/60 to-indigo-50/40 border border-blue-200/80">
-            <div className="text-[11px] font-bold text-blue-800 uppercase tracking-wider">
-              Paket Ujian Aktif
-            </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-blue-950 mt-0.5">
-              {exams.length}{' '}
-              <span className="text-xs font-medium font-sans text-blue-700">
-                paket ujian
-              </span>
-            </div>
-          </div>
-
-          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-violet-50 via-purple-50/60 to-indigo-50/40 border border-violet-200/80">
-            <div className="text-[11px] font-bold text-violet-800 uppercase tracking-wider">
-              Sebaran Siswa 3 Tingkatan
-            </div>
-            <div className="text-xs font-extrabold font-mono tabular-nums text-violet-950 mt-1.5">
-              Kelas X: {countTingkat10} <span className="text-violet-400">·</span> XI:{' '}
-              {countTingkat11} <span className="text-violet-400">·</span> XII:{' '}
-              {countTingkat12}
-            </div>
-          </div>
-
-          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-amber-50 via-orange-50/50 to-yellow-50/40 border border-amber-200/80">
-            <div className="text-[11px] font-bold text-amber-900 uppercase tracking-wider">
-              Total Butir Soal
-            </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-amber-950 mt-0.5">
-              {questions.length}{' '}
-              <span className="text-xs font-medium font-sans text-amber-800">
-                butir soal
-              </span>
-            </div>
-          </div>
-
-          <div className="px-4 py-3.5 rounded-xl bg-gradient-to-br from-emerald-50 via-teal-50/60 to-cyan-50/40 border border-emerald-200/80">
-            <div className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
-              Hasil Ujian Masuk
-            </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-emerald-950 mt-0.5">
-              {results.length}{' '}
-              <span className="text-xs font-medium font-sans text-emerald-700">
-                peserta selesai
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Quiet Footer Status Bar inside Console Header */}
-        <div className="px-6 py-2.5 bg-gradient-to-r from-emerald-50/80 via-slate-50 to-blue-50/70 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider">
-              Live Sync Aktif
-            </span>
-            <span className="font-medium text-slate-700">
-              {syncPulse?.lastEvent ||
-                'Perubahan jadwal, peserta, bank soal, dan hasil tersimpan otomatis'}
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            {activeTab !== 'manajemen' && (
+              {/* Mobile / Tablet Open-Close Menu Button */}
               <button
                 type="button"
-                onClick={() => setActiveTab('manajemen')}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] shadow-2xs transition-colors cursor-pointer"
+                onClick={() => setIsMobileSidebarOpen((prev) => !prev)}
+                className="lg:hidden inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-400 text-slate-950 font-extrabold text-xs cursor-pointer"
               >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 animate-ping" />
-                <span>Buka Live Radar Monitor Web Siswa</span>
+                {isMobileSidebarOpen ? (
+                  <>
+                    <PanelLeftClose className="w-4 h-4" />
+                    <span>Tutup Menu</span>
+                  </>
+                ) : (
+                  <>
+                    <PanelLeftOpen className="w-4 h-4" />
+                    <span>Buka Menu ({activeMenuObj.title})</span>
+                  </>
+                )}
               </button>
-            )}
-            {syncPulse?.lastSyncedAt && (
-              <span className="font-mono tabular-nums font-semibold text-indigo-800">
-                Update Terakhir: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
-              </span>
-            )}
+            </div>
+
+            {/* Sidebar Menu Items List */}
+            <div
+              role="tablist"
+              aria-label="Navigasi Modul Konsol Guru"
+              className={`${
+                isMobileSidebarOpen ? 'block' : 'hidden lg:block'
+              } p-2.5 space-y-1.5 bg-gradient-to-b from-slate-50/70 to-white`}
+            >
+              {teacherSidebarMenus.map((item) => {
+                const Icon = item.icon;
+                const isSelected = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={isSelected}
+                    title={`${item.num}. ${item.title} — ${item.subtitle} (${item.badge})`}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      if (item.id === 'soal') {
+                        setIsBankSoalDetailOpen(false);
+                      }
+                      setIsMobileSidebarOpen(false);
+                    }}
+                    className={`w-full rounded-xl border transition-all cursor-pointer flex items-center ${
+                      isSidebarMinimized
+                        ? 'lg:justify-center lg:p-2.5 p-3 justify-between'
+                        : 'p-2.5 justify-between gap-2.5'
+                    } ${
+                      isSelected
+                        ? item.activeClass
+                        : 'bg-white hover:bg-slate-100/80 text-slate-800 border-slate-200/90 hover:border-blue-300'
+                    }`}
+                  >
+                    <div
+                      className={`flex items-center ${
+                        isSidebarMinimized
+                          ? 'lg:flex-col lg:gap-1 gap-2.5'
+                          : 'gap-2.5 min-w-0'
+                      }`}
+                    >
+                      <div
+                        className={`p-2 rounded-xl shrink-0 relative ${
+                          isSelected ? item.iconBoxActive : item.iconBoxIdle
+                        }`}
+                      >
+                        <Icon className="w-4 h-4" />
+                      </div>
+
+                      {isSidebarMinimized ? (
+                        <span
+                          className={`hidden lg:block text-[10px] font-mono font-extrabold leading-none ${
+                            isSelected ? 'text-white' : 'text-slate-600'
+                          }`}
+                        >
+                          {item.num}
+                        </span>
+                      ) : null}
+
+                      <div
+                        className={`text-left min-w-0 ${
+                          isSidebarMinimized ? 'lg:hidden block' : 'block'
+                        }`}
+                      >
+                        <div className="text-xs font-extrabold leading-snug">
+                          {item.num}. {item.title}
+                        </div>
+                        <div
+                          className={`text-[11px] leading-tight mt-0.5 ${
+                            isSelected ? 'text-white/85' : 'text-slate-500'
+                          }`}
+                        >
+                          {item.subtitle}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-mono tabular-nums rounded-md font-extrabold shrink-0 ${
+                        isSidebarMinimized ? 'lg:hidden inline-block' : 'inline-block'
+                      } ${isSelected ? item.badgeActive : item.badgeIdle}`}
+                    >
+                      {item.badge}
+                    </span>
+                  </button>
+                );
+              })}
+
+              {/* Sidebar Bottom Quick Actions (Sync & Logout) */}
+              <div className="pt-2.5 mt-2 border-t border-slate-200 space-y-1.5">
+                {onManualFirebaseSync && (
+                  <button
+                    type="button"
+                    onClick={onManualFirebaseSync}
+                    disabled={isSyncingFirebase}
+                    title="Sinkronkan Database ke Cloud"
+                    className={`w-full rounded-xl border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-900 font-bold text-xs transition-colors cursor-pointer flex items-center ${
+                      isSidebarMinimized
+                        ? 'lg:justify-center lg:p-2.5 px-3 py-2 gap-2'
+                        : 'px-3 py-2 gap-2'
+                    }`}
+                  >
+                    <RefreshCw
+                      className={`w-4 h-4 text-indigo-600 shrink-0 ${
+                        isSyncingFirebase ? 'animate-spin' : ''
+                      }`}
+                    />
+                    <span className={isSidebarMinimized ? 'lg:hidden' : ''}>
+                      {isSyncingFirebase ? 'Menyinkronkan...' : 'Sinkronkan Data'}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAuthenticated(false);
+                    try {
+                      localStorage.removeItem('cbt_teacher_auth');
+                      localStorage.removeItem('cbt_teacher_active_tab');
+                    } catch {}
+                  }}
+                  title="Keluar dari Konsol Guru"
+                  className={`w-full rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition-colors cursor-pointer flex items-center ${
+                    isSidebarMinimized
+                      ? 'lg:justify-center lg:p-2.5 px-3 py-2 gap-2'
+                      : 'px-3 py-2 gap-2'
+                  }`}
+                >
+                  <LogOut className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span className={isSidebarMinimized ? 'lg:hidden' : ''}>
+                    Keluar Konsol Guru
+                  </span>
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </aside>
+
+        {/* ================================================================= */}
+        {/* RIGHT MAIN WORKSPACE AREA                                         */}
+        {/* ================================================================= */}
+        <div className="flex-1 min-w-0 w-full space-y-6">
+          {/* Compact Executive Header & 4-Metric Institutional Summary Strip */}
+          <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+            <div className="h-1.5 w-full bg-gradient-to-r from-amber-400 via-emerald-400 via-cyan-400 to-indigo-500" />
+            <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white px-5 py-4 border-b border-indigo-900/80">
+              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+                <div className="flex items-start gap-3.5 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsSidebarMinimized((prev) => !prev)}
+                    title={
+                      isSidebarMinimized
+                        ? 'Buka Lebar Menu Samping Kiri'
+                        : 'Minimize / Kecilkan Menu Samping Kiri'
+                    }
+                    className="hidden lg:inline-flex items-center justify-center p-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition-colors cursor-pointer shrink-0 mt-0.5"
+                  >
+                    {isSidebarMinimized ? (
+                      <PanelLeftOpen className="w-4 h-4" />
+                    ) : (
+                      <PanelLeftClose className="w-4 h-4" />
+                    )}
+                  </button>
+
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-400 text-slate-950 font-extrabold uppercase tracking-wider shadow-2xs">
+                        <span>Pusat Kendali Asesmen CBT</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-white/10 border border-white/15 text-cyan-200 font-bold">
+                        <span>
+                          Modul {activeMenuObj.num}: {activeMenuObj.title}
+                        </span>
+                      </span>
+                      <span className="text-blue-200/90 hidden sm:inline">
+                        · Pengawas:{' '}
+                        <strong className="text-white font-semibold">
+                          {teacherProfile.name}
+                        </strong>
+                      </span>
+                    </div>
+
+                    <h1 className="text-base sm:text-lg font-extrabold text-white tracking-tight leading-snug">
+                      {activeMenuObj.num}. {activeMenuObj.title}{' '}
+                      <span className="font-normal text-blue-200/90 text-xs sm:text-sm">
+                        — {activeMenuObj.subtitle} Multi-Mapel &amp; Evaluasi Akademik
+                      </span>
+                    </h1>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {activeTab !== 'manajemen' && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('manajemen')}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 font-bold text-xs transition-colors cursor-pointer"
+                    >
+                      <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                      <span>Live Radar ({activeStudentsCount} Ujian)</span>
+                    </button>
+                  )}
+                  {syncPulse?.lastSyncedAt && (
+                    <span className="px-3 py-1.5 rounded-xl bg-white/10 border border-white/15 text-[11px] font-mono tabular-nums text-cyan-200">
+                      Sync: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* 4-Metric Institutional Summary Cards */}
+            <div className="p-3.5 bg-slate-50/60 grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-blue-200/90 shadow-2xs flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">
+                    Paket Ujian Aktif
+                  </div>
+                  <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
+                    {exams.length}{' '}
+                    <span className="text-[11px] font-semibold font-sans text-slate-500">
+                      paket ({availableMataPelajaran.length} mapel)
+                    </span>
+                  </div>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200/80 text-blue-600 flex items-center justify-center shrink-0">
+                  <ClipboardList className="w-4 h-4" />
+                </div>
+              </div>
+
+              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-violet-200/90 shadow-2xs flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wider">
+                    Sebaran 3 Tingkatan
+                  </div>
+                  <div className="text-xs font-extrabold font-mono tabular-nums text-slate-900 mt-1">
+                    X: {countTingkat10} <span className="text-slate-300">|</span> XI:{' '}
+                    {countTingkat11} <span className="text-slate-300">|</span> XII:{' '}
+                    {countTingkat12}
+                  </div>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-violet-50 border border-violet-200/80 text-violet-600 flex items-center justify-center shrink-0">
+                  <Users className="w-4 h-4" />
+                </div>
+              </div>
+
+              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-amber-200/90 shadow-2xs flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">
+                    Total Bank Soal
+                  </div>
+                  <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
+                    {questions.length}{' '}
+                    <span className="text-[11px] font-semibold font-sans text-slate-500">
+                      butir soal
+                    </span>
+                  </div>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-600 flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+              </div>
+
+              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-emerald-200/90 shadow-2xs flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">
+                    Hasil Ujian Masuk
+                  </div>
+                  <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
+                    {results.length}{' '}
+                    <span className="text-[11px] font-semibold font-sans text-slate-500">
+                      selesai
+                    </span>
+                  </div>
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200/80 text-emerald-600 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+              </div>
+            </div>
+          </div>
 
       {/* ===================================================================== */}
       {/* TAB 1: MANAJEMEN UJIAN & DISTRIBUSI SOAL KE 3 TINGKATAN KELAS          */}
@@ -6167,74 +6287,119 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* 4 Kartu Ringkasan Statistik Keseluruhan */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="text-xs text-slate-500">
-                  Rata-Rata Skor Nasional / Sekolah
+            {/* 4 Kartu Ringkasan Statistik Keseluruhan (Berwarna & Terstruktur) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-white to-indigo-50/40 border border-blue-200/90 shadow-2xs">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
+                  Rata-Rata Skor Sekolah
                 </div>
-                <div className="text-2xl font-bold font-mono tabular-nums text-blue-700 mt-1">
+                <div className="text-2xl font-extrabold font-mono tabular-nums text-blue-950 mt-1">
                   {classAnalyticsData.overall.averageScore}
-                  <span className="text-xs font-normal text-slate-500">
-                    /100
+                  <span className="text-xs font-semibold font-sans text-blue-700 ml-1">
+                    / 100
                   </span>
                 </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  Tertinggi: {classAnalyticsData.overall.highestScore} · Terendah:{' '}
-                  {classAnalyticsData.overall.lowestScore}
+                <div className="w-full h-2 bg-blue-200/60 rounded-full overflow-hidden mt-2">
+                  <div
+                    className="h-full bg-blue-600 rounded-full"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(4, classAnalyticsData.overall.averageScore)
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <div className="text-[11px] font-medium text-slate-600 mt-1.5">
+                  Tertinggi:{' '}
+                  <strong className="font-mono text-emerald-700">
+                    {classAnalyticsData.overall.highestScore}
+                  </strong>{' '}
+                  · Terendah:{' '}
+                  <strong className="font-mono text-rose-700">
+                    {classAnalyticsData.overall.lowestScore}
+                  </strong>
                 </div>
               </div>
 
-              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="text-xs text-slate-500">
-                  Tingkat Ketuntasan (&ge; 70)
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 border border-emerald-200/90 shadow-2xs">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                  Tingkat Ketuntasan KKM (&ge; 70)
                 </div>
-                <div className="text-2xl font-bold font-mono tabular-nums text-emerald-700 mt-1">
+                <div className="text-2xl font-extrabold font-mono tabular-nums text-emerald-950 mt-1">
                   {classAnalyticsData.overall.passRate}%
                 </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  {classAnalyticsData.overall.passCount} dari{' '}
-                  {classAnalyticsData.overall.resultCount} peserta tuntas
+                <div className="w-full h-2 bg-emerald-200/60 rounded-full overflow-hidden mt-2">
+                  <div
+                    className="h-full bg-emerald-600 rounded-full"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(4, classAnalyticsData.overall.passRate)
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <div className="text-[11px] font-medium text-slate-600 mt-1.5">
+                  <strong className="font-mono text-emerald-800">
+                    {classAnalyticsData.overall.passCount}
+                  </strong>{' '}
+                  dari{' '}
+                  <strong className="font-mono text-slate-800">
+                    {classAnalyticsData.overall.resultCount}
+                  </strong>{' '}
+                  peserta tuntas
                 </div>
               </div>
 
-              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="text-xs text-slate-500">
-                  Sebaran Predikat Nilai (A / B / C / D)
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 via-white to-orange-50/40 border border-amber-200/90 shadow-2xs">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                  Sebaran Predikat (A / B / C / D)
                 </div>
-                <div className="text-sm font-bold font-mono tabular-nums text-slate-900 mt-1.5">
-                  A: {classAnalyticsData.overall.gradeDistribution.A} · B:{' '}
-                  {classAnalyticsData.overall.gradeDistribution.B} · C:{' '}
-                  {classAnalyticsData.overall.gradeDistribution.C} · D:{' '}
-                  {classAnalyticsData.overall.gradeDistribution.D}
-                </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  A (&ge;85), B (70-84), C (55-69), D (&lt;55)
-                </div>
-              </div>
-
-              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="text-xs text-slate-500">
-                  Cakupan Evaluasi LOTS vs HOTS
-                </div>
-                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
-                  {classAnalyticsData.overall.analyzedCount}
-                  <span className="text-xs font-normal text-slate-500">
-                    /{classAnalyticsData.overall.resultCount} hasil
+                <div className="flex flex-wrap items-center gap-1.5 font-mono tabular-nums text-xs font-extrabold mt-2">
+                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    A: {classAnalyticsData.overall.gradeDistribution.A}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">
+                    B: {classAnalyticsData.overall.gradeDistribution.B}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                    C: {classAnalyticsData.overall.gradeDistribution.C}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                    D: {classAnalyticsData.overall.gradeDistribution.D}
                   </span>
                 </div>
-                <div className="mt-1">
+                <div className="text-[11px] text-slate-600 mt-2">
+                  A (&ge;85), B (70–84), C (55–69), D (&lt;55)
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-50 via-white to-indigo-50/40 border border-purple-200/90 shadow-2xs">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800">
+                  Cakupan Evaluasi LOTS vs HOTS
+                </div>
+                <div className="text-2xl font-extrabold font-mono tabular-nums text-purple-950 mt-1">
+                  {classAnalyticsData.overall.analyzedCount}
+                  <span className="text-xs font-semibold font-sans text-purple-700 ml-1">
+                    / {classAnalyticsData.overall.resultCount} hasil
+                  </span>
+                </div>
+                <div className="mt-2">
                   <button
                     type="button"
                     disabled={
                       results.length === 0 || isAnalyzingBatchClass
                     }
                     onClick={() => handleBatchAiAnalysisForList(results)}
-                    className="text-[11px] font-semibold text-blue-700 hover:text-blue-800 underline disabled:opacity-50 cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold disabled:opacity-50 cursor-pointer transition-colors"
                   >
-                    {isAnalyzingBatchClass
-                      ? 'Sedang Menyusun Evaluasi...'
-                      : 'Evaluasi Capaian Semua Peserta Sekaligus'}
+                    <Sparkles className="w-3 h-3 text-amber-300" />
+                    <span>
+                      {isAnalyzingBatchClass
+                        ? 'Sedang Menyusun Evaluasi...'
+                        : 'Evaluasi Semua Peserta'}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -6673,12 +6838,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </code>
                           </td>
                           <td className="py-3.5 px-4 text-xs text-slate-700">
-                            {ex?.judul_ujian || `Ujian #${resItem.exam_id}`}
+                            <div className="font-semibold text-slate-900">
+                              {ex?.judul_ujian || `Ujian #${resItem.exam_id}`}
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-800 font-mono font-bold border border-indigo-200">
+                                {resItem.kode_soal ||
+                                  st?.kode_soal ||
+                                  ex?.kode_paket ||
+                                  'PAKET-A'}
+                              </span>
+                              <span>·</span>
+                              <span>{getEffectiveMataPelajaran(ex)}</span>
+                            </div>
                           </td>
-                          <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold text-slate-900">
-                            {resItem.skor_angka}
-                            <span className="text-xs font-normal text-slate-400">
-                              /100
+                          <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-1 rounded-lg border text-sm font-extrabold ${
+                                resItem.skor_angka >= 85
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : resItem.skor_angka >= 70
+                                  ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                  : resItem.skor_angka >= 55
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : 'bg-rose-50 text-rose-800 border-rose-200'
+                              }`}
+                            >
+                              {resItem.skor_angka}
+                              <span className="text-[11px] font-normal opacity-75 ml-0.5">
+                                /100
+                              </span>
                             </span>
                           </td>
                           <td className="py-3.5 px-4 text-xs font-mono tabular-nums">
@@ -6693,13 +6882,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             )}
                           </td>
                           <td className="py-3.5 px-4 text-xs">
+                            <div className="font-bold text-slate-800">
+                              {resItem.analisis_ai?.kategori_nilai ||
+                                (resItem.skor_angka >= 85
+                                  ? 'Sangat Baik (A)'
+                                  : resItem.skor_angka >= 70
+                                  ? 'Baik (B)'
+                                  : resItem.skor_angka >= 55
+                                  ? 'Cukup (C)'
+                                  : 'Perlu Bimbingan (D)')}
+                            </div>
                             {hasAi ? (
-                              <span className="text-emerald-700 font-medium">
-                                Tersedia · {resItem.analisis_ai?.kategori_nilai}
+                              <span className="text-[11px] text-emerald-700 font-semibold">
+                                Evaluasi LOTS/HOTS Tersedia
                               </span>
                             ) : (
-                              <span className="text-slate-500">
-                                Belum Dievaluasi
+                              <span className="text-[11px] text-slate-500">
+                                {resItem.skor_angka >= 70
+                                  ? 'Tuntas (≥70)'
+                                  : 'Perlu Remedial (<70)'}
                               </span>
                             )}
                           </td>
@@ -6948,6 +7149,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 };

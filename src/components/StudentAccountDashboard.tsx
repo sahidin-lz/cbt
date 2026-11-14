@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Home,
   Calendar,
@@ -21,9 +21,11 @@ import {
   Save,
   Eye,
   EyeOff,
-  Check,
-  FileText,
-  Layers,
+  BarChart3,
+  Target,
+  TrendingUp,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -33,6 +35,8 @@ import {
   AnalisisAI,
 } from '../types/cbt';
 import {
+  calculateExamScore,
+  calculateStudentLotsVsHots,
   extractTingkatFromKelas,
   getEffectiveMataPelajaran,
   getStudentAbsenInfoInClass,
@@ -54,6 +58,7 @@ import {
 export type StudentDashboardMenu =
   | 'beranda'
   | 'jadwal'
+  | 'kemampuan'
   | 'hasil'
   | 'riwayat'
   | 'profil';
@@ -90,6 +95,25 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
 }) => {
   const [activeMenu, setActiveMenu] = useState<StudentDashboardMenu>(initialMenu);
   const [studentMapelFilter, setStudentMapelFilter] = useState<string>('SEMUA');
+
+  // Collapsible / Minimizable Left Sidebar State for Student Portal
+  const [isSidebarMinimized, setIsSidebarMinimized] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('cbt_student_sidebar_minimized') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        'cbt_student_sidebar_minimized',
+        String(isSidebarMinimized)
+      );
+    } catch {}
+  }, [isSidebarMinimized]);
 
   // Modal state for entering Teacher's Exam Session Token when clicking "Mulai Ujian"
   const [tokenModalExam, setTokenModalExam] = useState<ExamItem | null>(null);
@@ -237,6 +261,263 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     );
     return Math.round((sum / studentResults.length) * 10) / 10;
   }, [studentResults]);
+
+  const assignedPackageBadge =
+    student.kode_soal ||
+    proportionalAlloc?.packageCode ||
+    student.variasi_paket ||
+    'PAKET-A';
+
+  // Comprehensive Student Progress & Competency Profile Analytics
+  const studentCompetencyProfile = useMemo(() => {
+    const totalAssigned = Math.max(1, classMatchedExams.length);
+    const completedCount = studentResults.length;
+    const completionPercent = Math.min(
+      100,
+      Math.round((completedCount / totalAssigned) * 100)
+    );
+
+    let inProgressCount = 0;
+    classMatchedExams.forEach((ex) => {
+      if (!completedExamIds.has(Number(ex.id))) {
+        const prog = hasSavedProgressForExam(ex.id);
+        if (prog.hasProgress) inProgressCount += 1;
+      }
+    });
+
+    const scores = studentResults.map((r) => Number(r.skor_angka) || 0);
+    const avg =
+      scores.length > 0
+        ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) /
+          10
+        : 0;
+    const highest = scores.length > 0 ? Math.max(...scores) : 0;
+    const lowest = scores.length > 0 ? Math.min(...scores) : 0;
+    const passKkmCount = scores.filter((s) => s >= 70).length;
+    const passKkmRate =
+      scores.length > 0 ? Math.round((passKkmCount / scores.length) * 100) : 0;
+
+    let totalLotsSum = 0;
+    let totalHotsSum = 0;
+    let totalPgTunggalSum = 0;
+    let totalPgTunggalCount = 0;
+    let totalPgKompleksSum = 0;
+    let totalPgKompleksCount = 0;
+
+    const subjectRows = classMatchedExams.map((ex) => {
+      const mapel = getEffectiveMataPelajaran(ex);
+      const resItem =
+        studentResults.find((r) => Number(r.exam_id) === Number(ex.id)) || null;
+      const examQs = questions.filter((q) => Number(q.exam_id) === Number(ex.id));
+      const prog = hasSavedProgressForExam(ex.id);
+
+      let lotsScore = 0;
+      let hotsScore = 0;
+      let pgScore = 0;
+      let pgkScore = 0;
+
+      if (resItem) {
+        const syncedAns = resolveSyncedStudentAnswersForExam({
+          questions: examQs,
+          jawabanSiswa: resItem.jawaban_siswa || {},
+          student,
+          exam: ex,
+          recordedScore: resItem.skor_angka,
+        });
+
+        const lh = calculateStudentLotsVsHots(
+          examQs,
+          syncedAns,
+          resItem.skor_angka,
+          localAiOverrides[resItem.id] || resItem.analisis_ai
+        );
+        lotsScore = lh.lotsScore;
+        hotsScore = lh.hotsScore;
+
+        const pgQs = examQs.filter((q) => q.tipe_soal !== 'Kompleks');
+        const pgkQs = examQs.filter((q) => q.tipe_soal === 'Kompleks');
+
+        if (pgQs.length > 0 && Object.keys(syncedAns).length > 0) {
+          pgScore = calculateExamScore(pgQs, syncedAns).normalizedScore;
+        } else {
+          pgScore = lotsScore;
+        }
+
+        if (pgkQs.length > 0 && Object.keys(syncedAns).length > 0) {
+          pgkScore = calculateExamScore(pgkQs, syncedAns).normalizedScore;
+        } else {
+          pgkScore = hotsScore;
+        }
+
+        totalLotsSum += lotsScore;
+        totalHotsSum += hotsScore;
+        totalPgTunggalSum += pgScore;
+        totalPgTunggalCount += 1;
+        totalPgKompleksSum += pgkScore;
+        totalPgKompleksCount += 1;
+      }
+
+      const scoreVal = resItem ? Number(resItem.skor_angka) || 0 : null;
+      let predikat = 'Belum Ujian';
+      let predikatTone = 'bg-slate-100 text-slate-700 border-slate-200';
+      if (scoreVal !== null) {
+        if (scoreVal >= 85) {
+          predikat = 'Sangat Baik (A)';
+          predikatTone = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+        } else if (scoreVal >= 70) {
+          predikat = 'Baik / Tuntas (B)';
+          predikatTone = 'bg-blue-100 text-blue-800 border-blue-300';
+        } else if (scoreVal >= 55) {
+          predikat = 'Cukup (C)';
+          predikatTone = 'bg-amber-100 text-amber-800 border-amber-300';
+        } else {
+          predikat = 'Perlu Penguatan (D)';
+          predikatTone = 'bg-rose-100 text-rose-800 border-rose-300';
+        }
+      }
+
+      return {
+        exam: ex,
+        mapel,
+        packageCode: ex.kode_paket || assignedPackageBadge,
+        questionCount: examQs.length,
+        resItem,
+        scoreVal,
+        lotsScore: Math.round(lotsScore * 10) / 10,
+        hotsScore: Math.round(hotsScore * 10) / 10,
+        pgScore: Math.round(pgScore * 10) / 10,
+        pgkScore: Math.round(pgkScore * 10) / 10,
+        isPassedKkm: scoreVal !== null && scoreVal >= 70,
+        inProgress: !resItem && prog.hasProgress,
+        answeredDraftCount: prog.answeredCount,
+        predikat,
+        predikatTone,
+      };
+    });
+
+    const overallLots =
+      completedCount > 0
+        ? Math.round((totalLotsSum / completedCount) * 10) / 10
+        : 0;
+    const overallHots =
+      completedCount > 0
+        ? Math.round((totalHotsSum / completedCount) * 10) / 10
+        : 0;
+    const overallPg =
+      totalPgTunggalCount > 0
+        ? Math.round((totalPgTunggalSum / totalPgTunggalCount) * 10) / 10
+        : 0;
+    const overallPgk =
+      totalPgKompleksCount > 0
+        ? Math.round((totalPgKompleksSum / totalPgKompleksCount) * 10) / 10
+        : 0;
+
+    let competencyTitle = 'Siap Memulai Evaluasi Kemampuan';
+    let competencyBadge = 'BELUM ADA SKOR';
+    let competencyTone =
+      'from-slate-700 to-slate-900 text-white border-slate-600';
+    let narrative =
+      'Selesaikan minimal satu paket ujian aktif pada menu Jadwal Ujian untuk melihat peta kemampuan kognitif LOTS, HOTS, serta profil kekuatan akademik Anda secara otomatis.';
+    const strengths: string[] = [];
+    const recommendations: string[] = [];
+
+    if (completedCount > 0) {
+      if (avg >= 85 && overallHots >= 80) {
+        competencyTitle = 'Kompetensi Analitis & Penalaran Kritis Unggul';
+        competencyBadge = 'PREDIKAT A · SANGAT KOMPETEN';
+        competencyTone =
+          'from-emerald-600 to-teal-700 text-white border-emerald-500';
+        narrative = `Capaian rata-rata akademik Anda (${avg}/100) menunjukkan penguasaan konsep dasar (${overallLots}%) dan daya analisis kasus tingkat tinggi HOTS (${overallHots}%) yang sangat matang dan konsisten.`;
+        strengths.push(
+          `Penguasaan konsep dasar (LOTS ${overallLots}%) sangat kokoh dan presisi.`,
+          `Kemampuan menelaah wacana & studi kasus kritis (HOTS ${overallHots}%) berada di atas rata-rata standar ketuntasan.`,
+          `Ketepatan menjawab soal Pilihan Ganda Kompleks mencapai ${overallPgk}%.`
+        );
+        recommendations.push(
+          'Pertahankan ketelitian membaca stimulus wacana panjang pada soal-soal HOTS lintas mata pelajaran.',
+          'Jadikan rangkuman pembahasan PDF sebagai referensi pengayaan materi tingkat lanjut.'
+        );
+      } else if (avg >= 70) {
+        competencyTitle = 'Kompetensi Konsep Dasar Kuat & Tuntas KKM';
+        competencyBadge = 'PREDIKAT B · KOMPETEN / TUNTAS';
+        competencyTone =
+          'from-blue-600 to-indigo-700 text-white border-blue-500';
+        narrative = `Anda telah mencapai ketuntasan akademik (${avg}/100) dengan pemahaman konsep dasar LOTS sebesar ${overallLots}% dan penalaran analitis HOTS sebesar ${overallHots}%.`;
+        strengths.push(
+          `Pemahaman definisi, fakta, dan konsep dasar materi (${overallLots}%) sudah tuntas di atas KKM.`,
+          `Ketepatan menjawab Pilihan Ganda Tunggal mencapai ${overallPg}%.`
+        );
+        if (overallHots < overallLots - 5) {
+          recommendations.push(
+            `Tingkatkan latihan menganalisis soal studi kasus (HOTS saat ini ${overallHots}%) agar seimbang dengan pemahaman konsep dasar Anda.`,
+            `Perhatikan soal Pilihan Ganda Kompleks (${overallPgk}%) yang membutuhkan lebih dari satu jawaban benar.`
+          );
+        } else {
+          recommendations.push(
+            'Perkuat kembali topik-topik spesifik yang masih bernilai di bawah 85 melalui pembahasan PDF.'
+          );
+        }
+      } else if (avg >= 55) {
+        competencyTitle = 'Kompetensi Berkembang — Perlu Penguatan Analitis';
+        competencyBadge = 'PREDIKAT C · CUKUP / BERKEMBANG';
+        competencyTone =
+          'from-amber-500 to-orange-600 text-white border-amber-400';
+        narrative = `Skor rata-rata Anda (${avg}/100) menunjukkan fondasi konsep dasar sudah mulai terbentuk (${overallLots}%), namun masih memerlukan penguatan pada soal analisis wacana HOTS (${overallHots}%).`;
+        strengths.push(
+          `Sudah menyelesaikan ${completedCount} dari ${totalAssigned} paket ujian (${completionPercent}% progres).`,
+          `Mampu menjawab sebagian soal konsep dasar (LOTS ${overallLots}%) dengan benar.`
+        );
+        recommendations.push(
+          'Pelajari kembali konsep kunci pada setiap mata pelajaran sebelum memilih opsi jawaban.',
+          'Pada soal PG Kompleks, hindari mencentang seluruh opsi sekaligus; pilih 2–3 pernyataan yang paling relevan dengan wacana.'
+        );
+      } else {
+        competencyTitle = 'Perlu Pendampingan & Penguatan Konsep Dasar';
+        competencyBadge = 'PREDIKAT D · PERLU REMEDIAL';
+        competencyTone = 'from-rose-600 to-red-700 text-white border-rose-500';
+        narrative = `Capaian rata-rata saat ini (${avg}/100) masih berada di bawah batas KKM (70). Fokuskan belajar pada penguasaan konsep dasar (LOTS ${overallLots}%) dan latihan membaca soal bertahap.`;
+        strengths.push(
+          `Partisipasi aktif menyelesaikan ${completedCount} paket evaluasi CBT.`
+        );
+        recommendations.push(
+          'Unduh PDF Pembahasan Soal pada menu Hasil Ujian untuk mempelajari kunci jawaban yang tepat.',
+          'Diskusikan butir soal yang terasa sulit bersama Guru mata pelajaran untuk program remedial.'
+        );
+      }
+    }
+
+    return {
+      totalAssigned,
+      completedCount,
+      completionPercent,
+      inProgressCount,
+      avg,
+      highest,
+      lowest,
+      passKkmCount,
+      passKkmRate,
+      overallLots,
+      overallHots,
+      overallPg,
+      overallPgk,
+      subjectRows,
+      competencyTitle,
+      competencyBadge,
+      competencyTone,
+      narrative,
+      strengths,
+      recommendations,
+    };
+  }, [
+    classMatchedExams,
+    studentResults,
+    completedExamIds,
+    hasSavedProgressForExam,
+    questions,
+    student,
+    localAiOverrides,
+    assignedPackageBadge,
+  ]);
 
   // Announcements from active exams or default school announcement
   const announcements = useMemo(() => {
@@ -409,175 +690,371 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     });
   };
 
-  const assignedPackageBadge =
-    student.kode_soal ||
-    proportionalAlloc?.packageCode ||
-    student.variasi_paket ||
-    'PAKET-A';
+  const studentSidebarMenus = [
+    {
+      id: 'beranda' as const,
+      num: '01',
+      title: 'Beranda Siswa',
+      subtitle: 'Ringkasan & Info Aktif',
+      badge: `${activeClassExams.length} Aktif`,
+      icon: Home,
+      activeClass:
+        'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-500 shadow-xs ring-2 ring-blue-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-blue-50 text-blue-600 border border-blue-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-blue-50 text-blue-700 border border-blue-200/70',
+    },
+    {
+      id: 'jadwal' as const,
+      num: '02',
+      title: 'Jadwal & Ujian',
+      subtitle: `${activeClassExams.length} Sesi Dibuka`,
+      badge: `${classMatchedExams.length}`,
+      icon: Calendar,
+      activeClass:
+        'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-xs ring-2 ring-emerald-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-emerald-50 text-emerald-600 border border-emerald-200/70',
+      badgeActive: 'bg-amber-400 text-slate-950',
+      badgeIdle: 'bg-emerald-100 text-emerald-800',
+    },
+    {
+      id: 'kemampuan' as const,
+      num: '03',
+      title: 'Laporan Kemampuan',
+      subtitle: 'Progres & Peta Kognitif',
+      badge: `${studentCompetencyProfile.completionPercent}%`,
+      icon: BarChart3,
+      activeClass:
+        'bg-gradient-to-r from-indigo-600 via-purple-600 to-violet-700 text-white border-indigo-500 shadow-xs ring-2 ring-purple-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-indigo-600 text-white',
+      badgeActive: 'bg-amber-400 text-slate-950',
+      badgeIdle: 'bg-purple-100 text-purple-800 border border-purple-200',
+    },
+    {
+      id: 'hasil' as const,
+      num: '04',
+      title: 'Hasil & Nilai PDF',
+      subtitle: 'Skor & Pembahasan',
+      badge: `${studentResults.length}`,
+      icon: Award,
+      activeClass:
+        'bg-gradient-to-r from-violet-600 to-purple-700 text-white border-violet-500 shadow-xs ring-2 ring-violet-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-violet-50 text-violet-600 border border-violet-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-violet-100 text-violet-800',
+    },
+    {
+      id: 'riwayat' as const,
+      num: '05',
+      title: 'Riwayat Ujian',
+      subtitle: 'Log Status Sesi',
+      badge: `${studentCompetencyProfile.completedCount}/${studentCompetencyProfile.totalAssigned}`,
+      icon: History,
+      activeClass:
+        'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-500 shadow-xs ring-2 ring-amber-300/60',
+      iconBoxActive: 'bg-white/20 text-white',
+      iconBoxIdle: 'bg-amber-50 text-amber-600 border border-amber-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-amber-50 text-amber-800 border border-amber-200/70',
+    },
+    {
+      id: 'profil' as const,
+      num: '06',
+      title: 'Profil & Password',
+      subtitle: 'Atur Token Login',
+      badge: 'AKUN',
+      icon: User,
+      activeClass:
+        'bg-gradient-to-r from-cyan-600 to-blue-700 text-white border-cyan-500 shadow-xs ring-2 ring-cyan-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-cyan-50 text-cyan-600 border border-cyan-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-cyan-50 text-cyan-800 border border-cyan-200/70',
+    },
+  ];
+
+  const activeStudentMenuObj =
+    studentSidebarMenus.find((m) => m.id === activeMenu) ||
+    studentSidebarMenus[0];
 
   return (
-    <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 space-y-6">
-      {/* Top Institutional Student Account Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white rounded-2xl border border-indigo-800/80 overflow-hidden shadow-sm">
-        <div className="h-1.5 w-full bg-gradient-to-r from-amber-400 via-emerald-400 via-cyan-400 to-blue-500" />
-        <div className="p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Akun Siswa Terverifikasi</span>
-              </span>
-              <span className="px-2.5 py-0.5 rounded-md font-mono font-bold bg-indigo-500/30 text-amber-300 border border-indigo-400/30">
-                Kelas {student.kelas} · No. Absen #{absenInfo.noAbsen} ({absenInfo.ganjilGenapLabel})
-              </span>
-              {student.nisn && (
-                <span className="px-2.5 py-0.5 rounded-md font-mono text-blue-200 bg-white/10 border border-white/15">
-                  NISN: {student.nisn}
-                </span>
+    <div className="max-w-[1440px] mx-auto w-full py-5 px-3 sm:px-6">
+      <div className="flex flex-col lg:flex-row items-start gap-5">
+        {/* ================================================================= */}
+        {/* LEFT COLLAPSIBLE / MINIMIZABLE SIDEBAR NAVIGATION (PORTAL SISWA)  */}
+        {/* ================================================================= */}
+        <aside
+          aria-label="Menu Utama Portal Siswa Samping Kiri"
+          className={`w-full lg:sticky lg:top-20 shrink-0 transition-all duration-300 ease-in-out ${
+            isSidebarMinimized ? 'lg:w-20' : 'lg:w-72'
+          }`}
+        >
+          <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+            {/* Sidebar Header with Minimize / Expand Toggle */}
+            <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white p-3.5 border-b border-indigo-900 flex items-center justify-between gap-2">
+              {!isSidebarMinimized && (
+                <div className="min-w-0">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300">
+                    Menu Utama Siswa
+                  </div>
+                  <div className="text-xs font-bold text-white truncate">
+                    Progres Ujian: {studentCompetencyProfile.completionPercent}%
+                  </div>
+                </div>
               )}
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono font-extrabold bg-amber-400 text-slate-950">
-                <Shuffle className="w-3 h-3" />
-                <span>{assignedPackageBadge} ({absenInfo.ganjilGenapLabel})</span>
-              </span>
-            </div>
-            <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white">
-              Halo, {student.nama}
-            </h1>
-            <p className="text-xs text-blue-200/90 max-w-2xl leading-relaxed">
-              Selamat datang di Portal Akun Peserta CBT Sosiologi. Pantau jadwal
-              ujian aktif, masukkan <strong>Token Sesi Ujian</strong> dari Guru
-              untuk mulai mengerjakan, lihat hasil nilai &amp; pembahasan PDF,
-              atau atur password login Anda.
-            </p>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <div className="px-3.5 py-2 rounded-xl bg-white/10 border border-white/15 text-xs">
-              <div className="text-[10px] uppercase tracking-wider text-blue-200 font-semibold">
-                Password / Token Login Saya
-              </div>
-              <div className="font-mono font-extrabold text-sm text-amber-300 mt-0.5 flex items-center gap-2">
-                <span>{student.password_login || student.token_ujian}</span>
+              {/* Desktop Minimize / Expand Button */}
+              <button
+                type="button"
+                onClick={() => setIsSidebarMinimized((prev) => !prev)}
+                title={
+                  isSidebarMinimized
+                    ? 'Buka / Perlebar Menu Samping Kiri'
+                    : 'Minimize / Kecilkan Menu Samping Kiri'
+                }
+                className={`hidden lg:inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white font-bold text-xs transition-all cursor-pointer ${
+                  isSidebarMinimized ? 'w-full py-2 px-2 flex-col' : 'px-2.5 py-1.5'
+                }`}
+              >
+                {isSidebarMinimized ? (
+                  <>
+                    <PanelLeftOpen className="w-4 h-4 text-amber-300" />
+                    <span className="text-[9px] uppercase tracking-wider text-amber-300">
+                      Buka
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <PanelLeftClose className="w-4 h-4 text-amber-300" />
+                    <span className="text-[11px]">Minimize</span>
+                  </>
+                )}
+              </button>
+
+              {/* Mobile / Tablet Open-Close Menu Button */}
+              <button
+                type="button"
+                onClick={() => setIsMobileSidebarOpen((prev) => !prev)}
+                className="lg:hidden inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-400 text-slate-950 font-extrabold text-xs cursor-pointer"
+              >
+                {isMobileSidebarOpen ? (
+                  <>
+                    <PanelLeftClose className="w-4 h-4" />
+                    <span>Tutup Menu</span>
+                  </>
+                ) : (
+                  <>
+                    <PanelLeftOpen className="w-4 h-4" />
+                    <span>Buka Menu ({activeStudentMenuObj.title})</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Sidebar Menu Items List */}
+            <nav
+              aria-label="Navigasi Portal Akun Siswa"
+              className={`${
+                isMobileSidebarOpen ? 'block' : 'hidden lg:block'
+              } p-2.5 space-y-1.5 bg-gradient-to-b from-slate-50/70 to-white`}
+            >
+              {studentSidebarMenus.map((item) => {
+                const Icon = item.icon;
+                const isSelected = activeMenu === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    title={`${item.num}. ${item.title} — ${item.subtitle} (${item.badge})`}
+                    onClick={() => {
+                      setActiveMenu(item.id);
+                      setIsMobileSidebarOpen(false);
+                    }}
+                    className={`w-full rounded-xl border transition-all cursor-pointer flex items-center ${
+                      isSidebarMinimized
+                        ? 'lg:justify-center lg:p-2.5 p-3 justify-between'
+                        : 'p-2.5 justify-between gap-2.5'
+                    } ${
+                      isSelected
+                        ? item.activeClass
+                        : 'bg-white hover:bg-slate-100/80 text-slate-800 border-slate-200/90 hover:border-blue-300'
+                    }`}
+                  >
+                    <div
+                      className={`flex items-center ${
+                        isSidebarMinimized
+                          ? 'lg:flex-col lg:gap-1 gap-2.5'
+                          : 'gap-2.5 min-w-0'
+                      }`}
+                    >
+                      <div
+                        className={`p-2 rounded-xl shrink-0 ${
+                          isSelected ? item.iconBoxActive : item.iconBoxIdle
+                        }`}
+                      >
+                        <Icon className="w-4 h-4" />
+                      </div>
+
+                      {isSidebarMinimized ? (
+                        <span
+                          className={`hidden lg:block text-[10px] font-mono font-extrabold leading-none ${
+                            isSelected ? 'text-white' : 'text-slate-600'
+                          }`}
+                        >
+                          {item.num}
+                        </span>
+                      ) : null}
+
+                      <div
+                        className={`text-left min-w-0 ${
+                          isSidebarMinimized ? 'lg:hidden block' : 'block'
+                        }`}
+                      >
+                        <div className="text-xs font-extrabold leading-snug">
+                          {item.num}. {item.title}
+                        </div>
+                        <div
+                          className={`text-[11px] leading-tight mt-0.5 ${
+                            isSelected ? 'text-white/85' : 'text-slate-500'
+                          }`}
+                        >
+                          {item.subtitle}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-mono tabular-nums rounded-md font-extrabold shrink-0 ${
+                        isSidebarMinimized ? 'lg:hidden inline-block' : 'inline-block'
+                      } ${isSelected ? item.badgeActive : item.badgeIdle}`}
+                    >
+                      {item.badge}
+                    </span>
+                  </button>
+                );
+              })}
+
+              {/* Sidebar Bottom Quick Actions (Download Kartu PDF & Logout) */}
+              <div className="pt-2.5 mt-2 border-t border-slate-200 space-y-1.5">
                 <button
                   type="button"
-                  onClick={() => setActiveMenu('profil')}
-                  className="text-[10px] font-sans font-semibold px-2 py-0.5 rounded bg-white/15 hover:bg-white/25 text-white cursor-pointer"
+                  onClick={() =>
+                    downloadStudentTokenCardsPdf([student], {
+                      kelasLabel: `Kartu Akun & Nilai - ${student.nama}`,
+                      exams,
+                      questions,
+                      results,
+                      allStudents,
+                      includeSummaryPage: false,
+                    })
+                  }
+                  title="Unduh Kartu Akun & Token (.PDF)"
+                  className={`w-full rounded-xl border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-900 font-bold text-xs transition-colors cursor-pointer flex items-center ${
+                    isSidebarMinimized
+                      ? 'lg:justify-center lg:p-2.5 px-3 py-2 gap-2'
+                      : 'px-3 py-2 gap-2'
+                  }`}
                 >
-                  Ubah
+                  <Download className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className={isSidebarMinimized ? 'lg:hidden' : ''}>
+                    Unduh Kartu &amp; Token (.PDF)
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  title="Keluar dari Akun Siswa"
+                  className={`w-full rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition-colors cursor-pointer flex items-center ${
+                    isSidebarMinimized
+                      ? 'lg:justify-center lg:p-2.5 px-3 py-2 gap-2'
+                      : 'px-3 py-2 gap-2'
+                  }`}
+                >
+                  <LogOut className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span className={isSidebarMinimized ? 'lg:hidden' : ''}>
+                    Keluar Akun Siswa
+                  </span>
                 </button>
               </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={onLogout}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 border border-rose-500 transition-colors cursor-pointer shadow-xs"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Logout / Keluar</span>
-            </button>
+            </nav>
           </div>
-        </div>
+        </aside>
 
-        {/* 6-Menu Student Navigation Bar */}
-        <div className="px-5 sm:px-6 py-3 bg-slate-950/50 border-t border-indigo-900/80 flex flex-wrap items-center justify-between gap-2">
-          <nav
-            aria-label="Menu Portal Akun Siswa"
-            className="flex flex-wrap items-center gap-1.5"
-          >
-            <button
-              type="button"
-              onClick={() => setActiveMenu('beranda')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeMenu === 'beranda'
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs ring-1 ring-blue-400/50'
-                  : 'text-blue-100 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              <Home className="w-3.5 h-3.5" />
-              <span>Dashboard / Beranda</span>
-            </button>
+        {/* ================================================================= */}
+        {/* RIGHT MAIN WORKSPACE AREA (PORTAL SISWA)                          */}
+        {/* ================================================================= */}
+        <div className="flex-1 min-w-0 w-full space-y-6">
+          {/* Compact Institutional Student Account Banner */}
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white">
+              <div className="h-1.5 w-full bg-gradient-to-r from-amber-400 via-emerald-400 via-cyan-400 to-blue-500" />
+              <div className="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex items-start gap-3 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsSidebarMinimized((prev) => !prev)}
+                    title={
+                      isSidebarMinimized
+                        ? 'Buka Lebar Menu Samping Kiri'
+                        : 'Minimize / Kecilkan Menu Samping Kiri'
+                    }
+                    className="hidden lg:inline-flex items-center justify-center p-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-amber-300 transition-colors cursor-pointer shrink-0 mt-0.5"
+                  >
+                    {isSidebarMinimized ? (
+                      <PanelLeftOpen className="w-4 h-4" />
+                    ) : (
+                      <PanelLeftClose className="w-4 h-4" />
+                    )}
+                  </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveMenu('jadwal')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeMenu === 'jadwal'
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xs ring-1 ring-emerald-400/50'
-                  : 'text-blue-100 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Jadwal &amp; Daftar Ujian</span>
-              {activeClassExams.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-extrabold bg-amber-400 text-slate-950">
-                  {activeClassExams.length}
-                </span>
-              )}
-            </button>
+                  <div className="space-y-1.5 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>Akun Siswa Terverifikasi</span>
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-lg font-mono font-bold bg-indigo-500/30 text-amber-300 border border-indigo-400/30">
+                        Kelas {student.kelas} · Absen #{absenInfo.noAbsen} ({absenInfo.ganjilGenapLabel})
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg font-mono font-extrabold bg-amber-400 text-slate-950">
+                        <Shuffle className="w-3 h-3" />
+                        <span>{assignedPackageBadge}</span>
+                      </span>
+                    </div>
+                    <h1 className="text-lg sm:text-xl font-extrabold tracking-tight text-white">
+                      Halo, {student.nama} —{' '}
+                      <span className="text-amber-300">
+                        {activeStudentMenuObj.title}
+                      </span>
+                    </h1>
+                  </div>
+                </div>
 
-            <button
-              type="button"
-              onClick={() => setActiveMenu('hasil')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeMenu === 'hasil'
-                  ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-xs ring-1 ring-violet-400/50'
-                  : 'text-blue-100 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              <Award className="w-3.5 h-3.5" />
-              <span>Hasil Ujian / Nilai</span>
-              {studentResults.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-extrabold bg-white/20 text-white">
-                  {studentResults.length}
-                </span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveMenu('riwayat')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeMenu === 'riwayat'
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-xs ring-1 ring-amber-400/50'
-                  : 'text-blue-100 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              <History className="w-3.5 h-3.5" />
-              <span>Riwayat Ujian</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveMenu('profil')}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeMenu === 'profil'
-                  ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-xs ring-1 ring-cyan-400/50'
-                  : 'text-blue-100 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              <User className="w-3.5 h-3.5" />
-              <span>Profil &amp; Password</span>
-            </button>
-          </nav>
-
-          <button
-            type="button"
-            onClick={() =>
-              downloadStudentTokenCardsPdf([student], {
-                kelasLabel: `Kartu Akun & Nilai - ${student.nama}`,
-                exams,
-                results,
-                includeSummaryPage: false,
-              })
-            }
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-amber-300 bg-white/10 hover:bg-white/15 border border-white/15 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Unduh Kartu Akun (.PDF)</span>
-          </button>
-        </div>
-      </div>
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <div className="px-3.5 py-2 rounded-xl bg-white/10 border border-white/15 text-xs backdrop-blur-xs">
+                    <div className="text-[10px] uppercase tracking-wider text-blue-200 font-semibold">
+                      Password / Token Login Saya
+                    </div>
+                    <div className="font-mono font-extrabold text-sm text-amber-300 mt-0.5 flex items-center gap-2">
+                      <span>{student.password_login || student.token_ujian}</span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveMenu('profil')}
+                        className="text-[10px] font-sans font-bold px-2 py-0.5 rounded-md bg-white/15 hover:bg-white/25 text-white cursor-pointer transition-colors"
+                      >
+                        Ubah
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
       {/* Warning if student is currently blocked by Anti-Cheat */}
       {student.status_ujian === 'Diblokir' && (
@@ -604,67 +1081,227 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       {/* =================================================================== */}
       {activeMenu === 'beranda' && (
         <div className="space-y-6">
-          {/* KPI Summary Cards */}
+          {/* 4 Colorful KPI Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white border border-blue-200 rounded-xl p-4 shadow-2xs">
-              <div className="flex items-center justify-between text-xs font-bold text-blue-700">
+            <div className="bg-gradient-to-br from-blue-50/90 via-white to-indigo-50/50 border border-blue-200/90 rounded-2xl p-4 shadow-2xs">
+              <div className="flex items-center justify-between text-xs font-bold text-blue-800">
                 <span>Ujian Aktif Hari Ini</span>
-                <Calendar className="w-4 h-4 text-blue-600" />
+                <span className="p-1.5 rounded-lg bg-blue-100 text-blue-700">
+                  <Calendar className="w-4 h-4" />
+                </span>
               </div>
-              <div className="text-2xl font-extrabold font-mono text-slate-900 mt-1.5">
+              <div className="text-2xl font-extrabold font-mono tabular-nums text-blue-950 mt-2">
                 {activeClassExams.length}{' '}
-                <span className="text-xs font-sans font-normal text-slate-500">
+                <span className="text-xs font-sans font-semibold text-blue-700">
                   sesi dibuka
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
+              <p className="text-[11px] text-slate-600 mt-1">
                 Khusus Kelas {student.kelas} (Tingkat {studentTingkat})
               </p>
             </div>
 
-            <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-2xs">
-              <div className="flex items-center justify-between text-xs font-bold text-emerald-700">
-                <span>Ujian Selesai Dikerjakan</span>
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              </div>
-              <div className="text-2xl font-extrabold font-mono text-slate-900 mt-1.5">
-                {studentResults.length}{' '}
-                <span className="text-xs font-sans font-normal text-slate-500">
-                  ujian selesai
+            <div className="bg-gradient-to-br from-emerald-50/90 via-white to-teal-50/50 border border-emerald-200/90 rounded-2xl p-4 shadow-2xs">
+              <div className="flex items-center justify-between text-xs font-bold text-emerald-800">
+                <span>Progres Penyelesaian</span>
+                <span className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700">
+                  <CheckCircle2 className="w-4 h-4" />
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Dari total {classMatchedExams.length} paket ujian kelas
+              <div className="text-2xl font-extrabold font-mono tabular-nums text-emerald-950 mt-2">
+                {studentCompetencyProfile.completedCount}/
+                {studentCompetencyProfile.totalAssigned}{' '}
+                <span className="text-xs font-sans font-semibold text-emerald-700">
+                  ({studentCompetencyProfile.completionPercent}%)
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 mt-1">
+                {studentCompetencyProfile.passKkmCount} paket lulus KKM (&ge; 70)
               </p>
             </div>
 
-            <div className="bg-white border border-violet-200 rounded-xl p-4 shadow-2xs">
-              <div className="flex items-center justify-between text-xs font-bold text-violet-700">
-                <span>Rata-Rata Nilai Saya</span>
-                <Award className="w-4 h-4 text-violet-600" />
+            <div className="bg-gradient-to-br from-violet-50/90 via-white to-purple-50/50 border border-violet-200/90 rounded-2xl p-4 shadow-2xs">
+              <div className="flex items-center justify-between text-xs font-bold text-violet-800">
+                <span>Rata-Rata Nilai Akademik</span>
+                <span className="p-1.5 rounded-lg bg-violet-100 text-violet-700">
+                  <Award className="w-4 h-4" />
+                </span>
               </div>
-              <div className="text-2xl font-extrabold font-mono text-slate-900 mt-1.5">
+              <div className="text-2xl font-extrabold font-mono tabular-nums text-violet-950 mt-2">
                 {averageScore !== null ? `${averageScore}` : '-'}{' '}
-                <span className="text-xs font-sans font-normal text-slate-500">
+                <span className="text-xs font-sans font-semibold text-violet-700">
                   / 100
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Formula Penilaian Humanis PG &amp; PGK
+              <p className="text-[11px] text-slate-600 mt-1">
+                LOTS: {studentCompetencyProfile.overallLots}% · HOTS:{' '}
+                {studentCompetencyProfile.overallHots}%
               </p>
             </div>
 
-            <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-2xs">
-              <div className="flex items-center justify-between text-xs font-bold text-amber-800">
-                <span>Paket Proporsional Saya</span>
-                <Shuffle className="w-4 h-4 text-amber-600" />
+            <div className="bg-gradient-to-br from-amber-50/90 via-white to-orange-50/50 border border-amber-200/90 rounded-2xl p-4 shadow-2xs">
+              <div className="flex items-center justify-between text-xs font-bold text-amber-900">
+                <span>Paket Distribusi Soal</span>
+                <span className="p-1.5 rounded-lg bg-amber-100 text-amber-800">
+                  <Shuffle className="w-4 h-4" />
+                </span>
               </div>
-              <div className="text-xl font-extrabold font-mono text-indigo-900 mt-1.5">
+              <div className="text-xl font-extrabold font-mono text-amber-950 mt-2">
                 {assignedPackageBadge}
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Terkunci sinkron dengan bank soal
+              <p className="text-[11px] text-slate-600 mt-1">
+                Absen #{absenInfo.noAbsen} ({absenInfo.ganjilGenapLabel}) · Terkunci Presisi
               </p>
+            </div>
+          </div>
+
+          {/* Highlighted Dashboard Progres & Peta Kemampuan Siswa on Beranda */}
+          <div className="bg-white border border-indigo-200/90 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-indigo-900 via-purple-900 to-slate-900 px-6 py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                  <TrendingUp className="w-3.5 h-3.5" />
+                  <span>Ringkasan Progres Belajar &amp; Peta Kemampuan Siswa</span>
+                </div>
+                <h2 className="text-base sm:text-lg font-extrabold text-white mt-0.5">
+                  {studentCompetencyProfile.competencyTitle}
+                </h2>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="px-3 py-1 rounded-lg text-[11px] font-mono font-extrabold bg-white/15 border border-white/25 text-amber-300">
+                  {studentCompetencyProfile.competencyBadge}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveMenu('kemampuan')}
+                  className="px-3.5 py-2 rounded-xl text-xs font-extrabold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors cursor-pointer shadow-2xs"
+                >
+                  Buka Laporan Kemampuan Lengkap →
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+              <div className="lg:col-span-5 space-y-3">
+                <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+                  {studentCompetencyProfile.narrative}
+                </p>
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+                    <span>Progres Penyelesaian Paket Ujian Kelas</span>
+                    <span className="font-mono text-indigo-700">
+                      {studentCompetencyProfile.completedCount} /{' '}
+                      {studentCompetencyProfile.totalAssigned} Paket (
+                      {studentCompetencyProfile.completionPercent}%)
+                    </span>
+                  </div>
+                  <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-500 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.max(
+                          4,
+                          studentCompetencyProfile.completionPercent
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-200/80 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-bold text-blue-950">
+                    <span>Pemahaman Konsep Dasar (LOTS)</span>
+                    <span className="font-mono font-extrabold text-blue-700">
+                      {studentCompetencyProfile.overallLots}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-blue-200/70 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-600 rounded-full"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(0, studentCompetencyProfile.overallLots)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-[11px] text-blue-800/80">
+                    Penguasaan definisi, klasifikasi &amp; konsep esensial
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-purple-50/60 border border-purple-200/80 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-bold text-purple-950">
+                    <span>Penalaran Kritis &amp; Analisis (HOTS)</span>
+                    <span className="font-mono font-extrabold text-purple-700">
+                      {studentCompetencyProfile.overallHots}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-purple-200/70 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-purple-600 rounded-full"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(0, studentCompetencyProfile.overallHots)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-[11px] text-purple-800/80">
+                    Evaluasi studi kasus, wacana &amp; pemecahan masalah
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200/80 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-bold text-emerald-950">
+                    <span>Ketepatan Pilihan Ganda Tunggal</span>
+                    <span className="font-mono font-extrabold text-emerald-700">
+                      {studentCompetencyProfile.overallPg}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-emerald-200/70 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-600 rounded-full"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(0, studentCompetencyProfile.overallPg)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-[11px] text-emerald-800/80">
+                    Akurasi menjawab soal 1 kunci jawaban utama
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-950">
+                    <span>Ketepatan PG Kompleks (Multi-Opsi)</span>
+                    <span className="font-mono font-extrabold text-amber-800">
+                      {studentCompetencyProfile.overallPgk}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-amber-200/70 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-amber-500 rounded-full"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(0, studentCompetencyProfile.overallPgk)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-[11px] text-amber-900/80">
+                    Akurasi memilih kombinasi pernyataan benar
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1057,6 +1694,525 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 })}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* MENU 2B: DASHBOARD LAPORAN PROGRES & PETA KEMAMPUAN SISWA           */}
+      {/* =================================================================== */}
+      {activeMenu === 'kemampuan' && (
+        <div className="space-y-6">
+          {/* Header Banner & Ringkasan Diagnostik Kemampuan */}
+          <div className="bg-white border border-indigo-200/90 rounded-2xl overflow-hidden shadow-xs">
+            <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-900 px-6 py-5 text-white flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md font-extrabold uppercase tracking-wider bg-amber-400 text-slate-950">
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    <span>Dashboard Laporan Progres &amp; Kemampuan Siswa</span>
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-md font-mono font-bold bg-white/15 text-blue-200 border border-white/15">
+                    Kelas {student.kelas} · Paket {assignedPackageBadge}
+                  </span>
+                </div>
+                <h2 className="text-lg sm:text-xl font-extrabold text-white">
+                  Peta Kemampuan Kognitif, Progres Ujian &amp; Evaluasi Belajar — {student.nama}
+                </h2>
+                <p className="text-xs text-blue-200/90 max-w-3xl leading-relaxed">
+                  Laporan ini mencerminkan perkembangan kemampuan akademik Anda secara objektif berdasarkan hasil ujian yang telah diselesaikan, meliputi penguasaan konsep dasar (LOTS), penalaran analisis kritis (HOTS), serta ketepatan menjawab soal per mata pelajaran.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <select
+                  aria-label="Filter Mata Pelajaran Laporan Kemampuan"
+                  value={studentMapelFilter}
+                  onChange={(e) => setStudentMapelFilter(e.target.value)}
+                  className="px-3.5 py-2 rounded-xl bg-white text-slate-900 text-xs font-bold border border-indigo-200 cursor-pointer"
+                >
+                  <option value="SEMUA">
+                    Semua Mata Pelajaran ({studentAvailableMapels.length} Mapel)
+                  </option>
+                  {studentAvailableMapels.map((mp) => (
+                    <option key={mp} value={mp}>
+                      Mapel: {mp}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadStudentTokenCardsPdf([student], {
+                      kelasLabel: `Rapor Kemampuan & Kartu Nilai - ${student.nama}`,
+                      exams,
+                      questions,
+                      results,
+                      allStudents,
+                      includeSummaryPage: false,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-300 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Unduh Rapor &amp; Kartu Nilai (.PDF)</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* 4 Kartu KPI Utama Kemampuan & Progres */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-white to-indigo-50/40 border border-blue-200/90">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
+                    Progres Penyelesaian Ujian
+                  </div>
+                  <div className="text-2xl font-extrabold font-mono tabular-nums text-blue-950 mt-1">
+                    {studentCompetencyProfile.completionPercent}%
+                    <span className="text-xs font-sans font-semibold text-blue-700 ml-1.5">
+                      ({studentCompetencyProfile.completedCount}/
+                      {studentCompetencyProfile.totalAssigned} Paket)
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-blue-200/70 rounded-full overflow-hidden mt-2.5">
+                    <div
+                      className="h-full bg-blue-600 rounded-full"
+                      style={{
+                        width: `${Math.max(
+                          5,
+                          studentCompetencyProfile.completionPercent
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 border border-emerald-200/90">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                    Rata-Rata Nilai &amp; Ketuntasan
+                  </div>
+                  <div className="text-2xl font-extrabold font-mono tabular-nums text-emerald-950 mt-1">
+                    {studentCompetencyProfile.completedCount > 0
+                      ? studentCompetencyProfile.avg
+                      : '-'}
+                    <span className="text-xs font-sans font-semibold text-emerald-700 ml-1">
+                      / 100
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-semibold text-emerald-800 mt-2">
+                    Lulus KKM (&ge;70):{' '}
+                    <span className="font-mono font-bold">
+                      {studentCompetencyProfile.passKkmCount}/
+                      {studentCompetencyProfile.completedCount || 0} ujian (
+                      {studentCompetencyProfile.passKkmRate}%)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50 via-white to-blue-50/40 border border-indigo-200/90">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
+                    Penguasaan Konsep Dasar (LOTS)
+                  </div>
+                  <div className="text-2xl font-extrabold font-mono tabular-nums text-indigo-950 mt-1">
+                    {studentCompetencyProfile.overallLots}%
+                  </div>
+                  <div className="text-[11px] text-indigo-800/80 mt-2">
+                    Pemahaman fakta, definisi &amp; konsep esensial (C1–C3)
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-50 via-white to-fuchsia-50/40 border border-purple-200/90">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800">
+                    Penalaran Kritis &amp; Analisis (HOTS)
+                  </div>
+                  <div className="text-2xl font-extrabold font-mono tabular-nums text-purple-950 mt-1">
+                    {studentCompetencyProfile.overallHots}%
+                  </div>
+                  <div className="text-[11px] text-purple-800/80 mt-2">
+                    Analisis studi kasus, evaluasi wacana &amp; sintesis (C4–C6)
+                  </div>
+                </div>
+              </div>
+
+              {/* Profil Predikat Kemampuan & Peta Dimensi Kognitif */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+                {/* Left: Diagnostic Competency Card */}
+                <div className="lg:col-span-5 rounded-2xl border border-indigo-200 bg-gradient-to-br from-slate-900 via-indigo-950 to-blue-950 text-white p-5 flex flex-col justify-between gap-4">
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                        <Target className="w-4 h-4" />
+                        <span>Profil Kemampuan Siswa</span>
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-extrabold bg-amber-400 text-slate-950">
+                        {studentCompetencyProfile.competencyBadge}
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-extrabold text-white leading-snug">
+                      {studentCompetencyProfile.competencyTitle}
+                    </h3>
+                    <p className="text-xs text-blue-100/90 leading-relaxed">
+                      {studentCompetencyProfile.narrative}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-3 border-t border-white/15 text-xs">
+                    <div className="p-3 rounded-xl bg-white/10 border border-white/10">
+                      <div className="text-[10px] uppercase tracking-wider text-blue-200">
+                        Skor Tertinggi Saya
+                      </div>
+                      <div className="text-lg font-extrabold font-mono text-emerald-300 mt-0.5">
+                        {studentCompetencyProfile.completedCount > 0
+                          ? `${studentCompetencyProfile.highest}/100`
+                          : '-'}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-white/10 border border-white/10">
+                      <div className="text-[10px] uppercase tracking-wider text-blue-200">
+                        Skor Terendah Saya
+                      </div>
+                      <div className="text-lg font-extrabold font-mono text-amber-300 mt-0.5">
+                        {studentCompetencyProfile.completedCount > 0
+                          ? `${studentCompetencyProfile.lowest}/100`
+                          : '-'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: 4 Visual Mastery Bars */}
+                <div className="lg:col-span-7 rounded-2xl border border-slate-200 bg-slate-50/70 p-5 space-y-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-slate-900">
+                        Peta Penguasaan Dimensi Kognitif &amp; Tipe Soal
+                      </h3>
+                      <p className="text-xs text-slate-600">
+                        Persentase ketepatan jawaban Anda berdasarkan tingkat berpikir dan jenis soal
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold bg-white border border-slate-200 text-slate-700">
+                      Standar KKM: 70%
+                    </span>
+                  </div>
+
+                  <div className="space-y-3.5">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-800">
+                          1. Pemahaman Konsep Dasar &amp; Aplikasi (LOTS C1–C3)
+                        </span>
+                        <span className="font-mono font-extrabold text-blue-700">
+                          {studentCompetencyProfile.overallLots}%
+                        </span>
+                      </div>
+                      <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.max(0, studentCompetencyProfile.overallLots)
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-800">
+                          2. Penalaran Kritis, Analisis Wacana &amp; Evaluasi (HOTS C4–C6)
+                        </span>
+                        <span className="font-mono font-extrabold text-purple-700">
+                          {studentCompetencyProfile.overallHots}%
+                        </span>
+                      </div>
+                      <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-purple-500 to-fuchsia-600 rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.max(0, studentCompetencyProfile.overallHots)
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-800">
+                          3. Akurasi Soal Pilihan Ganda Tunggal (1 Kunci Jawaban)
+                        </span>
+                        <span className="font-mono font-extrabold text-emerald-700">
+                          {studentCompetencyProfile.overallPg}%
+                        </span>
+                      </div>
+                      <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-emerald-500 to-teal-600 rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.max(0, studentCompetencyProfile.overallPg)
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-800">
+                          4. Akurasi Soal Pilihan Ganda Kompleks (Multi-Jawaban)
+                        </span>
+                        <span className="font-mono font-extrabold text-amber-700">
+                          {studentCompetencyProfile.overallPgk}%
+                        </span>
+                      </div>
+                      <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.max(0, studentCompetencyProfile.overallPgk)
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Kekuatan Akademik & Rekomendasi Pengembangan */}
+              {studentCompetencyProfile.completedCount > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-5 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-2.5">
+                    <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-emerald-900">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Indikator Kekuatan Kemampuan Anda</span>
+                    </div>
+                    <ul className="space-y-1.5 text-xs text-emerald-950 list-disc list-inside leading-relaxed">
+                      {studentCompetencyProfile.strengths.map((str, idx) => (
+                        <li key={idx}>{str}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="p-5 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-2.5">
+                    <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-amber-900">
+                      <Sparkles className="w-4 h-4 text-amber-600" />
+                      <span>Fokus Penguatan &amp; Rekomendasi Belajar</span>
+                    </div>
+                    <ul className="space-y-1.5 text-xs text-amber-950 list-disc list-inside leading-relaxed">
+                      {studentCompetencyProfile.recommendations.map(
+                        (rec, idx) => (
+                          <li key={idx}>{rec}</li>
+                        )
+                      )}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {/* Rincian Capaian & Progres per Mata Pelajaran / Paket Ujian */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-slate-900">
+                      Rincian Progres &amp; Peta Kemampuan per Mata Pelajaran
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      Daftar paket ujian kelas {student.kelas} beserta perbandingan skor terhadap batas KKM (70)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100/90 border-b border-slate-200 text-xs font-bold text-slate-800">
+                        <th className="py-3.5 px-4">Mata Pelajaran &amp; Paket Ujian</th>
+                        <th className="py-3.5 px-4">Kode Paket</th>
+                        <th className="py-3.5 px-4">Progres &amp; Visualisasi Skor</th>
+                        <th className="py-3.5 px-4 text-right">LOTS / HOTS</th>
+                        <th className="py-3.5 px-4 text-right">Skor Akhir</th>
+                        <th className="py-3.5 px-4">Predikat Kemampuan</th>
+                        <th className="py-3.5 px-4 text-right">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 text-xs">
+                      {studentCompetencyProfile.subjectRows
+                        .filter((row) =>
+                          studentMapelFilter === 'SEMUA'
+                            ? true
+                            : row.mapel.toUpperCase() ===
+                              studentMapelFilter.toUpperCase()
+                        )
+                        .map((row) => {
+                          const isScoreShown =
+                            row.exam.tampilkan_nilai !== false;
+                          return (
+                            <tr
+                              key={row.exam.id}
+                              className="hover:bg-slate-50/80 transition-colors"
+                            >
+                              <td className="py-3.5 px-4">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-indigo-600 text-white">
+                                    {row.mapel}
+                                  </span>
+                                  <span className="text-[11px] text-slate-500">
+                                    {row.questionCount} Soal
+                                  </span>
+                                </div>
+                                <div className="font-bold text-slate-900 text-sm mt-1">
+                                  {row.exam.judul_ujian}
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-4">
+                                <span className="px-2.5 py-1 rounded-md font-mono font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                  {row.packageCode}
+                                </span>
+                              </td>
+
+                              <td className="py-3.5 px-4 min-w-[180px]">
+                                {row.resItem && isScoreShown ? (
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[11px]">
+                                      <span
+                                        className={`font-bold ${
+                                          row.isPassedKkm
+                                            ? 'text-emerald-700'
+                                            : 'text-amber-700'
+                                        }`}
+                                      >
+                                        {row.isPassedKkm
+                                          ? 'Tuntas KKM (≥70)'
+                                          : 'Di Bawah KKM (<70)'}
+                                      </span>
+                                      <span className="font-mono font-bold text-slate-800">
+                                        {row.scoreVal}/100
+                                      </span>
+                                    </div>
+                                    <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-full ${
+                                          (row.scoreVal || 0) >= 85
+                                            ? 'bg-emerald-600'
+                                            : (row.scoreVal || 0) >= 70
+                                            ? 'bg-blue-600'
+                                            : (row.scoreVal || 0) >= 55
+                                            ? 'bg-amber-500'
+                                            : 'bg-rose-600'
+                                        }`}
+                                        style={{
+                                          width: `${Math.min(
+                                            100,
+                                            Math.max(4, row.scoreVal || 0)
+                                          )}%`,
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                ) : row.inProgress ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 font-semibold">
+                                    <span>
+                                      Sedang Dikerjakan ({row.answeredDraftCount}{' '}
+                                      dijawab)
+                                    </span>
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">
+                                    Menunggu pengerjaan ujian
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums">
+                                {row.resItem && isScoreShown ? (
+                                  <div className="space-y-0.5">
+                                    <div className="text-blue-700 font-bold">
+                                      LOTS: {row.lotsScore}%
+                                    </div>
+                                    <div className="text-purple-700 font-bold">
+                                      HOTS: {row.hotsScore}%
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400">-</span>
+                                )}
+                              </td>
+
+                              <td className="py-3.5 px-4 text-right font-mono tabular-nums font-extrabold text-base">
+                                {row.resItem ? (
+                                  isScoreShown ? (
+                                    <span className="text-slate-900">
+                                      {row.scoreVal}
+                                      <span className="text-xs font-normal text-slate-400">
+                                        /100
+                                      </span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-amber-700">
+                                      Diverifikasi
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="text-slate-400">-</span>
+                                )}
+                              </td>
+
+                              <td className="py-3.5 px-4">
+                                <span
+                                  className={`inline-block px-2.5 py-1 rounded-lg text-[11px] font-bold border ${row.predikatTone}`}
+                                >
+                                  {row.predikat}
+                                </span>
+                              </td>
+
+                              <td className="py-3.5 px-4 text-right">
+                                {row.resItem && isScoreShown ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleDownloadResultPdf(row.resItem!)
+                                    }
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 cursor-pointer shadow-2xs"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>Unduh PDF</span>
+                                  </button>
+                                ) : (row.exam.status_ujian || 'AKTIF') ===
+                                  'AKTIF' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenStartExamModal(row.exam)
+                                    }
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                                  >
+                                    <Play className="w-3 h-3 fill-current" />
+                                    <span>Kerjakan</span>
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-400">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1786,6 +2942,8 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 };

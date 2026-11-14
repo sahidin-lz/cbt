@@ -502,32 +502,40 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
         </div>
 
         {/* 4-Step Systematic Workflow Navigation (Prinsip 1 AnBuso) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
           {(
             [
               {
                 id: 'identitas',
-                step: '01. Identitas Tes',
-                desc: 'Data Mapel, Kelas & Parameter KKM',
+                step: '01. Identitas Tes & KKM',
+                desc: 'Data Mapel, Kelas & Parameter Evaluasi',
                 icon: Sliders,
+                activeClass:
+                  'bg-gradient-to-br from-blue-600 to-indigo-700 text-white border-blue-700 shadow-xs ring-2 ring-blue-300',
               },
               {
                 id: 'kunci_jawaban',
                 step: '02. Kunci & Jawaban Siswa',
                 desc: `${anBusoReport.summary.totalQuestions} Kunci · ${anBusoReport.summary.totalRespondents} Lembar Jawaban`,
                 icon: Edit3,
+                activeClass:
+                  'bg-gradient-to-br from-indigo-600 to-violet-700 text-white border-indigo-700 shadow-xs ring-2 ring-indigo-300',
               },
               {
                 id: 'statistik_soal',
-                step: '03. Analisis Otomatis Butir',
-                desc: 'Kesukaran, Daya Beda & Pengecoh',
+                step: '03. Analisis Statistik Butir',
+                desc: 'Kesukaran (P), Daya Beda (D) & Pengecoh',
                 icon: BarChart3,
+                activeClass:
+                  'bg-gradient-to-br from-emerald-600 to-teal-700 text-white border-emerald-700 shadow-xs ring-2 ring-emerald-300',
               },
               {
                 id: 'remedial_output',
                 step: '04. Peta Remedial & Output',
                 desc: 'Remedial Personal per Butir & Cetak',
                 icon: UserCheck,
+                activeClass:
+                  'bg-gradient-to-br from-amber-500 to-orange-600 text-white border-amber-600 shadow-xs ring-2 ring-amber-300',
               },
             ] as const
           ).map((tab) => {
@@ -540,22 +548,26 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                 onClick={() => setActiveStep(tab.id)}
                 className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3 ${
                   isActive
-                    ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
-                    : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'
+                    ? tab.activeClass
+                    : 'bg-white hover:bg-blue-50/50 text-slate-800 border-slate-200 hover:border-blue-300'
                 }`}
               >
-                <Icon
-                  className={`w-4 h-4 mt-0.5 shrink-0 ${
-                    isActive ? 'text-amber-300' : 'text-blue-600'
+                <div
+                  className={`p-2 rounded-lg shrink-0 ${
+                    isActive
+                      ? 'bg-white/20 text-amber-300'
+                      : 'bg-blue-50 text-blue-600 border border-blue-100'
                   }`}
-                />
+                >
+                  <Icon className="w-4 h-4" />
+                </div>
                 <div className="min-w-0">
-                  <div className="text-xs font-extrabold truncate">
+                  <div className="text-xs sm:text-sm font-extrabold leading-snug">
                     {tab.step}
                   </div>
                   <div
-                    className={`text-[11px] truncate mt-0.5 ${
-                      isActive ? 'text-blue-100' : 'text-slate-500'
+                    className={`text-[11px] leading-snug mt-0.5 ${
+                      isActive ? 'text-white/90' : 'text-slate-500'
                     }`}
                   >
                     {tab.desc}
@@ -567,74 +579,74 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
         </div>
 
         {/* 5 Key Psychometric Summary Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5 pt-1">
-          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <div className="text-[11px] font-semibold text-slate-500">
-              Reliabilitas Instrumen (Alpha)
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 pt-1">
+          <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-50 via-white to-blue-50/40 border border-indigo-200/90">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
+              Reliabilitas (Alpha)
             </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-indigo-800 mt-1">
+            <div className="text-xl font-extrabold font-mono tabular-nums text-indigo-950 mt-1">
               {anBusoReport.summary.reliabilityAlpha.toFixed(3)}
             </div>
-            <div className="text-[11px] text-slate-600 mt-1">
+            <div className="text-[11px] text-indigo-800/80 mt-1">
               Kategori: <strong>{anBusoReport.summary.reliabilityCategory}</strong>
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <div className="text-[11px] font-semibold text-slate-500">
-              Rata-Rata &amp; Simpangan Baku
+          <div className="p-4 rounded-xl bg-gradient-to-br from-blue-50 via-white to-cyan-50/40 border border-blue-200/90">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
+              Rata-Rata &amp; Simpangan
             </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-blue-800 mt-1">
+            <div className="text-xl font-extrabold font-mono tabular-nums text-blue-950 mt-1">
               {anBusoReport.summary.meanScore}{' '}
-              <span className="text-xs font-normal text-slate-500">
+              <span className="text-xs font-normal text-blue-700">
                 ± {anBusoReport.summary.stdDeviation}
               </span>
             </div>
             <div className="text-[11px] text-slate-600 mt-1 font-mono tabular-nums">
-              Tertinggi: {anBusoReport.summary.highestScore} · Terendah:{' '}
+              Max: {anBusoReport.summary.highestScore} · Min:{' '}
               {anBusoReport.summary.lowestScore}
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <div className="text-[11px] font-semibold text-slate-500">
-              Sebaran Tingkat Kesukaran (P)
+          <div className="p-4 rounded-xl bg-gradient-to-br from-amber-50 via-white to-orange-50/40 border border-amber-200/90">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+              Tingkat Kesukaran (P)
             </div>
-            <div className="text-xs font-bold font-mono tabular-nums text-slate-900 mt-1.5">
+            <div className="text-xs font-extrabold font-mono tabular-nums text-amber-950 mt-1.5">
               Mudah: {anBusoReport.summary.difficultySummary.mudahCount} · Sedang:{' '}
               {anBusoReport.summary.difficultySummary.sedangCount} · Sukar:{' '}
               {anBusoReport.summary.difficultySummary.sukarCount}
             </div>
-            <div className="text-[11px] text-slate-500 mt-1">
-              Ideal proporsi mayoritas Sedang (0.31–0.70)
+            <div className="text-[11px] text-amber-800/80 mt-1">
+              Proporsi ideal mayoritas Sedang
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <div className="text-[11px] font-semibold text-slate-500">
-              Keputusan Objektif Bank Soal
+          <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 border border-emerald-200/90">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+              Keputusan Bank Soal
             </div>
-            <div className="text-xs font-bold font-mono tabular-nums text-slate-900 mt-1.5">
+            <div className="text-xs font-extrabold font-mono tabular-nums text-emerald-950 mt-1.5">
               Simpan: {anBusoReport.summary.bankSoalSummary.savedCount} · Revisi:{' '}
               {anBusoReport.summary.bankSoalSummary.revisedCount} · Buang:{' '}
               {anBusoReport.summary.bankSoalSummary.discardedCount}
             </div>
-            <div className="text-[11px] text-slate-500 mt-1">
-              Berdasarkan Daya Beda (D) &amp; Distraktor
+            <div className="text-[11px] text-emerald-800/80 mt-1">
+              Berdasarkan Daya Beda &amp; Distraktor
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <div className="text-[11px] font-semibold text-slate-500">
+          <div className="p-4 rounded-xl bg-gradient-to-br from-purple-50 via-white to-violet-50/40 border border-purple-200/90">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800">
               Kelompok Atas vs Bawah
             </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-emerald-800 mt-1">
+            <div className="text-xl font-extrabold font-mono tabular-nums text-purple-950 mt-1">
               {anBusoReport.summary.upperGroupSize}{' '}
-              <span className="text-xs font-normal text-slate-500">vs</span>{' '}
+              <span className="text-xs font-normal text-purple-700">vs</span>{' '}
               {anBusoReport.summary.lowerGroupSize}{' '}
-              <span className="text-xs font-normal text-slate-500">siswa</span>
+              <span className="text-xs font-normal text-purple-700">siswa</span>
             </div>
-            <div className="text-[11px] text-slate-600 mt-1">
+            <div className="text-[11px] text-purple-800/80 mt-1">
               Total Responden: {anBusoReport.summary.totalRespondents} Siswa
             </div>
           </div>

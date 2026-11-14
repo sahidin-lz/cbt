@@ -2041,6 +2041,16 @@ export async function generateAiAnalysisCbt(payload: {
         authorUid: 'sahidin30@gmail.com',
         updatedAt: nowIso,
       });
+    } else {
+      await setDoc(
+        doc(db, 'results', String(payload.resultId)),
+        {
+          skor_angka: lockedScore,
+          analisis_ai: aiAnalysis,
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      );
     }
     await updateFirestorePulse(
       `Evaluasi selesai untuk ${payload.nama_siswa} (${lockedScore}/100)`
