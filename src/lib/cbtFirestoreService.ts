@@ -169,6 +169,81 @@ export async function safeApiJson<T = any>(
   }
 }
 
+const OFFLINE_CACHE_KEY = 'cbt_offline_cache_v1';
+
+let cachedCollectionCounts = {
+  exams: 0,
+  students: 0,
+  questions: 0,
+  results: 0,
+};
+
+export function saveLocalCbtSnapshotCache(snapshot: {
+  exams: ExamItem[];
+  students: StudentItem[];
+  questions: QuestionItem[];
+  results: ResultItem[];
+}): void {
+  const total =
+    (snapshot.exams?.length || 0) +
+    (snapshot.students?.length || 0) +
+    (snapshot.questions?.length || 0) +
+    (snapshot.results?.length || 0);
+  if (total === 0) return;
+
+  cachedCollectionCounts = {
+    exams: snapshot.exams?.length || 0,
+    students: snapshot.students?.length || 0,
+    questions: snapshot.questions?.length || 0,
+    results: snapshot.results?.length || 0,
+  };
+
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(
+        OFFLINE_CACHE_KEY,
+        JSON.stringify({
+          savedAt: new Date().toISOString(),
+          exams: snapshot.exams || [],
+          students: snapshot.students || [],
+          questions: snapshot.questions || [],
+          results: snapshot.results || [],
+        })
+      );
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export function loadLocalCbtSnapshotCache(): {
+  exams: ExamItem[];
+  students: StudentItem[];
+  questions: QuestionItem[];
+  results: ResultItem[];
+} | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(OFFLINE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const exams = Array.isArray(parsed.exams) ? parsed.exams : [];
+    const students = Array.isArray(parsed.students) ? parsed.students : [];
+    const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+    const results = Array.isArray(parsed.results) ? parsed.results : [];
+    if (
+      exams.length + students.length + questions.length + results.length ===
+      0
+    ) {
+      return null;
+    }
+    return { exams, students, questions, results };
+  } catch {
+    return null;
+  }
+}
+
 async function updateFirestorePulse(
   eventText: string,
   counts?: {
@@ -181,20 +256,13 @@ async function updateFirestorePulse(
   if (!db) return null;
   const nowIso = new Date().toISOString();
   try {
-    const [exSnap, stSnap, qSnap, rSnap] = await Promise.all([
-      counts?.exams !== undefined ? null : getDocs(cbtCollectionQuery('exams')),
-      counts?.students !== undefined ? null : getDocs(cbtCollectionQuery('students')),
-      counts?.questions !== undefined ? null : getDocs(cbtCollectionQuery('questions')),
-      counts?.results !== undefined ? null : getDocs(cbtCollectionQuery('results')),
-    ]);
-
     const pulse: CbtSyncPulseData = {
       lastSyncedAt: nowIso,
       lastEvent: eventText.slice(0, 200),
-      totalExams: counts?.exams ?? exSnap?.size ?? 0,
-      totalStudents: counts?.students ?? stSnap?.size ?? 0,
-      totalQuestions: counts?.questions ?? qSnap?.size ?? 0,
-      totalResults: counts?.results ?? rSnap?.size ?? 0,
+      totalExams: counts?.exams ?? cachedCollectionCounts.exams,
+      totalStudents: counts?.students ?? cachedCollectionCounts.students,
+      totalQuestions: counts?.questions ?? cachedCollectionCounts.questions,
+      totalResults: counts?.results ?? cachedCollectionCounts.results,
       authorUid: 'sahidin30@gmail.com',
     };
 
@@ -300,7 +368,7 @@ export async function fetchAllFromFirestore(): Promise<{
         validStudentIds.has(Number(r.student_id))
     );
 
-    // Automatically recalculate historical student results using the new Humane & Anti-Guessing formula
+    // Recalculate historical student results in-memory using the Humane & Anti-Guessing formula
     const recalc = recalculateHistoricalResults({
       results: validResults,
       students,
@@ -308,16 +376,14 @@ export async function fetchAllFromFirestore(): Promise<{
       questions: validQuestions,
     });
 
-    if (recalc.changedResults.length > 0 && db) {
-      persistRecalculatedResultsToFirestore(recalc.changedResults).catch(() => {});
-    }
-
-    return {
+    const bundle = {
       exams,
       students,
       questions: validQuestions,
       results: recalc.results,
     };
+    saveLocalCbtSnapshotCache(bundle);
+    return bundle;
   } catch (err) {
     try {
       handleFirestoreError(err, OperationType.GET, 'exams|students|questions|results');
@@ -557,16 +623,45 @@ export async function loadUnifiedDashboardData(): Promise<{
       } satisfies StudentItem;
     });
 
-    return {
+    const mergedBundle = {
       exams: mergedExams,
       students: mergedStudents,
-      questions: apiRes.data.questions || [],
-      results: apiRes.data.results || [],
+      questions:
+        (apiRes.data.questions?.length || 0) > 0
+          ? apiRes.data.questions
+          : firestoreData?.questions || [],
+      results:
+        (apiRes.data.results?.length || 0) > 0
+          ? apiRes.data.results
+          : firestoreData?.results || [],
     };
+    const mergedTotal =
+      mergedBundle.exams.length +
+      mergedBundle.students.length +
+      mergedBundle.questions.length +
+      mergedBundle.results.length;
+
+    if (mergedTotal > 0) {
+      saveLocalCbtSnapshotCache(mergedBundle);
+      return mergedBundle;
+    }
   }
 
   if (firestoreData) {
-    return firestoreData;
+    const fsTotal =
+      firestoreData.exams.length +
+      firestoreData.students.length +
+      firestoreData.questions.length +
+      firestoreData.results.length;
+    if (fsTotal > 0) {
+      saveLocalCbtSnapshotCache(firestoreData);
+      return firestoreData;
+    }
+  }
+
+  const localFallback = loadLocalCbtSnapshotCache();
+  if (localFallback) {
+    return localFallback;
   }
 
   return {

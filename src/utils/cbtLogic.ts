@@ -2937,8 +2937,17 @@ export function recalculateHistoricalResults<
       resItem.analisis_ai &&
       (resItem.analisis_ai.skor_akhir !== nextSkor ||
         resItem.analisis_ai.kategori_nilai !== nextKategori);
+    const rawKeys = Object.keys(rawAns);
+    const canonKeys = Object.keys(canonicalAnswers);
     const answersChanged =
-      JSON.stringify(canonicalAnswers) !== JSON.stringify(rawAns);
+      rawKeys.length !== canonKeys.length ||
+      canonKeys.some((k) => {
+        const a = Array.isArray(rawAns[k]) ? [...rawAns[k]].sort().join(',') : '';
+        const b = Array.isArray(canonicalAnswers[k])
+          ? [...canonicalAnswers[k]].sort().join(',')
+          : '';
+        return a !== b;
+      });
 
     if (!scoreChanged && !aiChanged && !answersChanged) {
       return resItem;

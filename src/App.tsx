@@ -16,7 +16,7 @@ import {
   loadUnifiedDashboardData,
   subscribeRealtimeFirestoreCollections,
   pushSnapshotToFirestoreClient,
-  persistRecalculatedResultsToFirestore,
+  saveLocalCbtSnapshotCache,
   safeApiJson,
 } from './lib/cbtFirestoreService';
 import { recalculateHistoricalResults } from './utils/cbtLogic';
@@ -194,12 +194,8 @@ export default function App() {
 
     const unsubPulse = subscribeToCbtSyncPulse((pulse) => {
       setSyncPulse(pulse);
-      if (
-        pulse.lastSyncedAt &&
-        pulse.lastSyncedAt !== lastSeenSyncTimestamp.current
-      ) {
+      if (pulse.lastSyncedAt) {
         lastSeenSyncTimestamp.current = pulse.lastSyncedAt;
-        fetchDashboardData();
       }
     });
 
@@ -207,7 +203,7 @@ export default function App() {
       unsubCollections();
       unsubPulse();
     };
-  }, [fetchDashboardData]);
+  }, []);
 
   // Ensure only questions and results belonging to active exams & students are counted,
   // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula
@@ -234,14 +230,15 @@ export default function App() {
 
   const activeResults = recalculatedBundle.results;
 
-  // Automatically persist any upgraded historical student scores to Firestore
+  // Keep a local browser backup cache of non-empty CBT data so data remains visible even if Firestore quota is temporarily reached
   useEffect(() => {
-    if (recalculatedBundle.changedResults.length > 0) {
-      persistRecalculatedResultsToFirestore(
-        recalculatedBundle.changedResults
-      ).catch(() => {});
-    }
-  }, [recalculatedBundle.changedResults]);
+    saveLocalCbtSnapshotCache({
+      exams,
+      students,
+      questions: activeQuestions,
+      results: activeResults,
+    });
+  }, [exams, students, activeQuestions, activeResults]);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-100/70 text-slate-900">
