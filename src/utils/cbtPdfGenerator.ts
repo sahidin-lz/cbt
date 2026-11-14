@@ -847,19 +847,38 @@ export function downloadStudentTokenCardsPdf(
       });
     }
 
-    // Card Footer Instructions with exact tokens
+    // Link Akses Ujian Strip (Prominent URL on Student Card so students can easily open the exam)
+    const urlBarY = boxY + boxH + 1.3; // y + 48.7
+    doc.setFillColor(240, 253, 244); // Emerald-50
+    doc.setDrawColor(16, 185, 129); // Emerald-500
+    doc.setLineWidth(0.32);
+    doc.roundedRect(x + 3.2, urlBarY, cardWidth - 6.4, 7.2, 1.5, 1.5, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.5);
+    doc.setTextColor(6, 95, 70); // Emerald-800
+    doc.text('LINK AKSES UJIAN:', x + 5.2, urlBarY + 4.7);
+
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(7.6);
+    doc.setTextColor(15, 23, 42);
+    doc.text('cbt-sosiologi.vercel.app', x + cardWidth - 5.2, urlBarY + 4.8, {
+      align: 'right',
+    });
+
+    // Card Footer Instructions with exact link & tokens
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5.4);
+    doc.setFontSize(5.2);
     doc.setTextColor(71, 85, 105);
     const footerInstruction = cleanPdfText(
-      `1. Login Akun (${tokenLogin}) -> 2. Pilih Paket ${kodePaket} -> 3. Masukkan Token Ujian (${tokenUjianHariIni})`
+      `1. Buka cbt-sosiologi.vercel.app -> 2. Login (${tokenLogin}) -> 3. Token Ujian (${tokenUjianHariIni})`
     );
     doc.text(
-      footerInstruction.length > 68
-        ? footerInstruction.slice(0, 66) + '..'
+      footerInstruction.length > 72
+        ? footerInstruction.slice(0, 70) + '..'
         : footerInstruction,
       x + cardWidth / 2,
-      y + cardHeight - 2.2,
+      y + cardHeight - 2.1,
       { align: 'center' }
     );
   });
@@ -1270,7 +1289,11 @@ export function downloadSingleStudentResultPdf(
     });
   doc.setFontSize(7.5);
   doc.setTextColor(167, 243, 208);
-  doc.text(`Tanggal Dokumen: ${cleanPdfText(dateText)}`, marginX + 22, 33);
+  doc.text(
+    `Tanggal Dokumen: ${cleanPdfText(dateText)}  |  Link Ujian: cbt-sosiologi.vercel.app`,
+    marginX + 22,
+    33
+  );
 
   // Student Identity & Token Card Box + Hero Score Box
   let y = 49;
@@ -1304,6 +1327,7 @@ export function downloadSingleStudentResultPdf(
       ),
     ],
     ['Kelas / Rombel', cleanPdfText(student.kelas)],
+    ['Link Akses Ujian', 'cbt-sosiologi.vercel.app'],
     [
       'Paket Soal Didapat',
       cleanPdfText(
@@ -1315,12 +1339,6 @@ export function downloadSingleStudentResultPdf(
       cleanPdfText(
         `Login: ${precision.tokenLogin}  |  Token Ujian: ${precision.tokenUjianHariIni}`
       ),
-    ],
-    [
-      'Integritas Ujian',
-      tabViolations > 0
-        ? `${tabViolations} Catatan Pindah Tab`
-        : '0 Pelanggaran (Tertib & Jujur)',
     ],
   ];
 
