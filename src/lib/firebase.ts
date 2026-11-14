@@ -2,10 +2,13 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import {
   getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   Firestore,
   doc,
-  getDocFromServer,
-  onSnapshot,
+  getDoc,
+  getDocFromCache,
   Unsubscribe,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -16,11 +19,72 @@ export const googleAuthProvider = new GoogleAuthProvider();
 
 let firestoreInstance: Firestore | null = null;
 try {
-  firestoreInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-} catch (err) {
-  console.warn('Firestore client init fallback:', err);
+  firestoreInstance = initializeFirestore(
+    app,
+    {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    },
+    firebaseConfig.firestoreDatabaseId
+  );
+} catch {
+  try {
+    firestoreInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  } catch (err) {
+    console.warn('Firestore client init fallback:', err);
+  }
 }
 export const db = firestoreInstance;
+
+const QUOTA_COOLDOWN_STORAGE_KEY = 'cbt_firestore_quota_cooldown_until';
+const PULSE_CACHE_STORAGE_KEY = 'cbt_last_sync_pulse_v1';
+const QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes cooldown when Spark Plan daily quota is reached
+let quotaCooldownUntilMemory = 0;
+
+export function isQuotaExceededError(error: unknown): boolean {
+  if (!error) return false;
+  const code = (error as any)?.code || '';
+  const msg = error instanceof Error ? error.message : String(error);
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota exceeded')
+  );
+}
+
+export function markFirestoreQuotaExhausted(): void {
+  quotaCooldownUntilMemory = Date.now() + QUOTA_COOLDOWN_MS;
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.setItem(
+        QUOTA_COOLDOWN_STORAGE_KEY,
+        String(quotaCooldownUntilMemory)
+      );
+    }
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export function isFirestoreQuotaCooldownActive(): boolean {
+  const now = Date.now();
+  if (quotaCooldownUntilMemory > now) return true;
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      const stored = Number(
+        window.sessionStorage.getItem(QUOTA_COOLDOWN_STORAGE_KEY) || '0'
+      );
+      if (stored > now) {
+        quotaCooldownUntilMemory = stored;
+        return true;
+      }
+    }
+  } catch {
+    // Ignore storage error
+  }
+  return false;
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -53,6 +117,11 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ) {
+  if (isQuotaExceededError(error)) {
+    markFirestoreQuotaExhausted();
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -75,24 +144,8 @@ export function handleFirestoreError(
 }
 
 export async function testFirestoreConnection(): Promise<boolean> {
-  if (!db) return false;
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    return true;
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes('the client is offline')
-    ) {
-      console.error('Please check your Firebase configuration.');
-      return false;
-    }
-    return true;
-  }
+  return Boolean(db);
 }
-
-// Run connection test on boot
-testFirestoreConnection();
 
 export interface CbtSyncPulseData {
   lastSyncedAt: string;
@@ -104,47 +157,93 @@ export interface CbtSyncPulseData {
   authorUid: string;
 }
 
+export function saveCachedSyncPulseLocal(pulse: CbtSyncPulseData): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(PULSE_CACHE_STORAGE_KEY, JSON.stringify(pulse));
+    }
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export function getCachedSyncPulseLocal(): CbtSyncPulseData | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(PULSE_CACHE_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as CbtSyncPulseData;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSyncPulseFromApiFallback(): Promise<CbtSyncPulseData | null> {
+  try {
+    const res = await fetch('/api/firebase/status');
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.toLowerCase().includes('application/json')) {
+      const data = await res.json();
+      if (data?.pulse) {
+        saveCachedSyncPulseLocal(data.pulse as CbtSyncPulseData);
+        return data.pulse as CbtSyncPulseData;
+      }
+    }
+  } catch {
+    // Ignore network errors
+  }
+  return getCachedSyncPulseLocal();
+}
+
+export async function fetchCbtSyncPulseOnce(): Promise<CbtSyncPulseData | null> {
+  if (!db) {
+    return fetchSyncPulseFromApiFallback();
+  }
+
+  const pulseRef = doc(db, 'cbt_sync', 'live_state');
+
+  if (isFirestoreQuotaCooldownActive()) {
+    try {
+      const cachedSnap = await getDocFromCache(pulseRef);
+      if (cachedSnap.exists()) {
+        return cachedSnap.data() as CbtSyncPulseData;
+      }
+    } catch {
+      // Ignore cache miss
+    }
+    return fetchSyncPulseFromApiFallback();
+  }
+
+  try {
+    const snap = await getDoc(pulseRef);
+    if (snap.exists()) {
+      const pulse = snap.data() as CbtSyncPulseData;
+      saveCachedSyncPulseLocal(pulse);
+      return pulse;
+    }
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      markFirestoreQuotaExhausted();
+    }
+    try {
+      const cachedSnap = await getDocFromCache(pulseRef);
+      if (cachedSnap.exists()) {
+        return cachedSnap.data() as CbtSyncPulseData;
+      }
+    } catch {
+      // Ignore cache miss
+    }
+    return fetchSyncPulseFromApiFallback();
+  }
+
+  return getCachedSyncPulseLocal();
+}
+
 export function subscribeToCbtSyncPulse(
   onUpdate: (pulse: CbtSyncPulseData) => void
 ): Unsubscribe {
-  const path = 'cbt_sync/live_state';
-  if (!db) {
-    // Poll /api/firebase/status as fallback if client SDK instance is unavailable
-    let active = true;
-    const poll = async () => {
-      try {
-        const res = await fetch('/api/firebase/status');
-        if (res.ok && active) {
-          const data = await res.json();
-          if (data?.pulse) {
-            onUpdate(data.pulse as CbtSyncPulseData);
-          }
-        }
-      } catch {
-        // Ignore transient network errors
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 5000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }
-
-  return onSnapshot(
-    doc(db, 'cbt_sync', 'live_state'),
-    (snapshot) => {
-      if (snapshot.exists()) {
-        onUpdate(snapshot.data() as CbtSyncPulseData);
-      }
-    },
-    (error) => {
-      try {
-        handleFirestoreError(error, OperationType.GET, path);
-      } catch {
-        // Logged by handleFirestoreError
-      }
-    }
-  );
+  fetchCbtSyncPulseOnce().then((pulse) => {
+    if (pulse) onUpdate(pulse);
+  });
+  return () => {};
 }

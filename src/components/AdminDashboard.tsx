@@ -2516,14 +2516,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={onRefreshData}
+                    title="Muat ulang data ujian, status peserta, dan nilai terbaru dari server (Hemat Kuota)"
+                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 font-bold text-xs transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-cyan-300" />
+                    <span>Refresh Data</span>
+                  </button>
                   {activeTab !== 'manajemen' && (
                     <button
                       type="button"
                       onClick={() => setActiveTab('manajemen')}
                       className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 font-bold text-xs transition-colors cursor-pointer"
                     >
-                      <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
-                      <span>Live Radar ({activeStudentsCount} Ujian)</span>
+                      <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                      <span>Pantau Peserta ({activeStudentsCount} Ujian)</span>
                     </button>
                   )}
                   {syncPulse?.lastSyncedAt && (

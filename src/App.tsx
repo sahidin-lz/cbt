@@ -9,12 +9,11 @@ import { StudentExamPortal } from './components/StudentExamPortal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from './types/cbt';
 import {
-  subscribeToCbtSyncPulse,
+  fetchCbtSyncPulseOnce,
   CbtSyncPulseData,
 } from './lib/firebase';
 import {
   loadUnifiedDashboardData,
-  subscribeRealtimeFirestoreCollections,
   pushSnapshotToFirestoreClient,
   saveLocalCbtSnapshotCache,
   safeApiJson,
@@ -115,6 +114,13 @@ export default function App() {
       setQuestions(data.questions || []);
       setStudents(data.students || []);
       setResults(data.results || []);
+      const pulse = await fetchCbtSyncPulseOnce();
+      if (pulse) {
+        setSyncPulse(pulse);
+        if (pulse.lastSyncedAt) {
+          lastSeenSyncTimestamp.current = pulse.lastSyncedAt;
+        }
+      }
     } catch (err: any) {
       console.error('Error fetching dashboard data:', err);
       setLoadError(err.message || 'Gagal memuat data CBT.');
@@ -171,39 +177,10 @@ export default function App() {
     }
   }, [exams, students, questions, results, fetchDashboardData]);
 
+  // One-time load on mount (no background onSnapshot listeners to preserve Spark Plan quota)
   useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
-
-  // Subscribe directly to Firebase Firestore collections for real-time updates on Vercel & AI Studio
-  useEffect(() => {
-    const unsubCollections = subscribeRealtimeFirestoreCollections({
-      onExams: (items) => {
-        setExams(items);
-      },
-      onStudents: (items) => {
-        setStudents(items);
-      },
-      onQuestions: (items) => {
-        setQuestions(items);
-      },
-      onResults: (items) => {
-        setResults(items);
-      },
-    });
-
-    const unsubPulse = subscribeToCbtSyncPulse((pulse) => {
-      setSyncPulse(pulse);
-      if (pulse.lastSyncedAt) {
-        lastSeenSyncTimestamp.current = pulse.lastSyncedAt;
-      }
-    });
-
-    return () => {
-      unsubCollections();
-      unsubPulse();
-    };
-  }, []);
 
   // Ensure only questions and results belonging to active exams & students are counted,
   // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula

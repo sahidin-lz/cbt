@@ -31,7 +31,13 @@ import {
   generateAiAnalysisCbt,
   updateStudentStatusCbt,
   syncStudentLiveTelemetryCbt,
-  subscribeToSingleStudentStatus,
+  fetchSingleStudentStatusOnce,
+  getCachedExamQuestionsLocal,
+  saveCachedExamQuestionsLocal,
+  saveLocalStudentAnswers,
+  getLocalStudentAnswers,
+  clearLocalStudentAnswers,
+  autoSaveStudentAnswersToFirestoreCbt,
   safeApiJson,
 } from '../lib/cbtFirestoreService';
 import {
@@ -121,6 +127,23 @@ function saveLocalProgress(token: string, data: StudentExamProgress) {
         serialized
       );
     }
+    if (data.examId && data.studentId) {
+      saveLocalStudentAnswers(data.examId, data.studentId, {
+        examId: data.examId,
+        studentId: data.studentId,
+        nama: data.nama || '',
+        kelas: data.kelas || '',
+        token_ujian: data.token_ujian || '',
+        answers: data.answers || {},
+        currentIndex: data.currentIndex || 0,
+        remainingSeconds: data.remainingSeconds || 0,
+        tabViolations: data.tabViolations || 0,
+        inspectAttempts: data.inspectAttempts || 0,
+        assignedPackageCode: data.assignedPackageCode,
+        questionOrderIds: data.questionOrderIds,
+        updatedAt: new Date().toISOString(),
+      });
+    }
   } catch (e) {
     console.error('Failed to save progress to localStorage', e);
   }
@@ -128,10 +151,13 @@ function saveLocalProgress(token: string, data: StudentExamProgress) {
 
 function getLocalProgress(
   token: string,
-  examId?: number
+  examId?: number,
+  studentId?: number
 ): StudentExamProgress | null {
   try {
     const cleanToken = token.toUpperCase().trim();
+    let baseProgress: StudentExamProgress | null = null;
+
     if (examId) {
       const examSpecificRaw = localStorage.getItem(
         `${PROGRESS_KEY_PREFIX}${cleanToken}_exam_${Number(examId)}`
@@ -142,23 +168,61 @@ function getLocalProgress(
           !parsedExamSpecific.examId ||
           Number(parsedExamSpecific.examId) === Number(examId)
         ) {
-          return parsedExamSpecific;
+          baseProgress = parsedExamSpecific;
         }
       }
     }
-    const raw = localStorage.getItem(PROGRESS_KEY_PREFIX + cleanToken);
-    if (!raw) return null;
-    const parsed: StudentExamProgress = JSON.parse(raw);
-    if (examId && parsed.examId && Number(parsed.examId) !== Number(examId)) {
-      return null;
+
+    if (!baseProgress) {
+      const raw = localStorage.getItem(PROGRESS_KEY_PREFIX + cleanToken);
+      if (raw) {
+        const parsed: StudentExamProgress = JSON.parse(raw);
+        if (!examId || !parsed.examId || Number(parsed.examId) === Number(examId)) {
+          baseProgress = parsed;
+        }
+      }
     }
-    return parsed;
+
+    const effectiveExamId = examId || baseProgress?.examId;
+    const effectiveStudentId = studentId || baseProgress?.studentId;
+    if (effectiveExamId && effectiveStudentId) {
+      const localAnswerCache = getLocalStudentAnswers(
+        effectiveExamId,
+        effectiveStudentId
+      );
+      if (localAnswerCache) {
+        if (baseProgress) {
+          return {
+            ...baseProgress,
+            answers:
+              Object.keys(localAnswerCache.answers || {}).length > 0
+                ? localAnswerCache.answers
+                : baseProgress.answers,
+            currentIndex:
+              typeof localAnswerCache.currentIndex === 'number'
+                ? localAnswerCache.currentIndex
+                : baseProgress.currentIndex,
+            remainingSeconds:
+              localAnswerCache.remainingSeconds > 0
+                ? localAnswerCache.remainingSeconds
+                : baseProgress.remainingSeconds,
+            assignedPackageCode:
+              localAnswerCache.assignedPackageCode ||
+              baseProgress.assignedPackageCode,
+            questionOrderIds:
+              localAnswerCache.questionOrderIds || baseProgress.questionOrderIds,
+          };
+        }
+      }
+    }
+
+    return baseProgress;
   } catch {
     return null;
   }
 }
 
-function clearLocalProgress(token: string, examId?: number) {
+function clearLocalProgress(token: string, examId?: number, studentId?: number) {
   try {
     const cleanToken = token.toUpperCase().trim();
     localStorage.removeItem(PROGRESS_KEY_PREFIX + cleanToken);
@@ -166,6 +230,9 @@ function clearLocalProgress(token: string, examId?: number) {
       localStorage.removeItem(
         `${PROGRESS_KEY_PREFIX}${cleanToken}_exam_${Number(examId)}`
       );
+    }
+    if (examId && studentId) {
+      clearLocalStudentAnswers(examId, studentId);
     }
   } catch {}
 }
@@ -322,7 +389,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   const initialProgress = useMemo(() => {
     if (!initialSession?.student?.token_ujian) return null;
-    return getLocalProgress(initialSession.student.token_ujian, initialSession.exam?.id);
+    return getLocalProgress(
+      initialSession.student.token_ujian,
+      initialSession.exam?.id,
+      initialSession.student.id
+    );
   }, [initialSession]);
 
   // Logged-in Student Account State (Portal Akun Siswa)
@@ -358,7 +429,13 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return initialSession?.exam || null;
   });
   const [examQuestions, setExamQuestions] = useState<QuestionItem[]>(() => {
-    return initialSession?.questions || [];
+    if (initialSession?.questions && initialSession.questions.length > 0) {
+      return initialSession.questions;
+    }
+    if (initialSession?.exam?.id) {
+      return getCachedExamQuestionsLocal(initialSession.exam.id) || [];
+    }
+    return [];
   });
   const [currentIndex, setCurrentIndex] = useState<number>(() => {
     return initialProgress?.currentIndex || 0;
@@ -743,8 +820,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         .toUpperCase()
         .trim();
 
-      const preSavedProgress = getLocalProgress(cleanSystemToken, targetExam.id);
+      const preSavedProgress = getLocalProgress(
+        cleanSystemToken,
+        targetExam.id,
+        currentAccount.id
+      );
       const preferredExamIdToUse = preSavedProgress?.examId || targetExam.id;
+
+      // Check localStorage question cache (cbt_soal_${ujianId}) first before loginStudentExamCbt
+      const preCachedQuestions = getCachedExamQuestionsLocal(preferredExamIdToUse);
 
       const session = await loginStudentExamCbt(
         currentAccount.nama,
@@ -752,8 +836,18 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         preferredExamIdToUse
       );
 
+      const rawExamQuestions =
+        preCachedQuestions && preCachedQuestions.length > 0
+          ? preCachedQuestions
+          : session.questions || [];
+
+      if (session.exam?.id && rawExamQuestions.length > 0) {
+        saveCachedExamQuestionsLocal(session.exam.id, rawExamQuestions);
+      }
+
       const savedProgress =
-        getLocalProgress(cleanSystemToken, session.exam?.id) || preSavedProgress;
+        getLocalProgress(cleanSystemToken, session.exam?.id, currentAccount.id) ||
+        preSavedProgress;
 
       const proportional = resolveProportionalStudentExamPackage({
         student: currentAccount,
@@ -776,7 +870,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         'PAKET-A';
 
       const prepared = prepareStudentExamQuestions({
-        questions: session.questions || [],
+        questions: rawExamQuestions,
         student: {
           ...session.student,
           kode_soal: syncedPackageCode,
@@ -818,40 +912,33 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         );
         setTabViolations(savedProgress.tabViolations || 0);
         setInspectAttempts(savedProgress.inspectAttempts || 0);
+        saveLocalStudentAnswers(session.exam.id, updatedStudent.id, {
+          examId: session.exam.id,
+          studentId: updatedStudent.id,
+          nama: updatedStudent.nama,
+          kelas: updatedStudent.kelas,
+          token_ujian: updatedStudent.token_ujian,
+          answers: savedProgress.answers,
+          currentIndex: savedProgress.currentIndex || 0,
+          remainingSeconds:
+            savedProgress.remainingSeconds || (session.exam.durasi_menit || 60) * 60,
+          tabViolations: savedProgress.tabViolations || 0,
+          inspectAttempts: savedProgress.inspectAttempts || 0,
+          assignedPackageCode: prepared.studentPackageCode,
+          questionOrderIds: prepared.questions.map((q) => Number(q.id)),
+          updatedAt: new Date().toISOString(),
+        });
         const resumedLogs: StudentActivityLog[] = [
           ...(savedProgress.logs || []),
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             action: 'resume',
-            detail: `Siswa masuk kembali dan melanjutkan sesi ujian [${prepared.studentPackageCode}] (${Object.keys(savedProgress.answers).length} jawaban dipulihkan dengan urutan soal konsisten).`,
+            detail: `Siswa masuk kembali dan melanjutkan sesi ujian [${prepared.studentPackageCode}] (${Object.keys(savedProgress.answers).length} jawaban dipulihkan dari localStorage dengan urutan soal konsisten).`,
           },
         ];
         setActivityLogs(resumedLogs);
         setResumeNotice(
-          `Sesi Ujian Dilanjutkan (${prepared.studentPackageCode})! Urutan soal, paket soal, dan jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis.`
-        );
-        syncStudentLiveTelemetryCbt(
-          updatedStudent,
-          {
-            exam_id: session.exam.id,
-            judul_ujian: session.exam.judul_ujian,
-            kode_paket: prepared.studentPackageCode,
-            current_question_no: (savedProgress.currentIndex || 0) + 1,
-            answered_count: Object.keys(savedProgress.answers || {}).filter(
-              (k) => savedProgress.answers[k]?.length > 0
-            ).length,
-            total_questions: prepared.questions.length,
-            remaining_seconds:
-              savedProgress.remainingSeconds || (session.exam.durasi_menit || 60) * 60,
-            is_fullscreen: true,
-            is_focused: true,
-            devtools_open: false,
-            tab_violations: savedProgress.tabViolations || 0,
-            inspect_attempts: savedProgress.inspectAttempts || 0,
-            last_action: `Melanjutkan sesi ujian [${prepared.studentPackageCode}] di Soal No. ${(savedProgress.currentIndex || 0) + 1}`,
-            recent_logs: resumedLogs.slice(-12),
-          },
-          'Sedang Ujian'
+          `Sesi Ujian Dilanjutkan (${prepared.studentPackageCode})! Urutan soal, paket soal, dan jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis dari memori lokal.`
         );
       } else {
         setAnswers({});
@@ -859,6 +946,21 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         setRemainingSeconds((session.exam?.durasi_menit || 60) * 60);
         setTabViolations(0);
         setInspectAttempts(0);
+        saveLocalStudentAnswers(session.exam.id, updatedStudent.id, {
+          examId: session.exam.id,
+          studentId: updatedStudent.id,
+          nama: updatedStudent.nama,
+          kelas: updatedStudent.kelas,
+          token_ujian: updatedStudent.token_ujian,
+          answers: {},
+          currentIndex: 0,
+          remainingSeconds: (session.exam?.durasi_menit || 60) * 60,
+          tabViolations: 0,
+          inspectAttempts: 0,
+          assignedPackageCode: prepared.studentPackageCode,
+          questionOrderIds: prepared.questions.map((q) => Number(q.id)),
+          updatedAt: new Date().toISOString(),
+        });
         const startLogs: StudentActivityLog[] = [
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
@@ -868,26 +970,6 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         ];
         setActivityLogs(startLogs);
         setResumeNotice(null);
-        syncStudentLiveTelemetryCbt(
-          updatedStudent,
-          {
-            exam_id: session.exam.id,
-            judul_ujian: session.exam.judul_ujian,
-            kode_paket: prepared.studentPackageCode,
-            current_question_no: 1,
-            answered_count: 0,
-            total_questions: prepared.questions.length,
-            remaining_seconds: (session.exam?.durasi_menit || 60) * 60,
-            is_fullscreen: true,
-            is_focused: true,
-            devtools_open: false,
-            tab_violations: 0,
-            inspect_attempts: 0,
-            last_action: `Memulai sesi ujian [${prepared.studentPackageCode}] · Soal No. 1`,
-            recent_logs: startLogs,
-          },
-          'Sedang Ujian'
-        );
       }
 
       baselineWindowGapRef.current = {
@@ -911,60 +993,73 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     }
   };
 
-  // Real-time subscription to Teacher's Status Management (Blokir / Buka Kunci / Reset)
-  useEffect(() => {
+  // Manual one-time status check (replaces real-time onSnapshot listener to save daily Firestore reads)
+  const [isCheckingUnlockStatus, setIsCheckingUnlockStatus] = useState(false);
+
+  const handleCheckStudentStatusManual = useCallback(async () => {
     if (!activeStudent || submittedSummary) return;
+    setIsCheckingUnlockStatus(true);
+    try {
+      const freshStatus = await fetchSingleStudentStatusOnce(activeStudent.id);
+      if (!freshStatus) return;
+      const newStatus = (
+        freshStatus === 'Diblokir' ||
+        freshStatus === 'Sedang Ujian' ||
+        freshStatus === 'Selesai' ||
+        freshStatus === 'Belum Mulai'
+          ? freshStatus
+          : 'Belum Mulai'
+      ) as StudentItem['status_ujian'];
 
-    const unsubscribe = subscribeToSingleStudentStatus(
-      activeStudent.id,
-      (newStatus) => {
-        setActiveStudent((prev) => {
-          if (!prev) return null;
-          const updated = { ...prev, status_ujian: newStatus };
-          if (activeExam) {
-            saveActiveStudentSession({
-              student: updated,
-              exam: activeExam,
-              questions: examQuestions,
-            });
-          }
-          return updated;
-        });
-
-        if (newStatus === 'Diblokir') {
-          setIsStudentBlocked(true);
-          setShowCheatLockModal(true);
-        } else if (newStatus === 'Sedang Ujian') {
-          setIsStudentBlocked((wasBlocked) => {
-            if (wasBlocked) {
-              setShowCheatLockModal(false);
-              setShowCheatBanner(false);
-              setSecurityNotice(
-                'Kunci ujian telah dibuka oleh Guru Pengawas! Silakan lanjutkan ujian dengan tertib.'
-              );
-              setActivityLogs((prev) => [
-                ...prev,
-                {
-                  timestamp: new Date().toLocaleTimeString('id-ID'),
-                  action: 'unblocked',
-                  detail: 'Kunci ujian telah dibuka oleh Guru Pengawas di Dashboard.',
-                },
-              ]);
-            }
-            return false;
+      setActiveStudent((prev) => {
+        if (!prev) return null;
+        const updated = { ...prev, status_ujian: newStatus };
+        if (activeExam) {
+          saveActiveStudentSession({
+            student: updated,
+            exam: activeExam,
+            questions: examQuestions,
           });
-        } else if (newStatus === 'Belum Mulai') {
-          // Teacher reset this student's session
-          clearLocalProgress(activeStudent.token_ujian, activeExam?.id);
-          clearActiveStudentSession();
-          setActiveStudent(null);
-          setSubmittedSummary(null);
         }
-      }
-    );
+        return updated;
+      });
 
-    return () => unsubscribe();
-  }, [activeStudent?.id, activeStudent?.token_ujian, activeExam, examQuestions, submittedSummary]);
+      if (newStatus === 'Diblokir') {
+        setIsStudentBlocked(true);
+        setShowCheatLockModal(true);
+      } else if (newStatus === 'Sedang Ujian') {
+        setIsStudentBlocked((wasBlocked) => {
+          if (wasBlocked) {
+            setShowCheatLockModal(false);
+            setShowCheatBanner(false);
+            setSecurityNotice(
+              'Kunci ujian telah dibuka oleh Guru Pengawas! Silakan lanjutkan ujian dengan tertib.'
+            );
+            setActivityLogs((prev) => [
+              ...prev,
+              {
+                timestamp: new Date().toLocaleTimeString('id-ID'),
+                action: 'unblocked',
+                detail: 'Kunci ujian telah dibuka oleh Guru Pengawas di Dashboard.',
+              },
+            ]);
+          }
+          return false;
+        });
+      } else if (newStatus === 'Belum Mulai') {
+        clearLocalProgress(
+          activeStudent.token_ujian,
+          activeExam?.id,
+          activeStudent.id
+        );
+        clearActiveStudentSession();
+        setActiveStudent(null);
+        setSubmittedSummary(null);
+      }
+    } finally {
+      setIsCheckingUnlockStatus(false);
+    }
+  }, [activeStudent, activeExam, examQuestions, submittedSummary]);
 
   const getBrowserDeviceSummary = useCallback(() => {
     try {
@@ -1404,70 +1499,36 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     isStudentBlocked,
   ]);
 
-  // Push update when student switches question number
-  useEffect(() => {
-    if (!activeStudent || !activeExam || submittedSummary || isStudentBlocked) return;
-    const stRef = latestTelemetryStateRef.current;
-    const ansCount = Object.keys(stRef.answers).filter(
-      (k) => stRef.answers[k] && stRef.answers[k].length > 0
-    ).length;
+  // Track whether there are new answer changes since the last 5-minute periodic auto-save
+  const hasUnsavedAnswerChangesRef = useRef<boolean>(false);
 
-    const timer = window.setTimeout(() => {
-      syncStudentLiveTelemetryCbt(activeStudent, {
-        exam_id: activeExam.id,
-        judul_ujian: activeExam.judul_ujian,
-        kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
-        current_question_no: currentIndex + 1,
-        answered_count: ansCount,
-        total_questions: examQuestions.length,
-        remaining_seconds: stRef.remainingSeconds,
-        is_fullscreen: Boolean(document.fullscreenElement),
-        is_focused: document.hasFocus() && document.visibilityState === 'visible',
-        devtools_open: stRef.isDevToolsOpen,
-        tab_violations: stRef.tabViolations,
-        inspect_attempts: stRef.inspectAttempts,
-        last_action: `Sedang mengerjakan Soal No. ${currentIndex + 1} (${ansCount}/${examQuestions.length} terjawab)`,
-        device_info: getBrowserDeviceSummary(),
-        recent_logs: stRef.activityLogs.slice(-12),
-      });
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-  }, [currentIndex, activeStudent?.id, activeExam?.id, examQuestions.length, submittedSummary, isStudentBlocked, getBrowserDeviceSummary]);
-
-  // Periodic 12-second live heartbeat to Admin Proctor Screen
+  // Periodic 5-minute (300,000 ms) auto-save to Firestore as server backup if student switches devices.
+  // Only writes to Firestore if there are new answer changes (hasUnsavedAnswerChangesRef.current === true).
   useEffect(() => {
     if (!activeStudent || !activeExam || submittedSummary) return;
 
-    const heartbeatInterval = window.setInterval(() => {
+    const FIVE_MINUTES_MS = 5 * 60 * 1000;
+    const autoSaveInterval = window.setInterval(() => {
+      if (!hasUnsavedAnswerChangesRef.current) {
+        return;
+      }
       const stRef = latestTelemetryStateRef.current;
-      const ansCount = Object.keys(stRef.answers).filter(
-        (k) => stRef.answers[k] && stRef.answers[k].length > 0
-      ).length;
-      syncStudentLiveTelemetryCbt(
-        activeStudent,
-        {
-          exam_id: activeExam.id,
-          judul_ujian: activeExam.judul_ujian,
-          kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
-          current_question_no: stRef.currentIndex + 1,
-          answered_count: ansCount,
-          total_questions: examQuestions.length,
-          remaining_seconds: stRef.remainingSeconds,
-          is_fullscreen: Boolean(document.fullscreenElement),
-          is_focused: document.hasFocus() && document.visibilityState === 'visible',
-          devtools_open: stRef.isDevToolsOpen,
-          tab_violations: stRef.tabViolations,
-          inspect_attempts: stRef.inspectAttempts,
-          device_info: getBrowserDeviceSummary(),
-          recent_logs: stRef.activityLogs.slice(-12),
-        },
-        stRef.isStudentBlocked ? 'Diblokir' : 'Sedang Ujian'
-      );
-    }, 12000);
+      hasUnsavedAnswerChangesRef.current = false;
 
-    return () => window.clearInterval(heartbeatInterval);
-  }, [activeStudent, activeExam, examQuestions.length, submittedSummary, getBrowserDeviceSummary]);
+      autoSaveStudentAnswersToFirestoreCbt({
+        student: activeStudent,
+        exam: activeExam,
+        answers: stRef.answers,
+        currentIndex: stRef.currentIndex,
+        totalQuestions: examQuestions.length,
+        remainingSeconds: stRef.remainingSeconds,
+        tabViolations: stRef.tabViolations,
+        inspectAttempts: stRef.inspectAttempts,
+      });
+    }, FIVE_MINUTES_MS);
+
+    return () => window.clearInterval(autoSaveInterval);
+  }, [activeStudent, activeExam, examQuestions.length, submittedSummary]);
 
   const handleSubmitExam = useCallback(async () => {
     if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked) return;
@@ -1500,8 +1561,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         document.exitFullscreen().catch(() => {});
       }
 
-      // Clear in-progress storage upon successful submission
-      clearLocalProgress(activeStudent.token_ujian, activeExam.id);
+      // Clear temporary in-progress localStorage data upon final submission
+      hasUnsavedAnswerChangesRef.current = false;
+      clearLocalProgress(activeStudent.token_ujian, activeExam.id, activeStudent.id);
+      clearLocalStudentAnswers(activeExam.id, activeStudent.id);
       clearActiveStudentSession();
 
       const finalLogs: StudentActivityLog[] = [
@@ -1512,28 +1575,6 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           detail: `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100.`,
         },
       ];
-
-      syncStudentLiveTelemetryCbt(
-        activeStudent,
-        {
-          exam_id: activeExam.id,
-          judul_ujian: activeExam.judul_ujian,
-          kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
-          current_question_no: examQuestions.length,
-          answered_count: currentAnsweredCount,
-          total_questions: examQuestions.length,
-          remaining_seconds: remainingSeconds,
-          is_fullscreen: false,
-          is_focused: true,
-          devtools_open: false,
-          tab_violations: tabViolations,
-          inspect_attempts: inspectAttempts,
-          last_action: `Selesai & Mengumpulkan Ujian (Skor: ${outcome.skor}/100)`,
-          device_info: getBrowserDeviceSummary(),
-          recent_logs: finalLogs.slice(-12),
-        },
-        'Selesai'
-      );
 
       // Save complete receipt to student's history (with canonical Bank Soal option keys)
       const finalReceipt: LocalExamReceipt = {
@@ -1652,36 +1693,33 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       return nextAnswersMap;
     });
 
+    // Save immediately to localStorage (cbt_jawaban_${ujianId}_${userId}) without sending any Firestore request
+    hasUnsavedAnswerChangesRef.current = true;
+    saveLocalStudentAnswers(activeExam.id, activeStudent.id, {
+      examId: activeExam.id,
+      studentId: activeStudent.id,
+      nama: activeStudent.nama,
+      kelas: activeStudent.kelas,
+      token_ujian: activeStudent.token_ujian,
+      answers: nextAnswersMap,
+      currentIndex,
+      remainingSeconds,
+      tabViolations,
+      inspectAttempts,
+      assignedPackageCode:
+        activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+      questionOrderIds: examQuestions.map((q) => Number(q.id)),
+      updatedAt: new Date().toISOString(),
+    });
+
     const timeStr = new Date().toLocaleTimeString('id-ID');
     const newAnswerLog: StudentActivityLog = {
       timestamp: timeStr,
       action: 'answer',
-      detail: `Menjawab Soal #${currentIndex + 1} (${optionKey})`,
+      detail: `Menjawab Soal #${currentIndex + 1} (${optionKey}) — Tersimpan instan di memori lokal`,
     };
     const nextLogs = [...activityLogs.slice(-49), newAnswerLog];
     setActivityLogs(nextLogs);
-
-    const nextAnsCount = Object.keys(nextAnswersMap).filter(
-      (k) => nextAnswersMap[k] && nextAnswersMap[k].length > 0
-    ).length;
-
-    syncStudentLiveTelemetryCbt(activeStudent, {
-      exam_id: activeExam.id,
-      judul_ujian: activeExam.judul_ujian,
-      kode_paket: activeStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
-      current_question_no: currentIndex + 1,
-      answered_count: nextAnsCount,
-      total_questions: examQuestions.length,
-      remaining_seconds: remainingSeconds,
-      is_fullscreen: Boolean(document.fullscreenElement),
-      is_focused: document.hasFocus() && document.visibilityState === 'visible',
-      devtools_open: isDevToolsOpen,
-      tab_violations: tabViolations,
-      inspect_attempts: inspectAttempts,
-      last_action: `Menjawab Soal No. ${currentIndex + 1} (${nextAnsCount}/${examQuestions.length} terjawab)`,
-      device_info: getBrowserDeviceSummary(),
-      recent_logs: nextLogs.slice(-12),
-    });
   };
 
   const handleRequestInstantAiEvaluation = async () => {
@@ -2925,14 +2963,34 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 </div>
 
                 <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowActivityLogModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg cursor-pointer"
-                  >
-                    <Activity className="w-3.5 h-3.5 text-slate-600" />
-                    <span>Lihat Rekaman Pelanggaran</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isCheckingUnlockStatus}
+                      onClick={handleCheckStudentStatusManual}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg cursor-pointer"
+                    >
+                      <RotateCcw
+                        className={`w-3.5 h-3.5 ${
+                          isCheckingUnlockStatus ? 'animate-spin' : ''
+                        }`}
+                      />
+                      <span>
+                        {isCheckingUnlockStatus
+                          ? 'Mengecek Status...'
+                          : 'Cek Status Buka Kunci'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowActivityLogModal(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg cursor-pointer"
+                    >
+                      <Activity className="w-3.5 h-3.5 text-slate-600" />
+                      <span>Lihat Rekaman Pelanggaran</span>
+                    </button>
+                  </div>
 
                   <button
                     type="button"

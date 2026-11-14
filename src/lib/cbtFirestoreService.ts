@@ -1,11 +1,13 @@
 import {
   collection,
   doc,
+  getDoc,
+  getDocFromCache,
   getDocs,
+  getDocsFromCache,
   setDoc,
   deleteDoc,
   writeBatch,
-  onSnapshot,
   query,
   where,
   Unsubscribe,
@@ -15,10 +17,54 @@ import {
   CbtSyncPulseData,
   OperationType,
   handleFirestoreError,
+  isQuotaExceededError,
+  markFirestoreQuotaExhausted,
+  isFirestoreQuotaCooldownActive,
+  saveCachedSyncPulseLocal,
 } from './firebase';
 
 function cbtCollectionQuery(collectionName: 'exams' | 'students' | 'questions' | 'results') {
   return query(collection(db!, collectionName), where('id', '>=', 1));
+}
+
+async function safeGetCollectionDocs(
+  collectionName: 'exams' | 'students' | 'questions' | 'results'
+) {
+  const q = cbtCollectionQuery(collectionName);
+  if (isFirestoreQuotaCooldownActive()) {
+    return await getDocsFromCache(q);
+  }
+  try {
+    return await getDocs(q);
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    try {
+      return await getDocsFromCache(q);
+    } catch {
+      throw err;
+    }
+  }
+}
+
+async function safeGetSingleDoc(collectionName: string, docId: string) {
+  const ref = doc(db!, collectionName, docId);
+  if (isFirestoreQuotaCooldownActive()) {
+    return await getDocFromCache(ref);
+  }
+  try {
+    return await getDoc(ref);
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+    try {
+      return await getDocFromCache(ref);
+    } catch {
+      throw err;
+    }
+  }
 }
 import {
   ExamItem,
@@ -170,6 +216,340 @@ export async function safeApiJson<T = any>(
 }
 
 const OFFLINE_CACHE_KEY = 'cbt_offline_cache_v1';
+export const QUESTION_CACHE_KEY_PREFIX = 'cbt_soal_';
+export const ANSWER_CACHE_KEY_PREFIX = 'cbt_jawaban_';
+
+export interface LocalStudentAnswerSession {
+  examId: number;
+  studentId: number;
+  nama: string;
+  kelas: string;
+  token_ujian: string;
+  assignedPackageCode?: string;
+  questionOrderIds?: number[];
+  answers: Record<string, string[]>;
+  currentIndex: number;
+  remainingSeconds: number;
+  tabViolations: number;
+  inspectAttempts?: number;
+  logs?: any[];
+  updatedAt: string;
+}
+
+/**
+ * 2. Caching Soal di Memori Lokal (localStorage):
+ * Key: `cbt_soal_${ujianId}`
+ */
+export function getCachedExamQuestionsLocal(
+  examId: number | string
+): QuestionItem[] | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(
+      `${QUESTION_CACHE_KEY_PREFIX}${examId}`
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.items)
+      ? parsed.items
+      : null;
+    if (!items || items.length === 0) return null;
+    return items.map((q: any) => ({
+      id: Number(q.id),
+      exam_id: Number(q.exam_id || examId),
+      teks_soal: String(q.teks_soal || ''),
+      tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+      data_opsi: q.data_opsi || {
+        wacana: '',
+        opsi: { A: '', B: '', C: '', D: '', E: '' },
+      },
+      kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
+      bobot:
+        Number(q.bobot) > 0
+          ? Number(q.bobot)
+          : q.tipe_soal === 'Kompleks'
+          ? 3
+          : 2,
+    }));
+  } catch {
+    return null;
+  }
+}
+
+export function saveCachedExamQuestionsLocal(
+  examId: number | string,
+  questions: QuestionItem[]
+): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const key = `${QUESTION_CACHE_KEY_PREFIX}${examId}`;
+    if (!questions || questions.length === 0) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, JSON.stringify(questions));
+  } catch {
+    // Ignore localStorage quota errors
+  }
+}
+
+/**
+ * 3. Sistem Jawaban Anti-Hilang & Hemat Writes (Local-First):
+ * Key: `cbt_jawaban_${ujianId}_${userId}`
+ */
+export function saveLocalStudentAnswers(
+  examId: number | string,
+  studentId: number | string,
+  session: LocalStudentAnswerSession
+): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const key = `${ANSWER_CACHE_KEY_PREFIX}${examId}_${studentId}`;
+    window.localStorage.setItem(key, JSON.stringify(session));
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export function getLocalStudentAnswers(
+  examId: number | string,
+  studentId: number | string
+): LocalStudentAnswerSession | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const key = `${ANSWER_CACHE_KEY_PREFIX}${examId}_${studentId}`;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed as LocalStudentAnswerSession;
+  } catch {
+    return null;
+  }
+}
+
+export function clearLocalStudentAnswers(
+  examId: number | string,
+  studentId: number | string
+): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    window.localStorage.removeItem(
+      `${ANSWER_CACHE_KEY_PREFIX}${examId}_${studentId}`
+    );
+  } catch {}
+}
+
+/**
+ * 4. Optimasi Struktur Dokumen Soal:
+ * Simpan seluruh soal dalam 1 paket ujian sebagai 1 dokumen tunggal (`questions/bundle_${examId}`)
+ * sehingga 1 siswa hanya menghabiskan 1 kuota baca (`1 read`) saat mengunduh seluruh soal ujian.
+ */
+function buildExamQuestionsBundleDoc(
+  examId: number,
+  examQuestions: QuestionItem[],
+  nowIso: string
+) {
+  const sanitizedItems = examQuestions
+    .filter((q) => Number(q.exam_id) === Number(examId))
+    .sort((a, b) => Number(a.id) - Number(b.id))
+    .map((q) => ({
+      id: Number(q.id),
+      exam_id: Number(examId),
+      teks_soal: String(q.teks_soal || '').slice(0, 4000),
+      tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+      data_opsi: q.data_opsi || {
+        wacana: '',
+        opsi: { A: '', B: '', C: '', D: '', E: '' },
+      },
+      kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
+      bobot:
+        Number(q.bobot) > 0
+          ? Number(q.bobot)
+          : q.tipe_soal === 'Kompleks'
+          ? 3
+          : 2,
+    }));
+
+  return {
+    id: Number(examId),
+    exam_id: Number(examId),
+    teks_soal: `BUNDLE_PAKET_SOAL_${examId}`,
+    tipe_soal: 'PG',
+    data_opsi: {
+      is_bundle: true,
+      items: sanitizedItems,
+      wacana: '',
+      opsi: { A: '-', B: '-', C: '-', D: '-', E: '-' },
+    },
+    kunci_jawaban: ['A'],
+    bobot: 2,
+    authorUid: 'sahidin30@gmail.com',
+    updatedAt: nowIso,
+  };
+}
+
+export async function syncExamQuestionsBundleToFirestore(
+  examId: number,
+  examQuestions: QuestionItem[]
+): Promise<void> {
+  const cleanItems = examQuestions
+    .filter((q) => Number(q.exam_id) === Number(examId))
+    .sort((a, b) => Number(a.id) - Number(b.id));
+
+  saveCachedExamQuestionsLocal(examId, cleanItems);
+
+  if (!db) return;
+  const nowIso = new Date().toISOString();
+  try {
+    if (cleanItems.length === 0) {
+      await deleteDoc(doc(db, 'questions', `bundle_${examId}`));
+    } else {
+      await setDoc(
+        doc(db, 'questions', `bundle_${examId}`),
+        buildExamQuestionsBundleDoc(Number(examId), cleanItems, nowIso)
+      );
+    }
+  } catch (err) {
+    try {
+      handleFirestoreError(
+        err,
+        OperationType.WRITE,
+        `questions/bundle_${examId}`
+      );
+    } catch {}
+  }
+}
+
+/**
+ * Mengambil seluruh soal ujian untuk siswa dengan prioritas:
+ * 1. `localStorage` (`cbt_soal_${ujianId}`) -> 0 Read Firestore
+ * 2. 1 Dokumen Bundel (`questions/bundle_${ujianId}`) -> 1 Read Firestore (`getDoc`)
+ * 3. Fallback Legacy (`where('exam_id', '==', examId)`) lalu langsung disimpan ke `cbt_soal_${ujianId}` & bundel
+ */
+export async function fetchExamQuestionsBundleOnce(
+  examId: number
+): Promise<QuestionItem[]> {
+  // 1. Cek localStorage cbt_soal_${examId} terlebih dahulu (0 Firestore Read)
+  const localCached = getCachedExamQuestionsLocal(examId);
+  if (localCached && localCached.length > 0) {
+    return localCached;
+  }
+
+  // 2. Cek apakah snapshot lokal sudah menyimpan soal ujian ini (0 Firestore Read)
+  const snapshotCache = loadLocalCbtSnapshotCache();
+  if (snapshotCache) {
+    const snapQuestions = snapshotCache.questions.filter(
+      (q) => Number(q.exam_id) === Number(examId)
+    );
+    if (snapQuestions.length > 0) {
+      saveCachedExamQuestionsLocal(examId, snapQuestions);
+      return snapQuestions;
+    }
+  }
+
+  if (!db) return [];
+
+  // 3. Ambil 1 dokumen bundel soal (`questions/bundle_${examId}`) dalam 1 kali getDoc (1 Read)
+  try {
+    const bundleSnap = await safeGetSingleDoc('questions', `bundle_${examId}`);
+    if (bundleSnap.exists()) {
+      const raw = bundleSnap.data() as any;
+      if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
+        const bundledItems: QuestionItem[] = raw.data_opsi.items
+          .map((item: any) => ({
+            id: Number(item.id),
+            exam_id: Number(item.exam_id || examId),
+            teks_soal: String(item.teks_soal || ''),
+            tipe_soal: item.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+            data_opsi: item.data_opsi || {
+              wacana: '',
+              opsi: { A: '', B: '', C: '', D: '', E: '' },
+            },
+            kunci_jawaban: Array.isArray(item.kunci_jawaban)
+              ? item.kunci_jawaban
+              : ['A'],
+            bobot:
+              Number(item.bobot) > 0
+                ? Number(item.bobot)
+                : item.tipe_soal === 'Kompleks'
+                ? 3
+                : 2,
+          }))
+          .sort((a: QuestionItem, b: QuestionItem) => a.id - b.id);
+
+        if (bundledItems.length > 0) {
+          saveCachedExamQuestionsLocal(examId, bundledItems);
+          return bundledItems;
+        }
+      }
+    }
+  } catch {
+    // Lanjut ke fallback query jika dokumen bundel belum ada
+  }
+
+  // 4. Fallback satu kali jika paket soal lama belum dibundel, lalu simpan ke localStorage & bundel
+  try {
+    const qQuery = query(
+      collection(db, 'questions'),
+      where('exam_id', '==', Number(examId))
+    );
+    const snap = await getDocs(qQuery);
+    const legacyItems: QuestionItem[] = [];
+    snap.docs.forEach((d) => {
+      const raw = d.data() as any;
+      if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
+        raw.data_opsi.items.forEach((item: any) => {
+          legacyItems.push({
+            id: Number(item.id),
+            exam_id: Number(item.exam_id || examId),
+            teks_soal: String(item.teks_soal || ''),
+            tipe_soal: item.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+            data_opsi: item.data_opsi || {
+              wacana: '',
+              opsi: { A: '', B: '', C: '', D: '', E: '' },
+            },
+            kunci_jawaban: Array.isArray(item.kunci_jawaban)
+              ? item.kunci_jawaban
+              : ['A'],
+            bobot: Number(item.bobot) || 2,
+          });
+        });
+      } else if (raw?.teks_soal && !String(raw.teks_soal).startsWith('BUNDLE_PAKET_SOAL')) {
+        legacyItems.push({
+          id: Number(raw.id),
+          exam_id: Number(raw.exam_id),
+          teks_soal: String(raw.teks_soal || ''),
+          tipe_soal: raw.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+          data_opsi: raw.data_opsi || {
+            wacana: '',
+            opsi: { A: '', B: '', C: '', D: '', E: '' },
+          },
+          kunci_jawaban: Array.isArray(raw.kunci_jawaban)
+            ? raw.kunci_jawaban
+            : ['A'],
+          bobot: Number(raw.bobot) || 2,
+        });
+      }
+    });
+
+    const dedupMap = new Map<number, QuestionItem>();
+    legacyItems.forEach((q) => dedupMap.set(Number(q.id), q));
+    const finalItems = Array.from(dedupMap.values()).sort(
+      (a, b) => a.id - b.id
+    );
+
+    if (finalItems.length > 0) {
+      saveCachedExamQuestionsLocal(examId, finalItems);
+      syncExamQuestionsBundleToFirestore(examId, finalItems).catch(() => {});
+    }
+    return finalItems;
+  } catch {
+    return [];
+  }
+}
 
 let cachedCollectionCounts = {
   exams: 0,
@@ -197,6 +577,18 @@ export function saveLocalCbtSnapshotCache(snapshot: {
     questions: snapshot.questions?.length || 0,
     results: snapshot.results?.length || 0,
   };
+
+  // Simpan juga cache soal per ujian ke `cbt_soal_${ujianId}`
+  if (Array.isArray(snapshot.exams) && Array.isArray(snapshot.questions)) {
+    for (const ex of snapshot.exams) {
+      const exQuestions = snapshot.questions.filter(
+        (q) => Number(q.exam_id) === Number(ex.id)
+      );
+      if (exQuestions.length > 0) {
+        saveCachedExamQuestionsLocal(ex.id, exQuestions);
+      }
+    }
+  }
 
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
@@ -253,28 +645,33 @@ async function updateFirestorePulse(
     results?: number;
   }
 ) {
-  if (!db) return null;
   const nowIso = new Date().toISOString();
-  try {
-    const pulse: CbtSyncPulseData = {
-      lastSyncedAt: nowIso,
-      lastEvent: eventText.slice(0, 200),
-      totalExams: counts?.exams ?? cachedCollectionCounts.exams,
-      totalStudents: counts?.students ?? cachedCollectionCounts.students,
-      totalQuestions: counts?.questions ?? cachedCollectionCounts.questions,
-      totalResults: counts?.results ?? cachedCollectionCounts.results,
-      authorUid: 'sahidin30@gmail.com',
-    };
+  const pulse: CbtSyncPulseData = {
+    lastSyncedAt: nowIso,
+    lastEvent: eventText.slice(0, 200),
+    totalExams: counts?.exams ?? cachedCollectionCounts.exams,
+    totalStudents: counts?.students ?? cachedCollectionCounts.students,
+    totalQuestions: counts?.questions ?? cachedCollectionCounts.questions,
+    totalResults: counts?.results ?? cachedCollectionCounts.results,
+    authorUid: 'sahidin30@gmail.com',
+  };
+  saveCachedSyncPulseLocal(pulse);
 
+  if (!db || isFirestoreQuotaCooldownActive()) return pulse;
+  try {
     await setDoc(doc(db, 'cbt_sync', 'live_state'), pulse);
     return pulse;
   } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExhausted();
+      return pulse;
+    }
     try {
       handleFirestoreError(err, OperationType.WRITE, 'cbt_sync/live_state');
     } catch {
       // Logged
     }
-    return null;
+    return pulse;
   }
 }
 
@@ -284,13 +681,17 @@ export async function fetchAllFromFirestore(): Promise<{
   questions: QuestionItem[];
   results: ResultItem[];
 } | null> {
-  if (!db) return null;
+  if (!db) return loadLocalCbtSnapshotCache();
+  if (isFirestoreQuotaCooldownActive()) {
+    const localSnap = loadLocalCbtSnapshotCache();
+    if (localSnap) return localSnap;
+  }
   try {
     const [exSnap, stSnap, qSnap, rSnap] = await Promise.all([
-      getDocs(cbtCollectionQuery('exams')),
-      getDocs(cbtCollectionQuery('students')),
-      getDocs(cbtCollectionQuery('questions')),
-      getDocs(cbtCollectionQuery('results')),
+      safeGetCollectionDocs('exams'),
+      safeGetCollectionDocs('students'),
+      safeGetCollectionDocs('questions'),
+      safeGetCollectionDocs('results'),
     ]);
 
     const exams: ExamItem[] = exSnap.docs
@@ -301,10 +702,32 @@ export async function fetchAllFromFirestore(): Promise<{
       .map((d) => d.data() as StudentItem)
       .sort((a, b) => b.id - a.id);
 
-    const questions: QuestionItem[] = qSnap.docs
-      .map((d) => {
-        const raw = d.data() as any;
-        return {
+    const questionMap = new Map<number, QuestionItem>();
+    qSnap.docs.forEach((d) => {
+      const raw = d.data() as any;
+      if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
+        raw.data_opsi.items.forEach((item: any) => {
+          const qObj: QuestionItem = {
+            id: Number(item.id),
+            exam_id: Number(item.exam_id || raw.exam_id),
+            teks_soal: String(item.teks_soal || ''),
+            tipe_soal: item.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+            data_opsi: item.data_opsi || {
+              wacana: '',
+              opsi: { A: '', B: '', C: '', D: '', E: '' },
+            },
+            kunci_jawaban: Array.isArray(item.kunci_jawaban)
+              ? item.kunci_jawaban
+              : ['A'],
+            bobot: Number(item.bobot) || 2,
+          };
+          questionMap.set(qObj.id, qObj);
+        });
+      } else if (
+        raw?.teks_soal &&
+        !String(raw.teks_soal).startsWith('BUNDLE_PAKET_SOAL_')
+      ) {
+        const qObj: QuestionItem = {
           id: Number(raw.id),
           exam_id: Number(raw.exam_id),
           teks_soal: String(raw.teks_soal || ''),
@@ -317,9 +740,15 @@ export async function fetchAllFromFirestore(): Promise<{
             ? raw.kunci_jawaban
             : ['A'],
           bobot: Number(raw.bobot) || 2,
-        } satisfies QuestionItem;
-      })
-      .sort((a, b) => a.id - b.id);
+        };
+        if (!questionMap.has(qObj.id)) {
+          questionMap.set(qObj.id, qObj);
+        }
+      }
+    });
+    const questions: QuestionItem[] = Array.from(questionMap.values()).sort(
+      (a, b) => a.id - b.id
+    );
 
     const results: ResultItem[] = rSnap.docs
       .map((d) => {
@@ -339,25 +768,6 @@ export async function fetchAllFromFirestore(): Promise<{
 
     const validExamIds = new Set(exams.map((e) => Number(e.id)));
     const validStudentIds = new Set(students.map((s) => Number(s.id)));
-
-    const orphanedQuestionDocs = qSnap.docs.filter((d) => {
-      const raw = d.data() as any;
-      return !validExamIds.has(Number(raw.exam_id));
-    });
-    const orphanedResultDocs = rSnap.docs.filter((d) => {
-      const raw = d.data() as any;
-      return (
-        !validExamIds.has(Number(raw.exam_id)) ||
-        !validStudentIds.has(Number(raw.student_id))
-      );
-    });
-
-    if (orphanedQuestionDocs.length > 0 || orphanedResultDocs.length > 0) {
-      const cleanupBatch = writeBatch(db);
-      orphanedQuestionDocs.forEach((d) => cleanupBatch.delete(d.ref));
-      orphanedResultDocs.forEach((d) => cleanupBatch.delete(d.ref));
-      cleanupBatch.commit().catch(() => {});
-    }
 
     const validQuestions = questions.filter((q) =>
       validExamIds.has(Number(q.exam_id))
@@ -385,12 +795,16 @@ export async function fetchAllFromFirestore(): Promise<{
     saveLocalCbtSnapshotCache(bundle);
     return bundle;
   } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExhausted();
+      return loadLocalCbtSnapshotCache();
+    }
     try {
       handleFirestoreError(err, OperationType.GET, 'exams|students|questions|results');
     } catch {
       // Logged
     }
-    return null;
+    return loadLocalCbtSnapshotCache();
   }
 }
 
@@ -489,21 +903,20 @@ export async function pushSnapshotToFirestoreClient(
       batch.set(doc(db, 'students', String(st.id)), buildCleanStudentFirestoreDoc(st, nowIso), { merge: true });
     }
 
+    // Bundle all questions per exam into 1 single document `questions/bundle_${examId}` (1 write per exam instead of N writes)
+    const questionsByExam = new Map<number, QuestionItem[]>();
     for (const q of data.questions) {
-      batch.set(doc(db, 'questions', String(q.id)), {
-        id: Number(q.id),
-        exam_id: Number(q.exam_id),
-        teks_soal: String(q.teks_soal || '').slice(0, 4000),
-        tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
-        data_opsi: q.data_opsi || {
-          wacana: '',
-          opsi: { A: '', B: '', C: '', D: '', E: '' },
-        },
-        kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
-        bobot: Number(q.bobot) || 2,
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      });
+      const exId = Number(q.exam_id);
+      const list = questionsByExam.get(exId) || [];
+      list.push(q);
+      questionsByExam.set(exId, list);
+    }
+    for (const [exId, exQuestions] of questionsByExam.entries()) {
+      saveCachedExamQuestionsLocal(exId, exQuestions);
+      batch.set(
+        doc(db, 'questions', `bundle_${exId}`),
+        buildExamQuestionsBundleDoc(exId, exQuestions, nowIso)
+      );
     }
 
     for (const r of data.results) {
@@ -672,107 +1085,24 @@ export async function loadUnifiedDashboardData(): Promise<{
   };
 }
 
+/**
+ * 1. Hapus Semua Real-Time Listener (onSnapshot):
+ * Mengganti listener `onSnapshot` menjadi pembacaan satu kali (`fetchAllFromFirestore`).
+ */
 export function subscribeRealtimeFirestoreCollections(callbacks: {
   onExams?: (exams: ExamItem[]) => void;
   onStudents?: (students: StudentItem[]) => void;
   onQuestions?: (questions: QuestionItem[]) => void;
   onResults?: (results: ResultItem[]) => void;
 }): Unsubscribe {
-  if (!db) return () => {};
-  const unsubs: Unsubscribe[] = [];
-
-  if (callbacks.onExams) {
-    unsubs.push(
-      onSnapshot(
-        cbtCollectionQuery('exams'),
-        (snap) => {
-          const items = snap.docs
-            .map((d) => d.data() as ExamItem)
-            .sort((a, b) => b.id - a.id);
-          callbacks.onExams?.(items);
-        },
-        () => {}
-      )
-    );
-  }
-
-  if (callbacks.onStudents) {
-    unsubs.push(
-      onSnapshot(
-        cbtCollectionQuery('students'),
-        (snap) => {
-          const items = snap.docs
-            .map((d) => d.data() as StudentItem)
-            .sort((a, b) => b.id - a.id);
-          callbacks.onStudents?.(items);
-        },
-        () => {}
-      )
-    );
-  }
-
-  if (callbacks.onQuestions) {
-    unsubs.push(
-      onSnapshot(
-        cbtCollectionQuery('questions'),
-        (snap) => {
-          const items = snap.docs
-            .map((d) => {
-              const raw = d.data() as any;
-              return {
-                id: Number(raw.id),
-                exam_id: Number(raw.exam_id),
-                teks_soal: String(raw.teks_soal || ''),
-                tipe_soal: raw.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
-                data_opsi: raw.data_opsi || {
-                  wacana: '',
-                  opsi: { A: '', B: '', C: '', D: '', E: '' },
-                },
-                kunci_jawaban: Array.isArray(raw.kunci_jawaban)
-                  ? raw.kunci_jawaban
-                  : ['A'],
-                bobot: Number(raw.bobot) || 2,
-              } satisfies QuestionItem;
-            })
-            .sort((a, b) => a.id - b.id);
-          callbacks.onQuestions?.(items);
-        },
-        () => {}
-      )
-    );
-  }
-
-  if (callbacks.onResults) {
-    unsubs.push(
-      onSnapshot(
-        cbtCollectionQuery('results'),
-        (snap) => {
-          const items = snap.docs
-            .map((d) => {
-              const raw = d.data() as any;
-              return {
-                id: Number(raw.id),
-                student_id: Number(raw.student_id),
-                exam_id: Number(raw.exam_id),
-                skor_angka: Number(raw.skor_angka) || 0,
-                jawaban_siswa: raw.jawaban_siswa || {},
-                analisis_ai: raw.analisis_ai || null,
-                pelanggaran_tab: Number(raw.pelanggaran_tab) || 0,
-                created_at:
-                  raw.created_at || raw.updatedAt || new Date().toISOString(),
-              } satisfies ResultItem;
-            })
-            .sort((a, b) => b.id - a.id);
-          callbacks.onResults?.(items);
-        },
-        () => {}
-      )
-    );
-  }
-
-  return () => {
-    unsubs.forEach((u) => u());
-  };
+  fetchAllFromFirestore().then((bundle) => {
+    if (!bundle) return;
+    callbacks.onExams?.(bundle.exams);
+    callbacks.onStudents?.(bundle.students);
+    callbacks.onQuestions?.(bundle.questions);
+    callbacks.onResults?.(bundle.results);
+  });
+  return () => {};
 }
 
 // ============================================================================
@@ -1282,23 +1612,93 @@ export async function bulkUpdateStudentStatusCbt(
   }
 }
 
+/**
+ * 1. Hapus onSnapshot pada status siswa -> gunakan pembacaan satu kali `getDoc` (`fetchSingleStudentStatusOnce`)
+ */
+export async function fetchSingleStudentStatusOnce(
+  studentId: number
+): Promise<string | null> {
+  if (!db) return null;
+  try {
+    const snap = await safeGetSingleDoc('students', String(studentId));
+    if (snap.exists()) {
+      const data = snap.data() as any;
+      if (data?.status_ujian) {
+        return String(data.status_ujian);
+      }
+    }
+  } catch {
+    // Ignore transient errors
+  }
+  return null;
+}
+
 export function subscribeToSingleStudentStatus(
   studentId: number,
   onStatusChange: (status: string) => void
 ): Unsubscribe {
-  if (!db) return () => {};
-  return onSnapshot(
-    doc(db, 'students', String(studentId)),
-    (snap) => {
-      if (snap.exists()) {
-        const data = snap.data() as any;
-        if (data?.status_ujian) {
-          onStatusChange(String(data.status_ujian));
-        }
-      }
-    },
-    () => {}
-  );
+  fetchSingleStudentStatusOnce(studentId).then((status) => {
+    if (status) onStatusChange(status);
+  });
+  return () => {};
+}
+
+/**
+ * 3. Interval Auto-Save 5 Menit ke Firestore (`setDoc` dengan `{ merge: true }`):
+ * Menyimpan map jawaban sementara siswa dalam 1 dokumen per sesi ujian per siswa.
+ */
+export async function autoSaveStudentAnswersToFirestoreCbt(params: {
+  student: StudentItem;
+  exam: ExamItem;
+  answers: Record<string, string[]>;
+  currentIndex: number;
+  remainingSeconds: number;
+  totalQuestions: number;
+  tabViolations: number;
+  inspectAttempts: number;
+}): Promise<boolean> {
+  if (!db || !params.student?.id || !params.exam?.id) return false;
+  const nowIso = new Date().toISOString();
+  const answeredCount = Object.keys(params.answers || {}).filter(
+    (k) => Array.isArray(params.answers[k]) && params.answers[k].length > 0
+  ).length;
+  const pkgCode =
+    params.student.kode_soal || params.exam.kode_paket || 'PAKET-A';
+
+  try {
+    await setDoc(
+      doc(db, 'students', String(params.student.id)),
+      buildCleanStudentFirestoreDoc(
+        {
+          ...params.student,
+          status_ujian:
+            params.student.status_ujian === 'Diblokir'
+              ? 'Diblokir'
+              : 'Sedang Ujian',
+          kode_soal: pkgCode,
+          live_telemetry: {
+            ...(params.student.live_telemetry || {}),
+            exam_id: Number(params.exam.id),
+            judul_ujian: String(params.exam.judul_ujian || '').slice(0, 120),
+            kode_paket: pkgCode,
+            current_question_no: params.currentIndex + 1,
+            answered_count: answeredCount,
+            total_questions: params.totalQuestions,
+            remaining_seconds: params.remainingSeconds,
+            tab_violations: params.tabViolations,
+            inspect_attempts: params.inspectAttempts,
+            last_action: `Auto-Save Berkala (5 Menit): ${answeredCount}/${params.totalQuestions} terjawab`,
+            last_active_at: nowIso,
+          },
+        },
+        nowIso
+      ),
+      { merge: true }
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function deleteStudentCbt(
@@ -1421,18 +1821,15 @@ export async function addManualQuestionCbt(payload: {
           bobot: payload.bobot,
         };
 
+  // Perbarui cache soal lokal `cbt_soal_${examId}` & dokumen bundel tunggal di Firestore
+  const existingCached = getCachedExamQuestionsLocal(payload.examId) || [];
+  const nextExamQuestions = [
+    ...existingCached.filter((q) => Number(q.id) !== Number(questionRecord.id)),
+    questionRecord,
+  ].sort((a, b) => Number(a.id) - Number(b.id));
+
+  await syncExamQuestionsBundleToFirestore(payload.examId, nextExamQuestions);
   if (db) {
-    await setDoc(doc(db, 'questions', String(questionRecord.id)), {
-      id: Number(questionRecord.id),
-      exam_id: Number(questionRecord.exam_id),
-      teks_soal: questionRecord.teks_soal.slice(0, 4000),
-      tipe_soal: questionRecord.tipe_soal,
-      data_opsi: questionRecord.data_opsi,
-      kunci_jawaban: questionRecord.kunci_jawaban,
-      bobot: Number(questionRecord.bobot),
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: nowIso,
-    });
     await updateFirestorePulse(
       `Butir soal baru ditambahkan ke paket ujian #${payload.examId}`
     );
@@ -1465,7 +1862,6 @@ export async function updateManualQuestionCbt(payload: {
     }
   );
 
-  const nowIso = new Date().toISOString();
   const questionRecord: QuestionItem =
     apiRes.ok && apiRes.data?.question
       ? apiRes.data.question
@@ -1482,18 +1878,15 @@ export async function updateManualQuestionCbt(payload: {
           bobot: payload.bobot,
         };
 
+  // Perbarui cache soal lokal `cbt_soal_${examId}` & dokumen bundel tunggal di Firestore
+  const existingCached = getCachedExamQuestionsLocal(payload.examId) || [];
+  const nextExamQuestions = [
+    ...existingCached.filter((q) => Number(q.id) !== Number(questionRecord.id)),
+    questionRecord,
+  ].sort((a, b) => Number(a.id) - Number(b.id));
+
+  await syncExamQuestionsBundleToFirestore(payload.examId, nextExamQuestions);
   if (db) {
-    await setDoc(doc(db, 'questions', String(questionRecord.id)), {
-      id: Number(questionRecord.id),
-      exam_id: Number(questionRecord.exam_id),
-      teks_soal: questionRecord.teks_soal.slice(0, 4000),
-      tipe_soal: questionRecord.tipe_soal,
-      data_opsi: questionRecord.data_opsi,
-      kunci_jawaban: questionRecord.kunci_jawaban,
-      bobot: Number(questionRecord.bobot),
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: nowIso,
-    });
     await updateFirestorePulse(
       `Butir soal #${questionRecord.id} berhasil diperbarui`
     );
@@ -1525,7 +1918,6 @@ export async function uploadQuestionsCsvCbt(
     body: JSON.stringify({ examId, csvText, replaceExisting }),
   });
 
-  const nowIso = new Date().toISOString();
   let insertedQuestions: QuestionItem[] = [];
 
   if (apiRes.ok && apiRes.data?.questions) {
@@ -1553,33 +1945,19 @@ export async function uploadQuestionsCsvCbt(
     }));
   }
 
-  if (db) {
-    if (replaceExisting) {
-      const toRemove = currentQuestions.filter((q) => q.exam_id === examId);
-      const delBatch = writeBatch(db);
-      toRemove.forEach((q) =>
-        delBatch.delete(doc(db!, 'questions', String(q.id)))
-      );
-      await delBatch.commit();
-    }
+  const existingForExam = replaceExisting
+    ? []
+    : currentQuestions.filter((q) => Number(q.exam_id) === Number(examId));
+  const combinedForExam = [...existingForExam, ...insertedQuestions].sort(
+    (a, b) => Number(a.id) - Number(b.id)
+  );
 
-    const batch = writeBatch(db);
-    for (const q of insertedQuestions) {
-      batch.set(doc(db, 'questions', String(q.id)), {
-        id: Number(q.id),
-        exam_id: Number(q.exam_id),
-        teks_soal: q.teks_soal.slice(0, 4000),
-        tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
-        data_opsi: q.data_opsi,
-        kunci_jawaban: q.kunci_jawaban,
-        bobot: Number(q.bobot) || 2,
-        authorUid: 'sahidin30@gmail.com',
-        updatedAt: nowIso,
-      });
-    }
-    await batch.commit();
+  // Simpan seluruh soal ujian ini sebagai 1 dokumen bundel tunggal (`questions/bundle_${examId}`) + cache lokal `cbt_soal_${examId}`
+  await syncExamQuestionsBundleToFirestore(examId, combinedForExam);
+
+  if (db) {
     await updateFirestorePulse(
-      `Upload massal ${insertedQuestions.length} soal CSV ke ujian #${examId}`
+      `Upload massal ${insertedQuestions.length} soal CSV ke bundel ujian #${examId}`
     );
   }
 
@@ -1591,8 +1969,24 @@ export async function uploadQuestionsCsvCbt(
 
 export async function deleteQuestionCbt(questionId: number): Promise<void> {
   await safeApiJson(`/api/questions/${questionId}`, { method: 'DELETE' });
+  const snapCache = loadLocalCbtSnapshotCache();
+  const targetQ = snapCache?.questions.find(
+    (q) => Number(q.id) === Number(questionId)
+  );
+
+  if (targetQ) {
+    const remaining = (
+      getCachedExamQuestionsLocal(targetQ.exam_id) ||
+      snapCache?.questions.filter(
+        (q) => Number(q.exam_id) === Number(targetQ.exam_id)
+      ) ||
+      []
+    ).filter((q) => Number(q.id) !== Number(questionId));
+    await syncExamQuestionsBundleToFirestore(targetQ.exam_id, remaining);
+  }
+
   if (db) {
-    await deleteDoc(doc(db, 'questions', String(questionId)));
+    await deleteDoc(doc(db, 'questions', String(questionId))).catch(() => {});
     await updateFirestorePulse(`Butir soal #${questionId} dihapus`);
   }
 }
@@ -1605,28 +1999,19 @@ export async function clearExamQuestionsCbt(
   const toRemove = currentQuestions.filter(
     (q) => Number(q.exam_id) === Number(examId)
   );
+  saveCachedExamQuestionsLocal(examId, []);
   if (db) {
-    const qSnap = await getDocs(cbtCollectionQuery('questions'));
-    const matchingDocIds = new Set<string>(
-      toRemove.map((q) => String(q.id))
-    );
-    qSnap.docs.forEach((d) => {
-      const data = d.data();
-      if (Number(data.exam_id) === Number(examId)) {
-        matchingDocIds.add(d.id);
-      }
-    });
-    if (matchingDocIds.size > 0) {
+    await deleteDoc(doc(db, 'questions', `bundle_${examId}`)).catch(() => {});
+    if (toRemove.length > 0) {
       const batch = writeBatch(db);
-      matchingDocIds.forEach((docId) =>
-        batch.delete(doc(db!, 'questions', docId))
+      toRemove.forEach((q) =>
+        batch.delete(doc(db!, 'questions', String(q.id)))
       );
-      await batch.commit();
-      await updateFirestorePulse(
-        `Semua soal (${matchingDocIds.size} butir) pada bank soal ujian #${examId} dihapus`
-      );
-      return matchingDocIds.size;
+      await batch.commit().catch(() => {});
     }
+    await updateFirestorePulse(
+      `Semua soal (${toRemove.length} butir) pada bank soal ujian #${examId} dihapus`
+    );
   }
   return toRemove.length;
 }
@@ -1636,13 +2021,15 @@ export async function copyQuestionsToExamCbt(
   sourceQuestions: QuestionItem[]
 ): Promise<number> {
   if (sourceQuestions.length === 0) return 0;
-  let copiedCount = 0;
-  for (const q of sourceQuestions) {
-    await addManualQuestionCbt({
-      examId: targetExamId,
-      tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+  const baseId = Date.now();
+  const existingForTarget = getCachedExamQuestionsLocal(targetExamId) || [];
+  const clonedQuestions: QuestionItem[] = sourceQuestions.map((q, idx) => ({
+    id: baseId + idx,
+    exam_id: targetExamId,
+    teks_soal: q.teks_soal,
+    tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+    data_opsi: {
       wacana: q.data_opsi?.wacana || '',
-      teks_soal: q.teks_soal,
       opsi: {
         A: q.data_opsi?.opsi?.A || '',
         B: q.data_opsi?.opsi?.B || '',
@@ -1650,12 +2037,14 @@ export async function copyQuestionsToExamCbt(
         D: q.data_opsi?.opsi?.D || '',
         E: q.data_opsi?.opsi?.E || '',
       },
-      kunci_jawaban: q.kunci_jawaban,
-      bobot: q.bobot || (q.tipe_soal === 'Kompleks' ? 3 : 2),
-    });
-    copiedCount++;
-  }
-  return copiedCount;
+    },
+    kunci_jawaban: q.kunci_jawaban,
+    bobot: q.bobot || (q.tipe_soal === 'Kompleks' ? 3 : 2),
+  }));
+
+  const combined = [...existingForTarget, ...clonedQuestions];
+  await syncExamQuestionsBundleToFirestore(targetExamId, combined);
+  return clonedQuestions.length;
 }
 
 export async function loginStudentExamCbt(
@@ -1671,10 +2060,17 @@ export async function loginStudentExamCbt(
   const cleanToken = token_ujian.trim();
   const cleanTokenUpper = cleanToken.toUpperCase();
 
-  // First try Firestore as authoritative source if connected so Ganjil-Genap / Multi-Mapel / Bobot rules are 100% up-to-date
-  const fsData = await fetchAllFromFirestore();
+  // Gunakan cache lokal terlebih dahulu agar tidak melakukan getDocs 4 koleksi saat siswa mulai ujian
+  let snapshot = loadLocalCbtSnapshotCache();
+  if (
+    !snapshot ||
+    snapshot.students.length === 0 ||
+    snapshot.exams.length === 0
+  ) {
+    snapshot = await fetchAllFromFirestore();
+  }
 
-  if (!fsData) {
+  if (!snapshot) {
     const apiRes = await safeApiJson<{
       student?: StudentItem;
       exam?: ExamItem;
@@ -1690,7 +2086,13 @@ export async function loginStudentExamCbt(
       }),
     });
 
-    if (apiRes.isApiAvailable && apiRes.ok && apiRes.data?.student && apiRes.data?.exam && apiRes.data?.questions) {
+    if (
+      apiRes.isApiAvailable &&
+      apiRes.ok &&
+      apiRes.data?.student &&
+      apiRes.data?.exam &&
+      apiRes.data?.questions
+    ) {
       const syncedPkg =
         apiRes.data.student.kode_soal ||
         apiRes.data.exam.kode_paket ||
@@ -1715,6 +2117,7 @@ export async function loginStudentExamCbt(
               ? 3
               : 2,
         }));
+      saveCachedExamQuestionsLocal(apiRes.data.exam.id, sortedQuestions);
       return {
         student: syncedStudent,
         exam: apiRes.data.exam,
@@ -1729,16 +2132,17 @@ export async function loginStudentExamCbt(
   }
 
   const matchedStudent =
-    fsData.students.find((s) => {
+    snapshot.students.find((s) => {
       const nameMatch = s.nama.trim().toLowerCase() === cleanNama.toLowerCase();
-      const sysTokenMatch = (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper;
+      const sysTokenMatch =
+        (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper;
       const customPassMatch =
         Boolean(s.password_login) &&
         (s.password_login!.trim() === cleanToken ||
           s.password_login!.trim().toUpperCase() === cleanTokenUpper);
       return nameMatch && (sysTokenMatch || customPassMatch);
     }) ||
-    fsData.students.find(
+    snapshot.students.find(
       (s) => (s.token_ujian || '').trim().toUpperCase() === cleanTokenUpper
     );
 
@@ -1760,18 +2164,17 @@ export async function loginStudentExamCbt(
     );
   }
 
-  if (fsData.exams.length === 0) {
+  if (snapshot.exams.length === 0) {
     throw new Error(
       'Belum ada Paket Ujian yang aktif. Silakan tunggu Guru mengaktifkan ujian.'
     );
   }
 
-  // Proportional & Deterministic Exam Package Resolution across Class, Angkatan & Mata Pelajaran
   const proportionalAlloc = resolveProportionalStudentExamPackage({
     student: matchedStudent,
-    allStudents: fsData.students,
-    exams: fsData.exams,
-    questions: fsData.questions,
+    allStudents: snapshot.students,
+    exams: snapshot.exams,
+    questions: snapshot.questions,
     preferredExamId: examId,
   });
 
@@ -1782,18 +2185,28 @@ export async function loginStudentExamCbt(
   }
 
   const activeExam = proportionalAlloc.exam;
-  const examQuestions = fsData.questions
-    .filter((q) => Number(q.exam_id) === Number(activeExam.id))
-    .sort((a, b) => Number(a.id) - Number(b.id))
-    .map((q) => ({
-      ...q,
-      bobot:
-        Number(q.bobot) > 0
-          ? Number(q.bobot)
-          : String(q.tipe_soal || '').toLowerCase().includes('kompleks')
-          ? 3
-          : 2,
-    }));
+
+  // 2. Cek terlebih dahulu apakah soal sudah ada di localStorage (`cbt_soal_${ujianId}`).
+  // Jika belum ada, ambil dari 1 dokumen bundel (`questions/bundle_${ujianId}`) lalu simpan ke `localStorage`.
+  let examQuestions = await fetchExamQuestionsBundleOnce(Number(activeExam.id));
+
+  if (examQuestions.length === 0) {
+    examQuestions = snapshot.questions
+      .filter((q) => Number(q.exam_id) === Number(activeExam.id))
+      .sort((a, b) => Number(a.id) - Number(b.id))
+      .map((q) => ({
+        ...q,
+        bobot:
+          Number(q.bobot) > 0
+            ? Number(q.bobot)
+            : String(q.tipe_soal || '').toLowerCase().includes('kompleks')
+            ? 3
+            : 2,
+      }));
+    if (examQuestions.length > 0) {
+      saveCachedExamQuestionsLocal(activeExam.id, examQuestions);
+    }
+  }
 
   if (examQuestions.length === 0) {
     throw new Error(
@@ -1808,18 +2221,15 @@ export async function loginStudentExamCbt(
     variasi_paket: proportionalAlloc.variantLetter,
   };
 
+  // Hanya 1 penulisan status 'Sedang Ujian' saat siswa memulai sesi ujian
   if (db) {
-    await setDoc(
+    setDoc(
       doc(db, 'students', String(updatedStudent.id)),
       buildCleanStudentFirestoreDoc(updatedStudent, new Date().toISOString()),
       { merge: true }
-    );
-    await updateFirestorePulse(
-      `Siswa mulai ujian: ${updatedStudent.nama} (${updatedStudent.kelas}) — ${activeExam.judul_ujian} [${proportionalAlloc.packageCode}]`
-    );
+    ).catch(() => {});
   }
 
-  // Also notify backend API silently if available
   safeApiJson('/api/exam/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1862,54 +2272,33 @@ export async function submitStudentExamCbt(payload: {
     );
   }
 
-  // Synchronize latest bobot from Firestore if available while keeping the student's exact prepared option mapping
-  let syncedQuestions = payload.questions.map((q) => ({
+  // Gunakan soal yang sudah ada di memori lokal (`cbt_soal_${ujianId}`) tanpa memanggil fetchAllFromFirestore()
+  const cachedQuestions = getCachedExamQuestionsLocal(payload.exam.id) || [];
+  const cachedBobotMap = new Map<number, number>();
+  for (const cq of cachedQuestions) {
+    if (Number(cq.bobot) > 0) {
+      cachedBobotMap.set(Number(cq.id), Number(cq.bobot));
+    }
+  }
+
+  const syncedQuestions = payload.questions.map((q) => ({
     ...q,
     bobot:
-      Number(q.bobot) > 0
+      cachedBobotMap.get(Number(q.id)) ||
+      (Number(q.bobot) > 0
         ? Number(q.bobot)
         : String(q.tipe_soal || '').toLowerCase().includes('kompleks')
         ? 3
-        : 2,
+        : 2),
   }));
 
-  try {
-    const fsData = await fetchAllFromFirestore();
-    if (fsData && fsData.questions.length > 0) {
-      const fsQuestionMap = new Map<number, QuestionItem>();
-      for (const fq of fsData.questions) {
-        fsQuestionMap.set(Number(fq.id), fq);
-      }
-      syncedQuestions = syncedQuestions.map((q) => {
-        const fq = fsQuestionMap.get(Number(q.id));
-        if (!fq) return q;
-        const authoritativeBobot =
-          Number(fq.bobot) > 0
-            ? Number(fq.bobot)
-            : Number(q.bobot) > 0
-            ? Number(q.bobot)
-            : String(fq.tipe_soal || q.tipe_soal || '')
-                .toLowerCase()
-                .includes('kompleks')
-            ? 3
-            : 2;
-        return {
-          ...q,
-          bobot: authoritativeBobot,
-        };
-      });
-    }
-  } catch {
-    // Fallback to payload.questions with normalized bobot
-  }
-
-  // 1. Calculate deterministic score against the exact prepared questions (with shuffled keys & teacher's bobot)
+  // 1. Hitung skor deterministik terhadap soal yang dikerjakan siswa
   const scoreSummary = calculateExamScore(
     syncedQuestions,
     payload.jawabanSiswa
   );
 
-  // 2. Map student answers from shuffled display keys back to canonical Bank Soal option keys (A-E)
+  // 2. Petakan jawaban siswa ke kunci opsi kanonik Bank Soal (A-E) dalam satu objek map `{ [id_soal]: ["A"] }`
   const canonicalAnswers = mapStudentAnswersToCanonicalKeys(
     syncedQuestions,
     payload.jawabanSiswa
@@ -1930,16 +2319,40 @@ export async function submitStudentExamCbt(payload: {
   });
 
   const nowIso = new Date().toISOString();
-  const resultId = apiRes.data?.result?.id || Date.now();
+  // Satu ID deterministik per sesi ujian per siswa agar tidak duplikat dokumen
+  const deterministicResultId =
+    Number(`${payload.exam.id}${String(payload.student.id).slice(-6)}`) ||
+    Date.now();
+  const resultId = apiRes.data?.result?.id || deterministicResultId;
 
   if (db) {
     const studentPkg =
-      payload.student.kode_soal?.slice(0, 64) ||
-      payload.exam.kode_paket?.slice(0, 64) ||
-      payload.student.variasi_paket?.slice(0, 64) ||
+      payload.student.kode_soal?.slice(0, 32) ||
+      payload.exam.kode_paket?.slice(0, 32) ||
+      payload.student.variasi_paket?.slice(0, 32) ||
       'PAKET-A';
 
-    await setDoc(
+    // Kirim seluruh jawaban final & status selesai dalam 1 kali operasi batch tulis ke Firestore
+    const finalBatch = writeBatch(db);
+    finalBatch.set(
+      doc(db, 'results', String(resultId)),
+      {
+        id: Number(resultId),
+        student_id: Number(payload.student.id),
+        exam_id: Number(payload.exam.id),
+        skor_angka: scoreSummary.normalizedScore,
+        jawaban_siswa: canonicalAnswers,
+        kode_soal: studentPkg,
+        analisis_ai: null,
+        pelanggaran_tab: Number(payload.pelanggaranTab) || 0,
+        created_at: nowIso,
+        authorUid: 'sahidin30@gmail.com',
+        updatedAt: nowIso,
+      },
+      { merge: true }
+    );
+
+    finalBatch.set(
       doc(db, 'students', String(payload.student.id)),
       buildCleanStudentFirestoreDoc(
         {
@@ -1953,24 +2366,11 @@ export async function submitStudentExamCbt(payload: {
       { merge: true }
     );
 
-    await setDoc(doc(db, 'results', String(resultId)), {
-      id: Number(resultId),
-      student_id: Number(payload.student.id),
-      exam_id: Number(payload.exam.id),
-      skor_angka: scoreSummary.normalizedScore,
-      jawaban_siswa: canonicalAnswers,
-      kode_soal: studentPkg,
-      analisis_ai: null,
-      pelanggaran_tab: Number(payload.pelanggaranTab) || 0,
-      created_at: nowIso,
-      authorUid: 'sahidin30@gmail.com',
-      updatedAt: nowIso,
-    });
-
-    await updateFirestorePulse(
-      `Ujian selesai dikumpulkan: ${payload.student.nama} [${studentPkg}] (Skor ${scoreSummary.normalizedScore}/100)`
-    );
+    await finalBatch.commit();
   }
+
+  // Bersihkan data jawaban sementara di localStorage setelah ujian selesai
+  clearLocalStudentAnswers(payload.exam.id, payload.student.id);
 
   return {
     resultId,
