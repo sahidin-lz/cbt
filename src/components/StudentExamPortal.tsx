@@ -23,6 +23,9 @@ import {
   Shuffle,
   ShieldCheck,
   Download,
+  ChevronDown,
+  ChevronUp,
+  Minimize2,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem, AnalisisAI } from '../types/cbt';
 import {
@@ -193,20 +196,30 @@ function getLocalProgress(
       );
       if (localAnswerCache) {
         if (baseProgress) {
+          const s1 = Number(localAnswerCache.remainingSeconds || 0);
+          const s2 = Number(baseProgress.remainingSeconds || 0);
+          const bestRemainingSeconds =
+            s1 > 0 && s2 > 0 ? Math.min(s1, s2) : s1 > 0 ? s1 : s2;
           return {
             ...baseProgress,
             answers:
-              Object.keys(localAnswerCache.answers || {}).length > 0
+              Object.keys(localAnswerCache.answers || {}).length >=
+              Object.keys(baseProgress.answers || {}).length
                 ? localAnswerCache.answers
                 : baseProgress.answers,
             currentIndex:
               typeof localAnswerCache.currentIndex === 'number'
                 ? localAnswerCache.currentIndex
                 : baseProgress.currentIndex,
-            remainingSeconds:
-              localAnswerCache.remainingSeconds > 0
-                ? localAnswerCache.remainingSeconds
-                : baseProgress.remainingSeconds,
+            remainingSeconds: bestRemainingSeconds,
+            tabViolations: Math.max(
+              Number(localAnswerCache.tabViolations || 0),
+              Number(baseProgress.tabViolations || 0)
+            ),
+            inspectAttempts: Math.max(
+              Number(localAnswerCache.inspectAttempts || 0),
+              Number(baseProgress.inspectAttempts || 0)
+            ),
             assignedPackageCode:
               localAnswerCache.assignedPackageCode ||
               baseProgress.assignedPackageCode,
@@ -510,6 +523,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return null;
   });
   const [showActivityLogModal, setShowActivityLogModal] = useState(false);
+  const [isExamHeaderMinimized, setIsExamHeaderMinimized] = useState(false);
+  const [isExamNavMinimized, setIsExamNavMinimized] = useState(false);
 
   // Notify parent (App.tsx) so the global header locks when student is inside active exam
   useEffect(() => {
@@ -903,13 +918,23 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         questions: prepared.questions,
       });
 
-      if (savedProgress && Object.keys(savedProgress.answers || {}).length > 0) {
-        setAnswers(savedProgress.answers);
+      const fullExamDurationSecs = (session.exam?.durasi_menit || 60) * 60;
+      const hasExistingSessionProgress =
+        savedProgress &&
+        Number(savedProgress.examId) === Number(session.exam?.id) &&
+        (Object.keys(savedProgress.answers || {}).length > 0 ||
+          (savedProgress.tabViolations || 0) > 0 ||
+          (savedProgress.remainingSeconds > 0 &&
+            savedProgress.remainingSeconds < fullExamDurationSecs));
+
+      if (hasExistingSessionProgress && savedProgress) {
+        const restoredAnswers = savedProgress.answers || {};
+        setAnswers(restoredAnswers);
         setCurrentIndex(savedProgress.currentIndex || 0);
         setRemainingSeconds(
           savedProgress.remainingSeconds && savedProgress.remainingSeconds > 0
             ? savedProgress.remainingSeconds
-            : (session.exam?.durasi_menit || 60) * 60
+            : fullExamDurationSecs
         );
         setTabViolations(savedProgress.tabViolations || 0);
         setInspectAttempts(savedProgress.inspectAttempts || 0);
@@ -919,10 +944,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           nama: updatedStudent.nama,
           kelas: updatedStudent.kelas,
           token_ujian: updatedStudent.token_ujian,
-          answers: savedProgress.answers,
+          answers: restoredAnswers,
           currentIndex: savedProgress.currentIndex || 0,
           remainingSeconds:
-            savedProgress.remainingSeconds || (session.exam.durasi_menit || 60) * 60,
+            savedProgress.remainingSeconds || fullExamDurationSecs,
           tabViolations: savedProgress.tabViolations || 0,
           inspectAttempts: savedProgress.inspectAttempts || 0,
           assignedPackageCode: prepared.studentPackageCode,
@@ -934,12 +959,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             action: 'resume',
-            detail: `Siswa masuk kembali dan melanjutkan sesi ujian [${prepared.studentPackageCode}] (${Object.keys(savedProgress.answers).length} jawaban dipulihkan dari localStorage dengan urutan soal konsisten).`,
+            detail: `Siswa masuk kembali dan melanjutkan sesi ujian [${prepared.studentPackageCode}] (${Object.keys(restoredAnswers).length} jawaban & sisa waktu dipulihkan dari localStorage dengan urutan soal konsisten).`,
           },
         ];
         setActivityLogs(resumedLogs);
         setResumeNotice(
-          `Sesi Ujian Dilanjutkan (${prepared.studentPackageCode})! Urutan soal, paket soal, dan jawaban Anda sebelumnya (${Object.keys(savedProgress.answers).length} soal) berhasil dipulihkan otomatis dari memori lokal.`
+          `Sesi Ujian Dilanjutkan (${prepared.studentPackageCode})! Urutan soal, paket soal, sisa waktu, dan jawaban Anda sebelumnya (${Object.keys(restoredAnswers).length} soal) berhasil dipulihkan otomatis dari memori lokal.`
         );
       } else {
         setAnswers({});
@@ -2507,54 +2532,90 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       {/* Clean Institutional Exam Status Header */}
       <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-2xs">
         <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-bold text-[11px]">
-              Mapel: {activeMataPelajaran}
-            </span>
-            <span className="text-slate-300">·</span>
-            <span>
-              Peserta: <strong className="text-slate-900 font-semibold">{activeStudent.nama}</strong>
-            </span>
-            <span className="text-slate-300">·</span>
-            <span>Kelas {activeStudent.kelas}</span>
-            <span className="text-slate-300">·</span>
-            <span
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-bold ${
-                activeAbsenInfo.isGanjil
-                  ? 'bg-amber-100 text-amber-900'
-                  : 'bg-sky-100 text-sky-900'
-              }`}
-            >
-              Absen #{activeAbsenInfo.noAbsen} ({activeAbsenInfo.ganjilGenapLabel})
-            </span>
-            <span className="text-slate-300">·</span>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-600 text-white font-mono text-[11px] font-bold">
-              {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
-            </span>
-            {activeExam?.acak_soal !== false && (
-              <>
-                <span className="text-slate-300">·</span>
-                <span className="text-slate-600">Urutan Diacak</span>
-              </>
-            )}
-            <span className="text-slate-300">·</span>
-            <span>
-              Status:{' '}
-              <strong
-                className={`font-semibold ${
-                  isStudentBlocked ? 'text-red-700' : 'text-emerald-700'
+          {!isExamHeaderMinimized && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-bold text-[11px]">
+                Mapel: {activeMataPelajaran}
+              </span>
+              <span className="text-slate-300">·</span>
+              <span>
+                Peserta: <strong className="text-slate-900 font-semibold">{activeStudent.nama}</strong>
+              </span>
+              <span className="text-slate-300">·</span>
+              <span>Kelas {activeStudent.kelas}</span>
+              <span className="text-slate-300">·</span>
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] font-bold ${
+                  activeAbsenInfo.isGanjil
+                    ? 'bg-amber-100 text-amber-900'
+                    : 'bg-sky-100 text-sky-900'
                 }`}
               >
-                {isStudentBlocked ? 'Diblokir' : activeStudent.status_ujian}
-              </strong>
-            </span>
+                Absen #{activeAbsenInfo.noAbsen} ({activeAbsenInfo.ganjilGenapLabel})
+              </span>
+              <span className="text-slate-300">·</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-600 text-white font-mono text-[11px] font-bold">
+                {activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A'}
+              </span>
+              {activeExam?.acak_soal !== false && (
+                <>
+                  <span className="text-slate-300">·</span>
+                  <span className="text-slate-600">Urutan Diacak</span>
+                </>
+              )}
+              <span className="text-slate-300">·</span>
+              <span>
+                Status:{' '}
+                <strong
+                  className={`font-semibold ${
+                    isStudentBlocked ? 'text-red-700' : 'text-emerald-700'
+                  }`}
+                >
+                  {isStudentBlocked ? 'Diblokir' : activeStudent.status_ujian}
+                </strong>
+              </span>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
+              {activeExam?.judul_ujian}
+            </h1>
+            <button
+              type="button"
+              onClick={() => setIsExamHeaderMinimized((prev) => !prev)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+              title="Minimize / Buka Rincian Info Peserta di Header"
+            >
+              {isExamHeaderMinimized ? (
+                <>
+                  <ChevronDown className="w-3 h-3" />
+                  <span>Buka Info</span>
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="w-3 h-3" />
+                  <span>Minimize Info</span>
+                </>
+              )}
+            </button>
           </div>
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-            {activeExam?.judul_ujian}
-          </h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsExamNavMinimized((prev) => !prev)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Minimize / Buka Panel Navigasi Nomor Soal di Samping Kanan"
+          >
+            <Minimize2 className="w-3.5 h-3.5 text-indigo-600" />
+            <span>
+              {isExamNavMinimized
+                ? `Buka Navigasi (${answeredCount}/${examQuestions.length})`
+                : 'Minimize Navigasi'}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowActivityLogModal(true)}
@@ -2715,7 +2776,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       {currentQuestion ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Question Stage */}
-          <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+          <div
+            className={`${
+              isExamNavMinimized ? 'lg:col-span-12' : 'lg:col-span-8'
+            } bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs transition-all duration-200`}
+          >
             {/* Colorful Live Progress Strip */}
             <div className="bg-slate-100 h-2 w-full overflow-hidden">
               <div
@@ -2947,18 +3012,30 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             </div>
           </div>
 
-          {/* Right Question Navigation Matrix */}
-          <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-            <div>
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-bold text-slate-900">
-                  Navigasi Nomor Soal
-                </h2>
-                <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                  <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                  <span>Autosave Aktif</span>
+          {/* Right Question Navigation Matrix (Minimizable) */}
+          {!isExamNavMinimized && (
+            <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Navigasi Nomor Soal
+                  </h2>
+                  <div className="flex items-center gap-1.5">
+                    <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                      <Check className="w-3 h-3 text-emerald-600 shrink-0" />
+                      <span>Autosave Aktif</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsExamNavMinimized(true)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                      title="Minimize Panel Navigasi Nomor Soal"
+                    >
+                      <ChevronUp className="w-3 h-3" />
+                      <span>Minimize</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
               <p className="text-xs text-slate-500 mt-1">
                 Terjawab:{' '}
                 <strong className="font-mono tabular-nums text-slate-800">
@@ -3072,6 +3149,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               )}
             </button>
           </div>
+          )}
         </div>
       ) : null}
 

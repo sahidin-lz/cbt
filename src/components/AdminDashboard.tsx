@@ -34,6 +34,7 @@ import {
   KeyRound,
   ChevronDown,
   ChevronUp,
+  BookOpen,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -241,6 +242,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     useState<boolean>(false);
   const [isReportStudentListMinimized, setIsReportStudentListMinimized] =
     useState<boolean>(false);
+
+  // Sub-panel minimize states for Modul 01A (ujian), Modul 02 (soal), and Modul 03 (siswa)
+  const [isUjianFormMinimized, setIsUjianFormMinimized] = useState<boolean>(false);
+  const [isUjianTableMinimized, setIsUjianTableMinimized] = useState<boolean>(false);
+  const [isUjianChartMinimized, setIsUjianChartMinimized] = useState<boolean>(false);
+  const [isSiswaClassPanelMinimized, setIsSiswaClassPanelMinimized] =
+    useState<boolean>(false);
+  const [isSiswaStatusPanelMinimized, setIsSiswaStatusPanelMinimized] =
+    useState<boolean>(false);
+  const [isSiswaFormMinimized, setIsSiswaFormMinimized] = useState<boolean>(false);
+  const [isSiswaTableMinimized, setIsSiswaTableMinimized] = useState<boolean>(false);
 
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
   const [isRecalculatingScores, setIsRecalculatingScores] = useState(false);
@@ -2673,10 +2685,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 : '01B. Token Ujian & Distribusi Ganjil-Genap'}
             </span>
           )}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold text-slate-500 px-2 hidden sm:inline">
-              Modul 01 Terpadu
-            </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {activeTab === 'ujian' && !isSubMenuBarMinimized && (
+              <button
+                type="button"
+                onClick={() => {
+                  const anyOpen =
+                    !isUjianFormMinimized ||
+                    !isUjianTableMinimized ||
+                    !isUjianChartMinimized;
+                  setIsUjianFormMinimized(anyOpen);
+                  setIsUjianTableMinimized(anyOpen);
+                  setIsUjianChartMinimized(anyOpen);
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 cursor-pointer"
+              >
+                {!isUjianFormMinimized ||
+                !isUjianTableMinimized ||
+                !isUjianChartMinimized ? (
+                  <>
+                    <Minimize2 className="w-3 h-3" />
+                    <span>Minimize Semua Sub-Panel</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-3 h-3" />
+                    <span>Buka Semua Sub-Panel</span>
+                  </>
+                )}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setIsSubMenuBarMinimized((prev) => !prev)}
@@ -2721,14 +2759,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Form Buat / Edit Paket Ujian & Distribusi Tingkat */}
-            <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <h2 className="text-base font-bold text-slate-900">
-                {editingExamId
-                  ? 'Edit Paket & Distribusi Ujian'
-                  : 'Buat Paket Ujian per Tingkatan'}
-              </h2>
+            {/* Form Buat / Edit Paket Ujian & Distribusi Tingkat (Minimizable) */}
+            <div
+              className={`${
+                isUjianFormMinimized
+                  ? 'lg:col-span-12'
+                  : isUjianTableMinimized
+                    ? 'lg:col-span-12'
+                    : 'lg:col-span-4'
+              } bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-base font-bold text-slate-900">
+                  {editingExamId
+                    ? '01A-1. Edit Paket & Distribusi Ujian'
+                    : '01A-1. Buat Paket Ujian per Tingkatan'}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setIsUjianFormMinimized((p) => !p)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 cursor-pointer shrink-0"
+                >
+                  {isUjianFormMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Buka Form</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Minimize</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
+              {!isUjianFormMinimized && (
               <form onSubmit={handleSaveExam} className="space-y-4">
                 <div>
                   <label
@@ -3169,6 +3235,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   )}
                 </div>
               </form>
+              )}
 
               {examFeedback && (
                 <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs font-medium text-blue-800">
@@ -3177,21 +3244,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* Tabel Daftar Paket Ujian per Tingkatan */}
-            <div className="lg:col-span-8 bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            {/* Tabel Daftar Paket Ujian per Tingkatan (Minimizable) */}
+            <div
+              className={`${
+                isUjianFormMinimized ? 'lg:col-span-12' : 'lg:col-span-8'
+              } bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs transition-all`}
+            >
               <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                    Manajemen Sesi &amp; Distribusi Paket
+                    Sub-Panel 01A-2 · Manajemen Sesi &amp; Distribusi Paket
                   </div>
                   <h2 className="text-base font-extrabold text-white mt-0.5">
                     Daftar Distribusi Paket Ujian ({filteredExams.length} Paket)
                   </h2>
                 </div>
-                <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200">
-                  Total Soal: {questions.length} Butir
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200">
+                    Total Soal: {questions.length} Butir
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsUjianTableMinimized((p) => !p)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold text-amber-300 cursor-pointer"
+                  >
+                    {isUjianTableMinimized ? (
+                      <>
+                        <ChevronDown className="w-3.5 h-3.5" />
+                        <span>Buka Tabel ({filteredExams.length})</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp className="w-3.5 h-3.5" />
+                        <span>Minimize</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
+
+              {!isUjianTableMinimized && (
+                <>
 
               {/* Dedicated Full-Width Filter Bar: Tingkatan, Kategori, & Status */}
               <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
@@ -3558,22 +3651,52 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
               </div>
+                </>
+              )}
             </div>
           </div>
 
-          {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Recharts) */}
-          <ClassPerformanceLotsHotsChart
-            classAnalytics={classAnalyticsData}
-            questions={questions}
-            exams={exams}
-            selectedClassFilter={filterResultKelas}
-            onSelectClass={(kls) => {
-              setFilterResultKelas(kls);
-              if (kls !== 'SEMUA') {
-                setActiveTab('laporan');
-              }
-            }}
-          />
+          {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Minimizable) */}
+          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+            <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+              <span className="text-xs font-extrabold text-slate-800">
+                Sub-Panel 01A-3 · Visualisasi Performa Kelas (Komparasi LOTS vs HOTS)
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsUjianChartMinimized((p) => !p)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-xs font-bold text-slate-700 cursor-pointer"
+              >
+                {isUjianChartMinimized ? (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>Buka Grafik Kelas</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Minimize Grafik</span>
+                  </>
+                )}
+              </button>
+            </div>
+            {!isUjianChartMinimized && (
+              <div className="p-4">
+                <ClassPerformanceLotsHotsChart
+                  classAnalytics={classAnalyticsData}
+                  questions={questions}
+                  exams={exams}
+                  selectedClassFilter={filterResultKelas}
+                  onSelectClass={(kls) => {
+                    setFilterResultKelas(kls);
+                    if (kls !== 'SEMUA') {
+                      setActiveTab('laporan');
+                    }
+                  }}
+                />
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -3597,45 +3720,178 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ===================================================================== */}
       {activeTab === 'siswa' && (
         <div className="space-y-6">
-          {/* Panel Manajemen Kelas / Rombel (Tambah Kelas, Ubah Nama Kelas, Download per Kelas) */}
+          {/* Sub-Menu Kontrol Cepat Modul 03 (Minimize / Buka Sub-Panel Database Siswa) */}
+          <div className="bg-white border border-emerald-200/80 rounded-2xl px-4 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs">
+            {!isSubMenuBarMinimized ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-extrabold text-emerald-950 mr-1">
+                  Sub-Panel Modul 03:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsSiswaClassPanelMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+                    !isSiswaClassPanelMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  03A. Manajemen Rombel {isSiswaClassPanelMinimized ? '(Diminimize)' : '✓'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsSiswaStatusPanelMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+                    !isSiswaStatusPanelMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  03B. Status &amp; Kartu Token {isSiswaStatusPanelMinimized ? '(Diminimize)' : '✓'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsSiswaFormMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+                    !isSiswaFormMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  03C. Form Input/Upload Siswa {isSiswaFormMinimized ? '(Diminimize)' : '✓'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsSiswaTableMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+                    !isSiswaTableMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  03D. Tabel Database Siswa {isSiswaTableMinimized ? '(Diminimize)' : '✓'}
+                </button>
+              </div>
+            ) : (
+              <span className="text-xs font-extrabold text-emerald-950">
+                Sub-Menu Modul 03 Database Siswa (Diminimize)
+              </span>
+            )}
+
+            <div className="flex items-center gap-2">
+              {!isSubMenuBarMinimized && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const anyOpen =
+                      !isSiswaClassPanelMinimized ||
+                      !isSiswaStatusPanelMinimized ||
+                      !isSiswaFormMinimized ||
+                      !isSiswaTableMinimized;
+                    setIsSiswaClassPanelMinimized(anyOpen);
+                    setIsSiswaStatusPanelMinimized(anyOpen);
+                    setIsSiswaFormMinimized(anyOpen);
+                    setIsSiswaTableMinimized(anyOpen);
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 cursor-pointer"
+                >
+                  {!isSiswaClassPanelMinimized ||
+                  !isSiswaStatusPanelMinimized ||
+                  !isSiswaFormMinimized ||
+                  !isSiswaTableMinimized ? (
+                    <>
+                      <Minimize2 className="w-3 h-3" />
+                      <span>Minimize Semua Sub-Panel</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize2 className="w-3 h-3" />
+                      <span>Buka Semua Sub-Panel</span>
+                    </>
+                  )}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsSubMenuBarMinimized((p) => !p)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+              >
+                {isSubMenuBarMinimized ? (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>Buka Sub-Menu</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Minimize</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Panel Manajemen Kelas / Rombel (Minimizable 03A) */}
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
                 <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                  Administrasi Rombongan Belajar
+                  Sub-Panel 03A · Administrasi Rombongan Belajar
                 </div>
                 <h2 className="text-base font-extrabold text-white mt-0.5">
                   Manajemen Kelas / Rombel (Kelas X, XI, XII)
                 </h2>
-                <p className="text-xs text-blue-200/90 mt-0.5">
-                  Buat daftar kelas/rombel baru, ubah nama kelas secara massal,
-                  reset status ujian satu kelas penuh, atau unduh daftar siswa &amp;
-                  token per kelas maupun semua kelas.
-                </p>
+                {!isSiswaClassPanelMinimized && (
+                  <p className="text-xs text-blue-200/90 mt-0.5">
+                    Buat daftar kelas/rombel baru, ubah nama kelas secara massal,
+                    reset status ujian satu kelas penuh, atau unduh daftar siswa &amp;
+                    token per kelas maupun semua kelas.
+                  </p>
+                )}
               </div>
 
-              <form
-                onSubmit={handleAddNewClass}
-                className="flex flex-wrap items-center gap-2 shrink-0"
-              >
-                <input
-                  type="text"
-                  aria-label="Nama Kelas Baru"
-                  value={newClassNameInput}
-                  onChange={(e) => setNewClassNameInput(e.target.value)}
-                  placeholder="Tambah Kelas (misal: X SOS 1)"
-                  className="px-3 py-2 text-xs text-slate-900 bg-white border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400"
-                />
-                <button
-                  type="submit"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-lg cursor-pointer shadow-xs"
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <form
+                  onSubmit={handleAddNewClass}
+                  className="flex flex-wrap items-center gap-2 shrink-0"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  Tambah Kelas
+                  <input
+                    type="text"
+                    aria-label="Nama Kelas Baru"
+                    value={newClassNameInput}
+                    onChange={(e) => setNewClassNameInput(e.target.value)}
+                    placeholder="Tambah Kelas (misal: X SOS 1)"
+                    className="px-3 py-2 text-xs text-slate-900 bg-white border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                  <button
+                    type="submit"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-lg cursor-pointer shadow-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Tambah Kelas
+                  </button>
+                </form>
+                <button
+                  type="button"
+                  onClick={() => setIsSiswaClassPanelMinimized((p) => !p)}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold text-amber-300 cursor-pointer"
+                >
+                  {isSiswaClassPanelMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Buka Rombel ({classAnalyticsData.perClass.length})</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Minimize</span>
+                    </>
+                  )}
                 </button>
-              </form>
+              </div>
             </div>
 
+            {!isSiswaClassPanelMinimized && (
             <div className="p-5">
             {classAnalyticsData.perClass.length > 0 && (
               <div className="overflow-x-auto border border-indigo-100 rounded-xl">
@@ -3787,25 +4043,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
             </div>
+            )}
           </div>
 
-          {/* Baris Ringkasan & Manajemen Status Ujian Siswa */}
+          {/* Baris Ringkasan & Manajemen Status Ujian Siswa (Minimizable 03B) */}
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
-            <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-6 py-4 text-white">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                Kontrol Status Peserta &amp; Kartu Token Ujian
+            <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                  Sub-Panel 03B · Kontrol Status Peserta &amp; Kartu Token Ujian
+                </div>
+                <h2 className="text-base font-extrabold text-white mt-0.5">
+                  Manajemen Status Ujian Siswa &amp; Export Excel Terpisah per Kolom
+                </h2>
+                {!isSiswaStatusPanelMinimized && (
+                  <p className="text-xs text-blue-200/90 mt-0.5 max-w-4xl">
+                    Pantau dan kelola status peserta ujian secara real-time: buka
+                    kunci siswa yang terblokir Anti-Cheat, reset status siswa yang
+                    sudah selesai agar bisa login ulang, atau unduh daftar Nama,
+                    Kelas &amp; Token dalam kolom Excel terpisah maupun PDF Kartu Token.
+                  </p>
+                )}
               </div>
-              <h2 className="text-base font-extrabold text-white mt-0.5">
-                Manajemen Status Ujian Siswa &amp; Export Excel Terpisah per Kolom
-              </h2>
-              <p className="text-xs text-blue-200/90 mt-0.5 max-w-4xl">
-                Pantau dan kelola status peserta ujian secara real-time: buka
-                kunci siswa yang terblokir Anti-Cheat, reset status siswa yang
-                sudah selesai agar bisa login ulang, atau unduh daftar Nama,
-                Kelas &amp; Token dalam kolom Excel terpisah maupun PDF Kartu Token.
-              </p>
+              <button
+                type="button"
+                onClick={() => setIsSiswaStatusPanelMinimized((p) => !p)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold text-amber-300 cursor-pointer shrink-0"
+              >
+                {isSiswaStatusPanelMinimized ? (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>Buka Status &amp; Kartu Token</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Minimize</span>
+                  </>
+                )}
+              </button>
             </div>
 
+            {!isSiswaStatusPanelMinimized && (
+              <>
             <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
@@ -3921,11 +4201,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 );
               })}
             </div>
+              </>
+            )}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Panel Kiri: Switcher Tambah 1 Siswa vs Upload Massal Siswa Excel/CSV */}
-            <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+            {/* Panel Kiri: Switcher Tambah 1 Siswa vs Upload Massal Siswa Excel/CSV (Minimizable 03C) */}
+            <div
+              className={`${
+                isSiswaFormMinimized
+                  ? 'lg:col-span-12'
+                  : isSiswaTableMinimized
+                    ? 'lg:col-span-12'
+                    : 'lg:col-span-5'
+              } bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-800">
+                  Sub-Panel 03C · Input &amp; Upload Siswa
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsSiswaFormMinimized((p) => !p)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 cursor-pointer"
+                >
+                  {isSiswaFormMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Buka Form Input/Upload</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Minimize</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {!isSiswaFormMinimized && (
+                <>
               <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
                 <button
                   type="button"
@@ -4209,23 +4524,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span>{studentFeedback.message}</span>
                 </div>
               )}
+                </>
+              )}
             </div>
 
-            {/* Tabel Database Siswa (Dengan Filter 3 Tingkatan, Kelas & Manajemen Status) */}
-            <div className="lg:col-span-7 bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
+            {/* Tabel Database Siswa (Minimizable 03D) */}
+            <div
+              className={`${
+                isSiswaFormMinimized ? 'lg:col-span-12' : 'lg:col-span-7'
+              } bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs transition-all`}
+            >
               <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                    Daftar Peserta &amp; Kode Paket Terkunci
+                    Sub-Panel 03D · Daftar Peserta &amp; Kode Paket Terkunci
                   </div>
                   <h2 className="text-base font-extrabold text-white mt-0.5">
                     Database Siswa ({filteredStudents.length} Peserta)
                   </h2>
                 </div>
-                <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200">
-                  {uniqueClasses.length} Kelas / Rombel
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-lg bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200">
+                    {uniqueClasses.length} Kelas / Rombel
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsSiswaTableMinimized((p) => !p)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold text-amber-300 cursor-pointer"
+                  >
+                    {isSiswaTableMinimized ? (
+                      <>
+                        <ChevronDown className="w-3.5 h-3.5" />
+                        <span>Buka Tabel ({filteredStudents.length})</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp className="w-3.5 h-3.5" />
+                        <span>Minimize</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
+
+              {!isSiswaTableMinimized && (
+                <>
 
               <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
                 {/* Filter 3 Tingkatan */}
@@ -4602,6 +4945,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
               </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -4612,6 +4957,72 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ===================================================================== */}
       {activeTab === 'soal' && (
         <div className="space-y-6">
+          {/* Sub-Menu Navigasi Modul 02 Bank Soal (Minimizable) */}
+          <div className="bg-white border border-amber-200/80 rounded-2xl px-4 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs">
+            {!isSubMenuBarMinimized ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBankSoalDetailOpen(false)}
+                  className={`px-3.5 py-2 rounded-xl font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    !isBankSoalDetailOpen
+                      ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  }`}
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>02A. Daftar Paket Bank Soal ({exams.length} Paket)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsBankSoalDetailOpen(true)}
+                  className={`px-3.5 py-2 rounded-xl font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isBankSoalDetailOpen
+                      ? 'bg-indigo-600 text-white shadow-2xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span>
+                    02B. Kelola &amp; Upload Butir Soal Paket Aktif ({currentExamQuestions.length} Soal)
+                  </span>
+                </button>
+                {isBankSoalDetailOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setShowUploadPanel((p) => !p)}
+                    className="px-3 py-1.5 rounded-xl font-bold bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 cursor-pointer"
+                  >
+                    {showUploadPanel ? 'Minimize Form Upload/Input Soal' : 'Buka Form Upload/Input Soal'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <span className="text-xs font-extrabold text-amber-950">
+                Sub-Menu Modul 02 Bank Soal (Diminimize):{' '}
+                {!isBankSoalDetailOpen
+                  ? '02A. Daftar Paket Bank Soal'
+                  : `02B. Kelola Butir Soal (${currentExam?.judul_ujian || 'Paket Aktif'})`}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsSubMenuBarMinimized((p) => !p)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+            >
+              {isSubMenuBarMinimized ? (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>Buka Sub-Menu</span>
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5" />
+                  <span>Minimize</span>
+                </>
+              )}
+            </button>
+          </div>
           {/* Notifikasi Feedback Hapus / Kelola Bank Soal */}
           {bankSoalFeedback && (
             <div
