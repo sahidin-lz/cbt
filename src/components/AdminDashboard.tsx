@@ -2146,10 +2146,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const teacherSidebarMenus = [
     {
       id: 'ujian' as const,
+      matchIds: ['ujian', 'token_distribusi'],
       num: '01',
-      title: 'Distribusi & Jadwal',
-      subtitle: 'Atur Paket & Kelas',
-      badge: `${exams.length}`,
+      title: 'Jadwal, Paket & Token',
+      subtitle: 'Paket Ujian, Token & Ganjil-Genap',
+      badge: `${exams.length} PKT`,
       icon: ClipboardList,
       activeClass:
         'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-blue-500 shadow-xs ring-2 ring-blue-300/60',
@@ -2159,24 +2160,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       badgeIdle: 'bg-blue-50 text-blue-700 border border-blue-200/70',
     },
     {
-      id: 'token_distribusi' as const,
+      id: 'soal' as const,
+      matchIds: ['soal'],
       num: '02',
-      title: 'Token Ujian & Mapel',
-      subtitle: 'Token Harian & PDF',
-      badge: 'TOKEN',
-      icon: KeyRound,
+      title: 'Bank Soal & Word',
+      subtitle: 'Soal, Rumus & Gambar',
+      badge: `${questions.length}`,
+      icon: FileSpreadsheet,
       activeClass:
-        'bg-gradient-to-r from-rose-600 to-amber-600 text-white border-rose-500 shadow-xs ring-2 ring-amber-300/60',
+        'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-500 shadow-xs ring-2 ring-amber-300/60',
+      iconBoxActive: 'bg-white/20 text-white',
+      iconBoxIdle: 'bg-amber-50 text-amber-600 border border-amber-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-amber-50 text-amber-800 border border-amber-200/70',
+    },
+    {
+      id: 'siswa' as const,
+      matchIds: ['siswa'],
+      num: '03',
+      title: 'Database Siswa',
+      subtitle: 'Data Rombel & Kartu Akun',
+      badge: `${students.length}`,
+      icon: Users,
+      activeClass:
+        'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-xs ring-2 ring-emerald-300/60',
       iconBoxActive: 'bg-white/20 text-amber-200',
-      iconBoxIdle: 'bg-rose-50 text-rose-600 border border-rose-200/70',
-      badgeActive: 'bg-white/25 text-white',
-      badgeIdle: 'bg-rose-600 text-white',
+      iconBoxIdle: 'bg-emerald-50 text-emerald-600 border border-emerald-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-emerald-50 text-emerald-800 border border-emerald-200/70',
     },
     {
       id: 'manajemen' as const,
-      num: '03',
-      title: 'Live Monitor & Kelas',
-      subtitle: 'Radar Web & Anti-Cheat',
+      matchIds: ['manajemen'],
+      num: '04',
+      title: 'Live Monitor & Anti-Cheat',
+      subtitle: 'Radar Web & Log Pelanggaran',
       badge: activeStudentsCount > 0 ? `${activeStudentsCount} LIVE` : 'RADAR',
       icon: Layers,
       activeClass:
@@ -2190,38 +2208,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           : 'bg-indigo-600 text-white',
     },
     {
-      id: 'siswa' as const,
-      num: '04',
-      title: 'Database Siswa',
-      subtitle: 'Data Rombel & Akun',
-      badge: `${students.length}`,
-      icon: Users,
-      activeClass:
-        'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-xs ring-2 ring-emerald-300/60',
-      iconBoxActive: 'bg-white/20 text-amber-200',
-      iconBoxIdle: 'bg-emerald-50 text-emerald-600 border border-emerald-200/70',
-      badgeActive: 'bg-white/20 text-white',
-      badgeIdle: 'bg-emerald-50 text-emerald-800 border border-emerald-200/70',
-    },
-    {
-      id: 'soal' as const,
-      num: '05',
-      title: 'Bank Soal & Word',
-      subtitle: 'Soal, Rumus & Gambar',
-      badge: `${questions.length}`,
-      icon: FileSpreadsheet,
-      activeClass:
-        'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-500 shadow-xs ring-2 ring-amber-300/60',
-      iconBoxActive: 'bg-white/20 text-white',
-      iconBoxIdle: 'bg-amber-50 text-amber-600 border border-amber-200/70',
-      badgeActive: 'bg-white/20 text-white',
-      badgeIdle: 'bg-amber-50 text-amber-800 border border-amber-200/70',
-    },
-    {
       id: 'laporan' as const,
-      num: '06',
-      title: 'Hasil & Evaluasi',
-      subtitle: 'Nilai, LOTS/HOTS & PDF',
+      matchIds: ['laporan', 'anbuso'],
+      num: '05',
+      title: 'Rekap Nilai & AnBuso',
+      subtitle: 'Nilai Humanis, AnBuso & PDF',
       badge: `${results.length}`,
       icon: Sparkles,
       activeClass:
@@ -2231,24 +2222,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       badgeActive: 'bg-white/20 text-white',
       badgeIdle: 'bg-purple-50 text-purple-800 border border-purple-200/70',
     },
-    {
-      id: 'anbuso' as const,
-      num: '07',
-      title: 'Analisis Butir (AnBuso)',
-      subtitle: 'Daya Beda & Remedial',
-      badge: 'AnBuso',
-      icon: BarChart3,
-      activeClass:
-        'bg-gradient-to-r from-cyan-600 to-blue-700 text-white border-cyan-500 shadow-xs ring-2 ring-cyan-300/60',
-      iconBoxActive: 'bg-white/20 text-amber-300',
-      iconBoxIdle: 'bg-cyan-50 text-cyan-600 border border-cyan-200/70',
-      badgeActive: 'bg-white/20 text-white',
-      badgeIdle: 'bg-cyan-50 text-cyan-800 border border-cyan-200/70',
-    },
   ];
 
   const activeMenuObj =
-    teacherSidebarMenus.find((m) => m.id === activeTab) ||
+    teacherSidebarMenus.find((m) => m.matchIds.includes(activeTab)) ||
     teacherSidebarMenus[0];
 
   return (
@@ -2272,7 +2249,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Menu Utama Guru
                   </div>
                   <div className="text-xs font-bold text-white truncate">
-                    7 Modul Kendali CBT
+                    5 Modul Terpadu CBT
                   </div>
                 </div>
               )}
@@ -2335,7 +2312,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               {teacherSidebarMenus.map((item) => {
                 const Icon = item.icon;
-                const isSelected = activeTab === item.id;
+                const isSelected = item.matchIds.includes(activeTab);
                 return (
                   <button
                     key={item.id}
@@ -2618,6 +2595,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
           </div>
+
+      {/* ===================================================================== */}
+      {/* SUB-MENU NAVIGASI MODUL 01: JADWAL & PAKET UJIAN VS TOKEN & DISTRIBUSI */}
+      {/* ===================================================================== */}
+      {(activeTab === 'ujian' || activeTab === 'token_distribusi') && (
+        <div className="bg-white border border-blue-200/80 rounded-2xl p-2 shadow-2xs flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('ujian')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'ujian'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+              }`}
+            >
+              <ClipboardList className="w-4 h-4" />
+              <span>Kelola Jadwal &amp; Paket Ujian ({exams.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('token_distribusi')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'token_distribusi'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+              }`}
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>Token Ujian, Distribusi Ganjil-Genap &amp; Cetak Kartu</span>
+            </button>
+          </div>
+          <span className="text-[11px] font-semibold text-slate-500 px-2 hidden sm:inline">
+            Modul 01 Terpadu: Jadwal, Paket Ujian &amp; Token Akses
+          </span>
+        </div>
+      )}
 
       {/* ===================================================================== */}
       {/* TAB 1: MANAJEMEN UJIAN & DISTRIBUSI SOAL KE 3 TINGKATAN KELAS          */}
@@ -6182,6 +6196,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* SUB-MENU NAVIGASI MODUL 05: REKAP NILAI HUMANIS VS ANALISIS ANBUSO     */}
+      {/* ===================================================================== */}
+      {(activeTab === 'laporan' || activeTab === 'anbuso') && (
+        <div className="bg-white border border-purple-200/80 rounded-2xl p-2 shadow-2xs flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('laporan')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'laporan'
+                  ? 'bg-purple-600 text-white shadow-xs'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+              }`}
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Rekap Nilai Humanis, LOTS/HOTS &amp; Ekspor PDF/Excel ({results.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('anbuso')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'anbuso'
+                  ? 'bg-cyan-600 text-white shadow-xs'
+                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span>Analisis Butir Soal (AnBuso), Daya Beda &amp; Remedial</span>
+            </button>
+          </div>
+          <span className="text-[11px] font-semibold text-slate-500 px-2 hidden sm:inline">
+            Modul 05 Terpadu: Evaluasi Nilai &amp; Statistik Butir Soal
+          </span>
         </div>
       )}
 

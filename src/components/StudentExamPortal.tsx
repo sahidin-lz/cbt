@@ -112,6 +112,7 @@ export interface LocalExamReceipt {
 }
 
 export const MAX_TAB_VIOLATIONS = 3;
+export const MIN_EXAM_SUBMIT_MINUTES = 25;
 
 const PROGRESS_KEY_PREFIX = 'cbt_progress_token_';
 const HISTORY_KEY_PREFIX = 'cbt_history_student_';
@@ -1092,18 +1093,22 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     (
       reason = 'Terdeteksi berpindah tab browser atau keluar dari jendela ujian',
       extraInspectCount = 0,
-      devToolsDetected = false
+      devToolsDetected = false,
+      forceImmediateBlock = false
     ) => {
       if (!activeStudent || submittedSummary || isStudentBlocked) return;
 
-      // Debounce rapid blur+visibilitychange events within 500ms
+      // Debounce rapid duplicate events within 450ms
       const now = Date.now();
-      if (now - lastViolationTimestampRef.current < 500) return;
+      if (now - lastViolationTimestampRef.current < 450) return;
       lastViolationTimestampRef.current = now;
 
       const timeStr = new Date().toLocaleTimeString('id-ID');
       const nextCount = tabViolations + 1;
       const nextInspectCount = inspectAttempts + extraInspectCount;
+      const shouldLockBlock =
+        forceImmediateBlock || nextCount >= MAX_TAB_VIOLATIONS;
+
       setTabViolations(nextCount);
       if (extraInspectCount > 0) {
         setInspectAttempts(nextInspectCount);
@@ -1112,26 +1117,37 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         setIsDevToolsOpen(true);
       }
       setLastViolationTime(timeStr);
-      setSecurityNotice(reason);
+      setSecurityNotice(
+        `[Pelanggaran ${nextCount}/${MAX_TAB_VIOLATIONS}] ${reason}`
+      );
 
       const newLogItem: StudentActivityLog = {
         timestamp: timeStr,
         action: 'violation',
-        detail: `${reason} (Pelanggaran ke-${nextCount})`,
+        detail: `[PELANGGARAN #${nextCount}/${MAX_TAB_VIOLATIONS} · Soal No. ${
+          currentIndex + 1
+        }] ${reason}`,
       };
-      const blockedLogItem: StudentActivityLog = {
-        timestamp: timeStr,
-        action: 'blocked',
-        detail: 'Sesi ujian diblokir otomatis. Menunggu guru pengawas membuka blokir.',
-      };
-      const updatedLogs = [...activityLogs, newLogItem, blockedLogItem];
+
+      const updatedLogs: StudentActivityLog[] = shouldLockBlock
+        ? [
+            ...activityLogs,
+            newLogItem,
+            {
+              timestamp: timeStr,
+              action: 'blocked',
+              detail: `[BLOKIR OTOMATIS ${nextCount}/${MAX_TAB_VIOLATIONS}] Batas maksimal ${MAX_TAB_VIOLATIONS} kali pelanggaran tercapai (${reason}). Sesi ujian dikunci otomatis dan wajib dibuka oleh Guru Pengawas.`,
+            },
+          ]
+        : [...activityLogs, newLogItem];
+
       setActivityLogs(updatedLogs);
 
       const currentAnsCount = Object.keys(answers).filter(
         (k) => answers[k] && answers[k].length > 0
       ).length;
 
-      // Autosave answers & state so NOTHING is lost (Siswa tinggal melanjutkan!)
+      // Autosave answers & violation log to localStorage so nothing is lost
       saveLocalProgress(activeStudent.token_ujian, {
         studentId: activeStudent.id,
         nama: activeStudent.nama,
@@ -1151,13 +1167,20 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         lastSavedAt: new Date().toISOString(),
       });
 
-      // Instantly block the student strictly as requested
-      setIsStudentBlocked(true);
+      setShowCheatBanner(true);
       setShowCheatLockModal(true);
 
-      const blockedStudentObj: StudentItem = {
+      const nextStatus: StudentItem['status_ujian'] = shouldLockBlock
+        ? 'Diblokir'
+        : 'Sedang Ujian';
+
+      if (shouldLockBlock) {
+        setIsStudentBlocked(true);
+      }
+
+      const updatedStudentObj: StudentItem = {
         ...activeStudent,
-        status_ujian: 'Diblokir',
+        status_ujian: nextStatus,
         live_telemetry: {
           exam_id: activeExam?.id || 0,
           judul_ujian: activeExam?.judul_ujian || 'Ujian CBT',
@@ -1172,25 +1195,38 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           devtools_open: devToolsDetected || isDevToolsOpen,
           tab_violations: nextCount,
           inspect_attempts: nextInspectCount,
-          last_action: `DIBLOKIR: ${reason}`,
+          last_action: shouldLockBlock
+            ? `DIBLOKIR (${nextCount}/${MAX_TAB_VIOLATIONS}): ${reason} [Soal #${
+                currentIndex + 1
+              }]`
+            : `PERINGATAN (${nextCount}/${MAX_TAB_VIOLATIONS}): ${reason} [Soal #${
+                currentIndex + 1
+              }]`,
           last_active_at: new Date().toISOString(),
           device_info: getBrowserDeviceSummary(),
-          recent_logs: updatedLogs.slice(-12),
+          recent_logs: updatedLogs.slice(-15),
         },
       };
 
       if (activeExam) {
         saveActiveStudentSession({
-          student: blockedStudentObj,
+          student: updatedStudentObj,
           exam: activeExam,
           questions: examQuestions,
         });
       }
 
-      // Persist blocked status & live telemetry to server / Firebase
-      updateStudentStatusCbt(blockedStudentObj, 'Diblokir').then(() => {
-        onExamCompleted();
-      });
+      if (shouldLockBlock) {
+        updateStudentStatusCbt(updatedStudentObj, 'Diblokir').then(() => {
+          onExamCompleted();
+        });
+      } else {
+        syncStudentLiveTelemetryCbt(
+          updatedStudentObj,
+          updatedStudentObj.live_telemetry!,
+          'Sedang Ujian'
+        );
+      }
 
       safeApiJson('/api/exam/heartbeat', {
         method: 'POST',
@@ -1202,8 +1238,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           pelanggaranTab: nextCount,
           inspectAttempts: nextInspectCount,
           answeredCount: currentAnsCount,
-          status: 'Diblokir',
-          reason,
+          status: nextStatus,
+          reason: `[${nextCount}/${MAX_TAB_VIOLATIONS}] ${reason}`,
         }),
       });
     },
@@ -1225,67 +1261,38 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     ]
   );
 
-  // Strict Anti-Cheat & Anti-Inspect Element: Detect window blur, visibilitychange, fullscreen change, right-click, DevTools shortcuts, docked DevTools panel, selection, drag, copy/paste
+  // Strict Anti-Cheat & Anti-Shortcut Lock: Detect window blur, visibilitychange, fullscreen exit, right-click, ALL keyboard shortcuts, docked DevTools, split-screen, copy/paste
   useEffect(() => {
     if (!activeStudent || submittedSummary) return;
 
-    const recordInspectAttempt = (inspectReason: string, shouldBlockImmediately: boolean) => {
+    const recordShortcutOrInspectViolation = (
+      violationDetail: string,
+      isInspectAttempt = false,
+      forceBlockNow = false
+    ) => {
       const now = Date.now();
-      if (now - lastInspectAttemptRef.current < 600) return;
+      if (now - lastInspectAttemptRef.current < 450) return;
       lastInspectAttemptRef.current = now;
 
-      const nextInspect = inspectAttempts + 1;
-      setInspectAttempts(nextInspect);
-      const timeStr = new Date().toLocaleTimeString('id-ID');
-      const inspectLog: StudentActivityLog = {
-        timestamp: timeStr,
-        action: 'violation',
-        detail: `PERCOBAAN INSPECT ELEMENT #${nextInspect}: ${inspectReason}`,
-      };
-      const nextLogs = [...activityLogs.slice(-49), inspectLog];
-      setActivityLogs(nextLogs);
-      setSecurityNotice(
-        `DILARANG INSPECT ELEMENT! (${inspectReason}) — Tercatat di layar pengawas (${nextInspect}x).`
+      triggerViolation(
+        violationDetail,
+        isInspectAttempt ? 1 : 0,
+        isInspectAttempt,
+        forceBlockNow
       );
-
-      if (shouldBlockImmediately) {
-        triggerViolation(
-          `Terdeteksi mencoba Inspect Element / Developer Tools (${inspectReason})`,
-          1,
-          true
-        );
-      } else {
-        const currentAnsCount = Object.keys(answers).filter(
-          (k) => answers[k] && answers[k].length > 0
-        ).length;
-        syncStudentLiveTelemetryCbt(activeStudent, {
-          exam_id: activeExam?.id || 0,
-          judul_ujian: activeExam?.judul_ujian || 'Ujian CBT',
-          kode_paket:
-            activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A',
-          current_question_no: currentIndex + 1,
-          answered_count: currentAnsCount,
-          total_questions: examQuestions.length,
-          remaining_seconds: remainingSeconds,
-          is_fullscreen: Boolean(document.fullscreenElement),
-          is_focused: document.hasFocus() && document.visibilityState === 'visible',
-          devtools_open: isDevToolsOpen,
-          tab_violations: tabViolations,
-          inspect_attempts: nextInspect,
-          last_action: `PERINGATAN: ${inspectReason} (Soal #${currentIndex + 1})`,
-          device_info: getBrowserDeviceSummary(),
-          recent_logs: nextLogs.slice(-12),
-        });
-      }
     };
 
     const handleBlur = () => {
-      triggerViolation('Terdeteksi keluar dari fokus jendela ujian (Alt+Tab / Pindah Aplikasi / Layar Ganda)');
+      triggerViolation(
+        'Terdeteksi keluar dari fokus jendela ujian (Alt+Tab / Pindah Aplikasi / Jendela Eksternal)'
+      );
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        triggerViolation('Terdeteksi berpindah tab browser atau meminimalkan layar ujian');
+        triggerViolation(
+          'Terdeteksi berpindah tab browser atau meminimalkan layar ujian'
+        );
       }
     };
 
@@ -1293,24 +1300,37 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       const isFs = !!document.fullscreenElement;
       setIsFullscreen(isFs);
       if (!isFs && !isStudentBlocked) {
-        triggerViolation('Terdeteksi keluar dari mode layar penuh (Fullscreen) ujian');
+        triggerViolation(
+          'Terdeteksi keluar dari mode Layar Penuh (Fullscreen) saat ujian berlangsung'
+        );
       }
     };
 
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      recordInspectAttempt('Mencoba Klik Kanan / Inspect Element pada lembar soal', false);
+      recordShortcutOrInspectViolation(
+        'Mencoba Klik Kanan (Context Menu / Inspect Element) pada lembar soal',
+        true,
+        false
+      );
     };
 
     const handleClipboard = (e: ClipboardEvent) => {
       e.preventDefault();
-      setSecurityNotice('Fitur Salin / Tempel (Copy-Paste) dikunci selama ujian.');
+      e.stopPropagation();
+      const clipType = (e.type || 'copy').toUpperCase();
+      recordShortcutOrInspectViolation(
+        `Mencoba melakukan aksi ${clipType} (Salin/Tempel teks soal)`,
+        false,
+        false
+      );
     };
 
     const handleSelectStart = (e: Event) => {
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'))
+        return;
       e.preventDefault();
     };
 
@@ -1319,55 +1339,85 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const key = (e.key || '').toUpperCase();
+      const rawKey = e.key || '';
+      const key = rawKey.toUpperCase();
       const isCtrlOrCmd = e.ctrlKey || e.metaKey;
       const isMacAltCmd = e.metaKey && e.altKey;
 
-      // 1. Strict Inspect Element & DevTools Shortcuts -> Block + Trigger Immediate Lockdown
+      const buildShortcutName = () => {
+        const parts: string[] = [];
+        if (e.ctrlKey) parts.push('Ctrl');
+        if (e.metaKey) parts.push('Cmd/Win');
+        if (e.altKey) parts.push('Alt');
+        if (e.shiftKey) parts.push('Shift');
+        if (!['CONTROL', 'META', 'ALT', 'SHIFT', 'OS'].includes(key)) {
+          parts.push(rawKey.length === 1 ? key : rawKey);
+        }
+        return parts.join('+') || rawKey;
+      };
+
+      // 1. Strict Inspect Element, View Source & DevTools Shortcuts -> Recorded & Counted as Violation
       const isInspectDevToolsShortcut =
-        e.key === 'F12' ||
-        (isCtrlOrCmd && e.shiftKey && ['I', 'J', 'C', 'K', 'M'].includes(key)) ||
+        rawKey === 'F12' ||
+        (isCtrlOrCmd &&
+          e.shiftKey &&
+          ['I', 'J', 'C', 'K', 'M', 'E'].includes(key)) ||
         (isMacAltCmd && ['I', 'J', 'C', 'K', 'U'].includes(key)) ||
         (isCtrlOrCmd && key === 'U');
 
       if (isInspectDevToolsShortcut) {
         e.preventDefault();
         e.stopPropagation();
-        const comboLabel =
-          e.key === 'F12'
-            ? 'Tombol F12 (DevTools)'
-            : `${e.ctrlKey ? 'Ctrl+' : e.metaKey ? 'Cmd+' : ''}${e.shiftKey ? 'Shift+' : e.altKey ? 'Opt+' : ''}${key} (Inspect Element)`;
-        recordInspectAttempt(`Menekan pintasan ${comboLabel}`, true);
+        const comboLabel = buildShortcutName();
+        recordShortcutOrInspectViolation(
+          `Menekan pintasan terlarang ${comboLabel} (Inspect Element / Developer Tools / View Source)`,
+          true,
+          false
+        );
         return;
       }
 
-      // 2. Other blocked browser/navigation shortcuts
-      const blockedCombo =
-        e.key === 'F5' ||
-        e.key === 'F11' ||
-        e.key === 'PrintScreen' ||
-        e.key === 'Escape' ||
-        (isCtrlOrCmd && e.shiftKey && key === 'S') ||
-        (isCtrlOrCmd &&
-          ['P', 'S', 'C', 'V', 'X', 'T', 'N', 'W', 'A', 'R', 'F', 'H', 'J', 'O'].includes(key)) ||
-        (e.altKey && key === 'TAB') ||
-        (e.altKey && ['ARROWLEFT', 'ARROWRIGHT', 'D', 'HOME', 'F4'].includes(key));
+      // 2. Comprehensive Student Shortcut & Tampering Traps (Every single one is blocked, logged in writing, and counted toward the 3x limit!)
+      let forbiddenReason: string | null = null;
 
-      if (blockedCombo) {
+      if (rawKey === 'PrintScreen' || (isCtrlOrCmd && e.shiftKey && ['S', '3', '4', '5'].includes(key)) || (e.metaKey && e.shiftKey && ['S', '3', '4', '5'].includes(key))) {
+        forbiddenReason = `Menekan pintasan ${buildShortcutName()} (Mencoba Tangkap Layar / Screenshot Soal)`;
+      } else if (isCtrlOrCmd && e.shiftKey && ['N', 'P', 'T'].includes(key)) {
+        forbiddenReason = `Menekan pintasan ${buildShortcutName()} (Mencoba Membuka Jendela Samaran / Incognito / Tab Baru)`;
+      } else if (isCtrlOrCmd && ['T', 'N', 'W', 'F4'].includes(key)) {
+        forbiddenReason = `Menekan pintasan ${buildShortcutName()} (Mencoba Membuka / Menutup Tab atau Jendela Browser)`;
+      } else if (isCtrlOrCmd && ['C', 'V', 'X', 'A'].includes(key)) {
+        forbiddenReason = `Menekan pintasan ${buildShortcutName()} (Mencoba Copy / Paste / Cut / Blok Teks Soal)`;
+      } else if (isCtrlOrCmd && ['F', 'G'].includes(key) || rawKey === 'F3') {
+        forbiddenReason = `Menekan pintasan ${buildShortcutName()} (Mencoba Fitur Pencarian Kata / Find in Page)`;
+      } else if (isCtrlOrCmd && ['P', 'S', 'O', 'H', 'J', 'L', 'R'].includes(key) || rawKey === 'F5') {
+        forbiddenReason = `Menekan pintasan ${buildShortcutName()} (Mencoba Simpan / Cetak / Riwayat / Muat Ulang Browser)`;
+      } else if (
+        (e.altKey && ['TAB', 'F4', 'ESCAPE', 'SPACE', 'ARROWLEFT', 'ARROWRIGHT', 'HOME', 'D'].includes(key)) ||
+        rawKey === 'Meta' ||
+        rawKey === 'OS' ||
+        rawKey === 'ContextMenu'
+      ) {
+        forbiddenReason = `Menekan tombol sistem ${buildShortcutName()} (Mencoba Pindah Aplikasi / Menu Sistem OS)`;
+      } else if (rawKey === 'Escape' || rawKey === 'F11') {
+        forbiddenReason = `Menekan tombol ${buildShortcutName()} (Mencoba Keluar dari Mode Layar Penuh Ujian)`;
+      }
+
+      if (forbiddenReason) {
         e.preventDefault();
         e.stopPropagation();
-        setSecurityNotice(
-          `Pintasan keyboard (${e.ctrlKey ? 'Ctrl+' : ''}${e.key}) diblokir demi keamanan integritas ujian.`
-        );
+        recordShortcutOrInspectViolation(forbiddenReason, false, false);
       }
     };
 
-    // Sensitive Active Polling: Check window focus, visibility, AND Docked DevTools panel every 1000ms
+    // Sensitive Active Polling: Check window focus, visibility, split-screen, AND Docked DevTools panel every 1000ms
     const focusCheckInterval = setInterval(() => {
       if (isStudentBlocked) return;
 
       if (!document.hasFocus() || document.visibilityState === 'hidden') {
-        triggerViolation('Terdeteksi kehilangan fokus jendela ujian (Aplikasi eksternal / Taskbar / Layar ganda)');
+        triggerViolation(
+          'Terdeteksi kehilangan fokus jendela ujian (Membuka aplikasi lain / Taskbar / Layar ganda)'
+        );
         return;
       }
 
@@ -1380,7 +1430,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
       if (dockedSideDevTools || dockedBottomDevTools) {
         setIsDevToolsOpen(true);
-        recordInspectAttempt('Membuka Panel Inspect Element / Developer Tools Browser', true);
+        recordShortcutOrInspectViolation(
+          'Membuka Panel Inspect Element / Developer Tools Browser (Docked Panel)',
+          true,
+          false
+        );
       } else if (isDevToolsOpen) {
         setIsDevToolsOpen(false);
       }
@@ -1530,97 +1584,162 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return () => window.clearInterval(autoSaveInterval);
   }, [activeStudent, activeExam, examQuestions.length, submittedSummary]);
 
-  const handleSubmitExam = useCallback(async () => {
-    if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked) return;
+  // Minimum working time calculation (25 minutes minimum before a student is allowed to submit)
+  const totalExamSeconds = useMemo(() => {
+    return Math.max(1, Number(activeExam?.durasi_menit || 60)) * 60;
+  }, [activeExam?.durasi_menit]);
 
-    // Cek apakah siswa sudah menjawab minimal 1 soal (Cegah submit kosong & data dumi AI)
-    const currentAnsweredCount = Object.keys(answers).filter(
-      (k) => answers[k] && answers[k].length > 0
-    ).length;
+  const minRequiredSubmitSeconds = useMemo(() => {
+    return Math.min(MIN_EXAM_SUBMIT_MINUTES * 60, totalExamSeconds);
+  }, [totalExamSeconds]);
 
-    if (currentAnsweredCount === 0) {
-      setSecurityNotice(
-        'Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!'
-      );
-      setConfirmSubmitModal(false);
-      return;
-    }
+  const elapsedExamSeconds = useMemo(() => {
+    return Math.max(0, totalExamSeconds - remainingSeconds);
+  }, [totalExamSeconds, remainingSeconds]);
 
-    setIsSubmitting(true);
-    setConfirmSubmitModal(false);
+  const remainingMinSubmitLockSeconds = useMemo(() => {
+    return Math.max(0, minRequiredSubmitSeconds - elapsedExamSeconds);
+  }, [minRequiredSubmitSeconds, elapsedExamSeconds]);
 
-    try {
-      const outcome = await submitStudentExamCbt({
-        student: activeStudent,
-        exam: activeExam,
-        questions: examQuestions,
-        jawabanSiswa: answers,
-        pelanggaranTab: tabViolations,
-      });
-      if (document.fullscreenElement && document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      }
+  const isSubmitLockedByMinDuration =
+    remainingSeconds > 1 && remainingMinSubmitLockSeconds > 0;
 
-      // Clear temporary in-progress localStorage data upon final submission
-      hasUnsavedAnswerChangesRef.current = false;
-      clearLocalProgress(activeStudent.token_ujian, activeExam.id, activeStudent.id);
-      clearLocalStudentAnswers(activeExam.id, activeStudent.id);
-      clearActiveStudentSession();
-
-      const finalLogs: StudentActivityLog[] = [
-        ...activityLogs,
+  const handleRequestOpenSubmitModal = useCallback(() => {
+    if (isStudentBlocked) return;
+    if (isSubmitLockedByMinDuration) {
+      const waitMins = Math.ceil(remainingMinSubmitLockSeconds / 60);
+      const elapsedMins = Math.floor(elapsedExamSeconds / 60);
+      const msg = `Batas Waktu Minimal Pengerjaan (${MIN_EXAM_SUBMIT_MINUTES} Menit): Anda baru mengerjakan selama ${elapsedMins} menit. Silakan periksa kembali jawaban Anda dan tunggu ${waitMins} menit lagi sebelum mengumpulkan.`;
+      setSecurityNotice(msg);
+      setActivityLogs((prev) => [
+        ...prev,
         {
           timestamp: new Date().toLocaleTimeString('id-ID'),
-          action: 'submit',
-          detail: `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100.`,
+          action: 'navigate',
+          detail: `Mencoba mengumpulkan ujian sebelum batas waktu minimal ${MIN_EXAM_SUBMIT_MINUTES} menit (baru berjalan ${elapsedMins} menit).`,
         },
-      ];
-
-      // Save complete receipt to student's history (with canonical Bank Soal option keys)
-      const finalReceipt: LocalExamReceipt = {
-        resultId: outcome.resultId,
-        studentId: activeStudent.id,
-        studentNama: activeStudent.nama,
-        studentKelas: activeStudent.kelas,
-        tokenUjian: activeStudent.token_ujian,
-        examId: activeExam.id,
-        examJudul: activeExam.judul_ujian,
-        skor: outcome.skor,
-        kategori: outcome.kategori,
-        rawEarned: outcome.rawEarned,
-        rawMax: outcome.rawMax,
-        answeredCount: currentAnsweredCount,
-        totalQuestions: examQuestions.length,
-        pelanggaranTab: tabViolations,
-        jawabanSiswa: outcome.canonicalAnswers || answers,
-        logs: finalLogs,
-        submittedAt: new Date().toISOString(),
-      };
-      saveLocalReceipt(finalReceipt);
-
-      setSubmittedSummary({
-        resultId: outcome.resultId,
-        skor: outcome.skor,
-        kategori: outcome.kategori,
-        rawEarned: outcome.rawEarned,
-        rawMax: outcome.rawMax,
-        aiResult: null,
-      });
-      onExamCompleted();
-    } finally {
-      setIsSubmitting(false);
+      ]);
     }
+    setConfirmSubmitModal(true);
   }, [
-    activeStudent,
-    activeExam,
-    answers,
-    tabViolations,
-    activityLogs,
-    isSubmitting,
     isStudentBlocked,
-    examQuestions,
-    onExamCompleted,
+    isSubmitLockedByMinDuration,
+    remainingMinSubmitLockSeconds,
+    elapsedExamSeconds,
   ]);
+
+  const handleSubmitExam = useCallback(
+    async (forceByTimeout = false) => {
+      if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked)
+        return;
+
+      if (!forceByTimeout && remainingSeconds > 1 && remainingMinSubmitLockSeconds > 0) {
+        const waitMins = Math.ceil(remainingMinSubmitLockSeconds / 60);
+        setSecurityNotice(
+          `Pengumpulan Dikunci: Wajib mengerjakan minimal ${MIN_EXAM_SUBMIT_MINUTES} menit (Tersisa ${waitMins} menit lagi sebelum tombol pengumpulan aktif).`
+        );
+        return;
+      }
+
+      // Cek apakah siswa sudah menjawab minimal 1 soal (Cegah submit kosong & data dumi AI)
+      const currentAnsweredCount = Object.keys(answers).filter(
+        (k) => answers[k] && answers[k].length > 0
+      ).length;
+
+      if (!forceByTimeout && currentAnsweredCount === 0) {
+        setSecurityNotice(
+          'Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!'
+        );
+        setConfirmSubmitModal(false);
+        return;
+      }
+
+      setIsSubmitting(true);
+      setConfirmSubmitModal(false);
+
+      try {
+        const outcome = await submitStudentExamCbt({
+          student: activeStudent,
+          exam: activeExam,
+          questions: examQuestions,
+          jawabanSiswa: answers,
+          pelanggaranTab: tabViolations,
+        });
+        if (document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+
+        // Clear temporary in-progress localStorage data upon final submission
+        hasUnsavedAnswerChangesRef.current = false;
+        clearLocalProgress(
+          activeStudent.token_ujian,
+          activeExam.id,
+          activeStudent.id
+        );
+        clearLocalStudentAnswers(activeExam.id, activeStudent.id);
+        clearActiveStudentSession();
+
+        const finalLogs: StudentActivityLog[] = [
+          ...activityLogs,
+          {
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            action: 'submit',
+            detail: `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100 (Durasi pengerjaan: ${Math.floor(
+              elapsedExamSeconds / 60
+            )} menit, Pelanggaran: ${tabViolations}x).`,
+          },
+        ];
+
+        // Save complete receipt to student's history (with canonical Bank Soal option keys)
+        const finalReceipt: LocalExamReceipt = {
+          resultId: outcome.resultId,
+          studentId: activeStudent.id,
+          studentNama: activeStudent.nama,
+          studentKelas: activeStudent.kelas,
+          tokenUjian: activeStudent.token_ujian,
+          examId: activeExam.id,
+          examJudul: activeExam.judul_ujian,
+          skor: outcome.skor,
+          kategori: outcome.kategori,
+          rawEarned: outcome.rawEarned,
+          rawMax: outcome.rawMax,
+          answeredCount: currentAnsweredCount,
+          totalQuestions: examQuestions.length,
+          pelanggaranTab: tabViolations,
+          jawabanSiswa: outcome.canonicalAnswers || answers,
+          logs: finalLogs,
+          submittedAt: new Date().toISOString(),
+        };
+        saveLocalReceipt(finalReceipt);
+
+        setSubmittedSummary({
+          resultId: outcome.resultId,
+          skor: outcome.skor,
+          kategori: outcome.kategori,
+          rawEarned: outcome.rawEarned,
+          rawMax: outcome.rawMax,
+          aiResult: null,
+        });
+        onExamCompleted();
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [
+      activeStudent,
+      activeExam,
+      answers,
+      tabViolations,
+      activityLogs,
+      isSubmitting,
+      isStudentBlocked,
+      examQuestions,
+      onExamCompleted,
+      remainingSeconds,
+      remainingMinSubmitLockSeconds,
+      elapsedExamSeconds,
+    ]
+  );
 
   // Countdown Timer Effect
   useEffect(() => {
@@ -1630,7 +1749,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setRemainingSeconds((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          handleSubmitExam();
+          handleSubmitExam(true);
           return 0;
         }
         return prev - 1;
@@ -2801,11 +2920,27 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   <button
                     type="button"
                     disabled={isStudentBlocked}
-                    onClick={() => setConfirmSubmitModal(true)}
-                    className="inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                    onClick={handleRequestOpenSubmitModal}
+                    className={`inline-flex items-center gap-1.5 px-5 py-2.5 text-xs font-semibold text-white rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs ${
+                      isSubmitLockedByMinDuration
+                        ? 'bg-amber-600 hover:bg-amber-700'
+                        : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700'
+                    } disabled:opacity-50`}
                   >
-                    <Send className="w-4 h-4" />
-                    Selesaikan &amp; Kumpulkan Ujian
+                    {isSubmitLockedByMinDuration ? (
+                      <>
+                        <Lock className="w-4 h-4" />
+                        <span>
+                          Kumpulkan Terkunci (Min. {MIN_EXAM_SUBMIT_MINUTES}m ·{' '}
+                          {formatTimer(remainingMinSubmitLockSeconds)})
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        <span>Selesaikan &amp; Kumpulkan Ujian</span>
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -2829,7 +2964,14 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 <strong className="font-mono tabular-nums text-slate-800">
                   {answeredCount} / {examQuestions.length}
                 </strong>{' '}
-                butir soal · Disimpan otomatis
+                butir soal · Pelanggaran:{' '}
+                <strong
+                  className={`font-mono tabular-nums ${
+                    tabViolations > 0 ? 'text-rose-700' : 'text-emerald-700'
+                  }`}
+                >
+                  {tabViolations}/{MAX_TAB_VIOLATIONS}
+                </strong>
               </p>
             </div>
 
@@ -2879,14 +3021,55 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               </div>
             </div>
 
+            {/* 25-Minute Minimum Working Duration Status Box */}
+            <div
+              className={`p-3 rounded-lg border text-xs space-y-1 ${
+                isSubmitLockedByMinDuration
+                  ? 'bg-amber-50/90 border-amber-200 text-amber-950'
+                  : 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
+              }`}
+            >
+              <div className="font-bold flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 shrink-0" />
+                  <span>Aturan Minimal {MIN_EXAM_SUBMIT_MINUTES} Menit</span>
+                </span>
+                <span className="font-mono tabular-nums font-extrabold">
+                  {isSubmitLockedByMinDuration
+                    ? `Tunggu ${formatTimer(remainingMinSubmitLockSeconds)}`
+                    : 'Terpenuhi ✓'}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed opacity-90">
+                {isSubmitLockedByMinDuration
+                  ? `Pengumpulan ujian baru aktif setelah Anda mengerjakan minimal ${MIN_EXAM_SUBMIT_MINUTES} menit. Gunakan waktu untuk meneliti kembali seluruh soal.`
+                  : `Waktu pengerjaan minimal ${MIN_EXAM_SUBMIT_MINUTES} menit telah terpenuhi. Anda dapat mengumpulkan jawaban jika sudah yakin.`}
+              </p>
+            </div>
+
             <button
               type="button"
               disabled={isStudentBlocked}
-              onClick={() => setConfirmSubmitModal(true)}
-              className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              onClick={handleRequestOpenSubmitModal}
+              className={`w-full py-2.5 px-4 text-xs font-semibold text-white rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer ${
+                isSubmitLockedByMinDuration
+                  ? 'bg-amber-700 hover:bg-amber-800'
+                  : 'bg-slate-900 hover:bg-slate-800'
+              } disabled:opacity-50`}
             >
-              <CheckCircle2 className="w-4 h-4" />
-              Kumpulkan Jawaban Sekarang
+              {isSubmitLockedByMinDuration ? (
+                <>
+                  <Lock className="w-4 h-4" />
+                  <span>
+                    Kumpulkan Terkunci (Sisa {formatTimer(remainingMinSubmitLockSeconds)})
+                  </span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Kumpulkan Jawaban Sekarang</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -2897,9 +3080,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
         >
-          <div className="bg-white border border-slate-200 rounded-xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-xl">
+          <div className="bg-white border border-slate-200 rounded-xl max-w-lg w-full p-6 sm:p-8 space-y-5 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-start gap-3.5">
               <div
                 className={`p-3 rounded-xl shrink-0 ${
@@ -2917,14 +3100,38 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   }`}
                 >
                   {isStudentBlocked
-                    ? 'Sesi Ujian Diblokir · Pelanggaran Keamanan CBT'
-                    : 'Layar Ujian Dikunci Sementara · Anti-Cheat Aktif'}
+                    ? `Sesi Ujian Diblokir Otomatis (${tabViolations}/${MAX_TAB_VIOLATIONS} Pelanggaran)`
+                    : `Peringatan Keamanan CBT (${tabViolations}/${MAX_TAB_VIOLATIONS} Pelanggaran)`}
                 </div>
                 <h3 className="text-xl font-bold text-slate-900 mt-1">
                   {isStudentBlocked
-                    ? 'Akses Ujian Anda Telah Dikunci'
-                    : 'Terdeteksi Keluar dari Jendela Ujian'}
+                    ? 'Akses Ujian Anda Telah Dikunci (Batas 3x Pelanggaran)'
+                    : `Pelanggaran Ke-${tabViolations} dari Maksimal ${MAX_TAB_VIOLATIONS} Kali Tercatat`}
                 </h3>
+              </div>
+            </div>
+
+            {/* Written Audit Trail of Recorded Violations */}
+            <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-2">
+              <div className="font-bold text-slate-900 flex items-center justify-between">
+                <span>Catatan Tertulis Pelanggaran &amp; Pintasan Terdeteksi:</span>
+                <span className="font-mono text-rose-700">
+                  {tabViolations} / {MAX_TAB_VIOLATIONS} Maksimal
+                </span>
+              </div>
+              <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1">
+                {activityLogs
+                  .filter((l) => l.action === 'violation' || l.action === 'blocked')
+                  .slice(-6)
+                  .map((vLog, idx) => (
+                    <div
+                      key={idx}
+                      className="p-2 rounded bg-white border border-rose-200 text-[11px] text-rose-950 font-mono leading-snug"
+                    >
+                      <span className="font-bold text-rose-700">[{vLog.timestamp}]</span>{' '}
+                      {vLog.detail}
+                    </div>
+                  ))}
               </div>
             </div>
 
@@ -2932,20 +3139,20 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               <div className="space-y-3.5 text-sm text-slate-700 leading-relaxed">
                 <p>
                   Peserta <strong>{activeStudent.nama}</strong> ({activeStudent.kelas}), sesi ujian Anda telah{' '}
-                  <strong className="text-red-700 font-bold">DIBLOKIR SISTEM</strong> demi menjaga integritas CBT karena terdeteksi keluar dari layar ujian atau berpindah tab (
+                  <strong className="text-red-700 font-bold">DIBLOKIR SISTEM</strong> karena telah mencapai batas maksimal{' '}
                   <strong className="font-mono text-red-700 font-bold">
-                    {tabViolations} kali pelanggaran tercatat
-                  </strong>
-                  ).
+                    {tabViolations} dari {MAX_TAB_VIOLATIONS} kali pelanggaran
+                  </strong>{' '}
+                  (keluar jendela ujian, berpindah tab, atau menekan pintasan keyboard terlarang).
                 </p>
 
                 <div className="p-3.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 space-y-1">
                   <div className="font-bold flex items-center gap-1.5 text-emerald-800">
                     <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Jawaban & Sisa Waktu Anda Tersimpan Aman (Autosave)</span>
+                    <span>Jawaban &amp; Sisa Waktu Anda Tersimpan Aman (Autosave)</span>
                   </div>
                   <p className="text-emerald-800 leading-relaxed">
-                    Semua jawaban yang telah Anda pilih hingga detik ini tersimpan rapi di sistem. Begitu akun dibuka kembali, Anda dapat langsung <strong>melanjutkan soal berikutnya</strong> tanpa kehilangan data.
+                    Semua jawaban yang telah Anda pilih hingga detik ini tersimpan rapi di memori lokal. Begitu akun dibuka kembali oleh Pengawas, Anda dapat langsung <strong>melanjutkan soal berikutnya</strong> tanpa kehilangan data.
                   </p>
                 </div>
 
@@ -2955,10 +3162,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     <span>Prosedur Membuka Blokir:</span>
                   </div>
                   <p>
-                    Anda <strong>TIDAK DAPAT LOGIN SENDIRI</strong> sampai Guru/Pengawas membuka blokir. Silakan segera lapor kepada Guru Pengawas di ruang kelas.
+                    Anda <strong>TIDAK DAPAT MEMBUKA KUNCI SENDIRI</strong> sampai Guru Pengawas mengizinkan. Silakan lapor kepada Guru Pengawas di ruang kelas.
                   </p>
                   <div className="p-2 bg-white/70 rounded border border-red-200 font-mono text-[11px] text-red-800">
-                    Guru membuka via: Konsol Guru → Menu 03 (Live Monitor) atau Menu 04 (Database Siswa) → Klik [Buka Kunci]
+                    Guru membuka via: Konsol Guru → Modul 04 (Live Monitor &amp; Anti-Cheat) → Klik [Buka Kunci]
                   </div>
                 </div>
 
@@ -2988,7 +3195,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                       className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg cursor-pointer"
                     >
                       <Activity className="w-3.5 h-3.5 text-slate-600" />
-                      <span>Lihat Rekaman Pelanggaran</span>
+                      <span>Lihat Semua Rekaman ({activityLogs.length})</span>
                     </button>
                   </div>
 
@@ -3009,16 +3216,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             ) : (
               <div className="space-y-4 text-sm text-slate-700 leading-relaxed">
                 <p>
-                  Sistem keamanan CBT mendeteksi Anda berpindah tab browser,
-                  membuka aplikasi lain, atau keluar dari fokus layar ujian pada
-                  pukul <strong className="font-mono">{lastViolationTime}</strong>.
+                  Sistem keamanan CBT mencatat pelanggaran tertulis pada pukul{' '}
+                  <strong className="font-mono">{lastViolationTime}</strong>:{' '}
+                  <strong className="text-slate-900">{securityNotice}</strong>.
                 </p>
                 <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
-                  Peringatan Ke-<strong>{tabViolations}</strong> dari maksimal{' '}
-                  <strong>{MAX_TAB_VIOLATIONS}</strong> kali. Apabila Anda
-                  berpindah tab hingga {MAX_TAB_VIOLATIONS} kali, sesi ujian akan{' '}
-                  <strong>Diblokir Otomatis</strong> dan hanya dapat dibuka oleh
-                  Guru Pengawas.
+                  Ini adalah <strong>Pelanggaran Ke-{tabViolations}</strong> dari batas maksimal{' '}
+                  <strong>{MAX_TAB_VIOLATIONS} kali</strong>. Seluruh aktivitas dan pintasan keyboard tercatat di layar Guru Pengawas. Jika mencapai{' '}
+                  <strong>{MAX_TAB_VIOLATIONS} kali pelanggaran</strong>, sesi ujian akan{' '}
+                  <strong>Diblokir Otomatis</strong>!
                 </div>
                 <button
                   type="button"
@@ -3028,7 +3234,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                   }}
                   className="w-full py-3 px-4 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
                 >
-                  Kembali Fokus ke Ruang Ujian Sekarang
+                  Saya Mengerti &amp; Kembali Fokus ke Layar Penuh
                 </button>
               </div>
             )}
@@ -3052,8 +3258,30 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
               <strong className="font-mono text-slate-900">
                 {answeredCount} dari {examQuestions.length}
               </strong>{' '}
-              soal. Apakah Anda yakin ingin mengakhiri ujian dan mengirim jawaban?
+              soal dengan waktu pengerjaan{' '}
+              <strong className="font-mono text-slate-900">
+                {Math.floor(elapsedExamSeconds / 60)} menit {elapsedExamSeconds % 60} detik
+              </strong>
+              .
             </p>
+            {isSubmitLockedByMinDuration && (
+              <div className="p-3.5 rounded-lg bg-rose-50 border border-rose-200 text-xs font-medium text-rose-900 space-y-1">
+                <div className="font-bold flex items-center gap-1.5 text-rose-800">
+                  <Lock className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>
+                    Belum Mencapai Batas Waktu Minimal ({MIN_EXAM_SUBMIT_MINUTES} Menit)
+                  </span>
+                </div>
+                <p className="leading-relaxed">
+                  Untuk mencegah pengerjaan ujian secara terburu-buru, tombol pengumpulan dikunci hingga waktu pengerjaan mencapai{' '}
+                  <strong>{MIN_EXAM_SUBMIT_MINUTES} menit</strong>. Silakan periksa kembali jawaban Anda (Tersisa{' '}
+                  <strong className="font-mono">
+                    {formatTimer(remainingMinSubmitLockSeconds)}
+                  </strong>{' '}
+                  lagi).
+                </p>
+              </div>
+            )}
             {answeredCount === 0 && (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs font-medium text-amber-800 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
@@ -3069,15 +3297,19 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 onClick={() => setConfirmSubmitModal(false)}
                 className="px-4 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
               >
-                Periksa Kembali
+                Periksa Kembali Soal
               </button>
               <button
                 type="button"
-                onClick={handleSubmitExam}
-                disabled={isSubmitting}
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg cursor-pointer"
+                onClick={() => handleSubmitExam(false)}
+                disabled={isSubmitting || isSubmitLockedByMinDuration || answeredCount === 0}
+                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg cursor-pointer"
               >
-                {isSubmitting ? 'Mengirim Jawaban...' : 'Ya, Kumpulkan Jawaban'}
+                {isSubmitting
+                  ? 'Mengirim Jawaban...'
+                  : isSubmitLockedByMinDuration
+                    ? `Terkunci (${formatTimer(remainingMinSubmitLockSeconds)})`
+                    : 'Ya, Kumpulkan Jawaban'}
               </button>
             </div>
           </div>

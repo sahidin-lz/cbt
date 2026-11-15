@@ -758,9 +758,10 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
   const studentSidebarMenus = [
     {
       id: 'beranda' as const,
+      matchIds: ['beranda'] as StudentDashboardMenu[],
       num: '01',
-      title: 'Beranda Siswa',
-      subtitle: 'Ringkasan & Info Aktif',
+      title: 'Beranda & Info',
+      subtitle: 'Ringkasan & Pengumuman',
       badge: `${activeClassExams.length} Aktif`,
       icon: Home,
       activeClass:
@@ -772,10 +773,11 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     },
     {
       id: 'jadwal' as const,
+      matchIds: ['jadwal', 'riwayat'] as StudentDashboardMenu[],
       num: '02',
-      title: 'Jadwal & Ujian',
-      subtitle: `${activeClassExams.length} Sesi Dibuka`,
-      badge: `${classMatchedExams.length}`,
+      title: 'Jadwal & Riwayat Ujian',
+      subtitle: `${activeClassExams.length} Dibuka · ${studentCompetencyProfile.completedCount}/${studentCompetencyProfile.totalAssigned} Selesai`,
+      badge: `${classMatchedExams.length} Paket`,
       icon: Calendar,
       activeClass:
         'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-xs ring-2 ring-emerald-300/60',
@@ -785,52 +787,26 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       badgeIdle: 'bg-emerald-100 text-emerald-800',
     },
     {
-      id: 'kemampuan' as const,
+      id: 'hasil' as const,
+      matchIds: ['hasil', 'kemampuan'] as StudentDashboardMenu[],
       num: '03',
-      title: 'Laporan Kemampuan',
-      subtitle: 'Progres & Peta Kognitif',
-      badge: `${studentCompetencyProfile.completionPercent}%`,
-      icon: BarChart3,
+      title: 'Hasil, Rapor & PDF',
+      subtitle: 'Nilai, LOTS/HOTS & Pembahasan',
+      badge: `${studentResults.length} Nilai`,
+      icon: Award,
       activeClass:
         'bg-gradient-to-r from-indigo-600 via-purple-600 to-violet-700 text-white border-indigo-500 shadow-xs ring-2 ring-purple-300/60',
       iconBoxActive: 'bg-white/20 text-amber-300',
-      iconBoxIdle: 'bg-indigo-600 text-white',
-      badgeActive: 'bg-amber-400 text-slate-950',
-      badgeIdle: 'bg-purple-100 text-purple-800 border border-purple-200',
-    },
-    {
-      id: 'hasil' as const,
-      num: '04',
-      title: 'Hasil & Nilai PDF',
-      subtitle: 'Skor & Pembahasan',
-      badge: `${studentResults.length}`,
-      icon: Award,
-      activeClass:
-        'bg-gradient-to-r from-violet-600 to-purple-700 text-white border-violet-500 shadow-xs ring-2 ring-violet-300/60',
-      iconBoxActive: 'bg-white/20 text-amber-300',
       iconBoxIdle: 'bg-violet-50 text-violet-600 border border-violet-200/70',
-      badgeActive: 'bg-white/20 text-white',
+      badgeActive: 'bg-amber-400 text-slate-950',
       badgeIdle: 'bg-violet-100 text-violet-800',
     },
     {
-      id: 'riwayat' as const,
-      num: '05',
-      title: 'Riwayat Ujian',
-      subtitle: 'Log Status Sesi',
-      badge: `${studentCompetencyProfile.completedCount}/${studentCompetencyProfile.totalAssigned}`,
-      icon: History,
-      activeClass:
-        'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-500 shadow-xs ring-2 ring-amber-300/60',
-      iconBoxActive: 'bg-white/20 text-white',
-      iconBoxIdle: 'bg-amber-50 text-amber-600 border border-amber-200/70',
-      badgeActive: 'bg-white/20 text-white',
-      badgeIdle: 'bg-amber-50 text-amber-800 border border-amber-200/70',
-    },
-    {
       id: 'profil' as const,
-      num: '06',
-      title: 'Profil & Password',
-      subtitle: 'Atur Token Login',
+      matchIds: ['profil'] as StudentDashboardMenu[],
+      num: '04',
+      title: 'Profil & Kartu Akun',
+      subtitle: 'Token Login & Kartu PDF',
       badge: 'AKUN',
       icon: User,
       activeClass:
@@ -843,7 +819,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
   ];
 
   const activeStudentMenuObj =
-    studentSidebarMenus.find((m) => m.id === activeMenu) ||
+    studentSidebarMenus.find((m) => m.matchIds.includes(activeMenu)) ||
     studentSidebarMenus[0];
 
   return (
@@ -929,7 +905,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
             >
               {studentSidebarMenus.map((item) => {
                 const Icon = item.icon;
-                const isSelected = activeMenu === item.id;
+                const isSelected = item.matchIds.includes(activeMenu);
                 return (
                   <button
                     key={item.id}
@@ -1563,8 +1539,45 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       )}
 
       {/* =================================================================== */}
-      {/* MENU 2: JADWAL UJIAN / DAFTAR UJIAN                                 */}
+      {/* MENU 02 TERPADU: JADWAL UJIAN & RIWAYAT SESI                        */}
       {/* =================================================================== */}
+      {(activeMenu === 'jadwal' || activeMenu === 'riwayat') && (
+        <div className="bg-white border border-slate-200 rounded-xl p-2 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveMenu('jadwal')}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                activeMenu === 'jadwal'
+                  ? 'bg-emerald-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Daftar Jadwal &amp; Mulai Ujian ({classMatchedExams.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMenu('riwayat')}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                activeMenu === 'riwayat'
+                  ? 'bg-emerald-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>
+                Tabel Riwayat Status Sesi ({studentCompetencyProfile.completedCount}/
+                {studentCompetencyProfile.totalAssigned} Selesai)
+              </span>
+            </button>
+          </div>
+          <span className="px-3 py-1 text-[11px] font-semibold text-slate-500">
+            Aturan Ujian: Minimal pengerjaan 25 menit · Maksimal 3x pelanggaran
+          </span>
+        </div>
+      )}
+
       {activeMenu === 'jadwal' && (
         <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
           <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-3">
@@ -1764,8 +1777,42 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       )}
 
       {/* =================================================================== */}
-      {/* MENU 2B: DASHBOARD LAPORAN PROGRES & PETA KEMAMPUAN SISWA           */}
+      {/* MENU 03 TERPADU: HASIL UJIAN, RAPOR KEMAMPUAN & PEMBAHASAN PDF      */}
       {/* =================================================================== */}
+      {(activeMenu === 'hasil' || activeMenu === 'kemampuan') && (
+        <div className="bg-white border border-slate-200 rounded-xl p-2 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveMenu('hasil')}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                activeMenu === 'hasil'
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Award className="w-3.5 h-3.5" />
+              <span>Transkrip Nilai, Evaluasi Humanis &amp; Unduh PDF ({studentResults.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMenu('kemampuan')}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                activeMenu === 'kemampuan'
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Rapor Peta Kemampuan Kognitif (LOTS &amp; HOTS)</span>
+            </button>
+          </div>
+          <span className="px-3 py-1 text-[11px] font-semibold text-indigo-700">
+            Standar Penilaian Humanis Aktif
+          </span>
+        </div>
+      )}
+
       {activeMenu === 'kemampuan' && (
         <div className="space-y-6">
           {/* Header Banner & Ringkasan Diagnostik Kemampuan */}
