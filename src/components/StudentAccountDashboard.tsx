@@ -26,6 +26,8 @@ import {
   TrendingUp,
   PanelLeftClose,
   PanelLeftOpen,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -95,6 +97,8 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
 }) => {
   const [activeMenu, setActiveMenu] = useState<StudentDashboardMenu>(initialMenu);
   const [studentMapelFilter, setStudentMapelFilter] = useState<string>('SEMUA');
+  const [isStudentSubMenuMinimized, setIsStudentSubMenuMinimized] =
+    useState<boolean>(false);
 
   // Collapsible / Minimizable Left Sidebar State for Student Portal
   const [isSidebarMinimized, setIsSidebarMinimized] = useState<boolean>(() => {
@@ -1539,42 +1543,70 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       )}
 
       {/* =================================================================== */}
-      {/* MENU 02 TERPADU: JADWAL UJIAN & RIWAYAT SESI                        */}
+      {/* MENU 02 TERPADU: JADWAL UJIAN & RIWAYAT SESI (MINIMIZABLE SUB-MENU) */}
       {/* =================================================================== */}
       {(activeMenu === 'jadwal' || activeMenu === 'riwayat') && (
         <div className="bg-white border border-slate-200 rounded-xl p-2 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-          <div className="flex flex-wrap items-center gap-1.5">
+          {!isStudentSubMenuMinimized ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setActiveMenu('jadwal')}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  activeMenu === 'jadwal'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>02A. Daftar Jadwal &amp; Mulai Ujian ({classMatchedExams.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveMenu('riwayat')}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  activeMenu === 'riwayat'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>
+                  02B. Tabel Riwayat Status Sesi ({studentCompetencyProfile.completedCount}/
+                  {studentCompetencyProfile.totalAssigned} Selesai)
+                </span>
+              </button>
+            </div>
+          ) : (
+            <span className="text-xs font-extrabold text-emerald-900 px-2">
+              Sub-Menu Modul 02 (Diminimize):{' '}
+              {activeMenu === 'jadwal'
+                ? '02A. Daftar Jadwal & Mulai Ujian'
+                : '02B. Tabel Riwayat Status Sesi'}
+            </span>
+          )}
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-1 text-[11px] font-semibold text-slate-500 hidden sm:inline">
+              Minimal pengerjaan 25 menit · Maks 3x pelanggaran
+            </span>
             <button
               type="button"
-              onClick={() => setActiveMenu('jadwal')}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                activeMenu === 'jadwal'
-                  ? 'bg-emerald-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
+              onClick={() => setIsStudentSubMenuMinimized((p) => !p)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
             >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Daftar Jadwal &amp; Mulai Ujian ({classMatchedExams.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMenu('riwayat')}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                activeMenu === 'riwayat'
-                  ? 'bg-emerald-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <History className="w-3.5 h-3.5" />
-              <span>
-                Tabel Riwayat Status Sesi ({studentCompetencyProfile.completedCount}/
-                {studentCompetencyProfile.totalAssigned} Selesai)
-              </span>
+              {isStudentSubMenuMinimized ? (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>Buka Sub-Menu</span>
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5" />
+                  <span>Minimize</span>
+                </>
+              )}
             </button>
           </div>
-          <span className="px-3 py-1 text-[11px] font-semibold text-slate-500">
-            Aturan Ujian: Minimal pengerjaan 25 menit · Maksimal 3x pelanggaran
-          </span>
         </div>
       )}
 
@@ -1781,35 +1813,63 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       {/* =================================================================== */}
       {(activeMenu === 'hasil' || activeMenu === 'kemampuan') && (
         <div className="bg-white border border-slate-200 rounded-xl p-2 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-          <div className="flex flex-wrap items-center gap-1.5">
+          {!isStudentSubMenuMinimized ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setActiveMenu('hasil')}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  activeMenu === 'hasil'
+                    ? 'bg-indigo-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Award className="w-3.5 h-3.5" />
+                <span>03A. Transkrip Nilai, Evaluasi Humanis &amp; Unduh PDF ({studentResults.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveMenu('kemampuan')}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  activeMenu === 'kemampuan'
+                    ? 'bg-indigo-600 text-white shadow-2xs'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span>03B. Rapor Peta Kemampuan Kognitif (LOTS &amp; HOTS)</span>
+              </button>
+            </div>
+          ) : (
+            <span className="text-xs font-extrabold text-indigo-900 px-2">
+              Sub-Menu Modul 03 (Diminimize):{' '}
+              {activeMenu === 'hasil'
+                ? '03A. Transkrip Nilai, Evaluasi Humanis & Unduh PDF'
+                : '03B. Rapor Peta Kemampuan Kognitif (LOTS & HOTS)'}
+            </span>
+          )}
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-1 text-[11px] font-semibold text-indigo-700 hidden sm:inline">
+              Standar Penilaian Humanis Aktif
+            </span>
             <button
               type="button"
-              onClick={() => setActiveMenu('hasil')}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                activeMenu === 'hasil'
-                  ? 'bg-indigo-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
+              onClick={() => setIsStudentSubMenuMinimized((p) => !p)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
             >
-              <Award className="w-3.5 h-3.5" />
-              <span>Transkrip Nilai, Evaluasi Humanis &amp; Unduh PDF ({studentResults.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMenu('kemampuan')}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                activeMenu === 'kemampuan'
-                  ? 'bg-indigo-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>Rapor Peta Kemampuan Kognitif (LOTS &amp; HOTS)</span>
+              {isStudentSubMenuMinimized ? (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>Buka Sub-Menu</span>
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5" />
+                  <span>Minimize</span>
+                </>
+              )}
             </button>
           </div>
-          <span className="px-3 py-1 text-[11px] font-semibold text-indigo-700">
-            Standar Penilaian Humanis Aktif
-          </span>
         </div>
       )}
 

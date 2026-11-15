@@ -32,6 +32,8 @@ import {
   BookmarkCheck,
   BarChart3,
   KeyRound,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -113,6 +115,7 @@ import { ClassPerformanceLotsHotsChart } from './ClassPerformanceLotsHotsChart';
 import { ExamManagementTab } from './ExamManagementTab';
 import { AnBusoAnalysisTab } from './AnBusoAnalysisTab';
 import { TokenAndDistributionTab } from './TokenAndDistributionTab';
+import { QuestionLevelReportPanel } from './QuestionLevelReportPanel';
 
 interface AdminDashboardProps {
   exams: ExamItem[];
@@ -224,6 +227,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       );
     } catch {}
   }, [isSidebarMinimized]);
+
+  // Collapsible / Minimizable Sub-Menus & Sub-Panels States
+  const [isTopMetricsMinimized, setIsTopMetricsMinimized] =
+    useState<boolean>(false);
+  const [isSubMenuBarMinimized, setIsSubMenuBarMinimized] =
+    useState<boolean>(false);
+  const [isReportSummaryMinimized, setIsReportSummaryMinimized] =
+    useState<boolean>(false);
+  const [isReportClassTableMinimized, setIsReportClassTableMinimized] =
+    useState<boolean>(false);
+  const [isReportQuestionPanelMinimized, setIsReportQuestionPanelMinimized] =
+    useState<boolean>(false);
+  const [isReportStudentListMinimized, setIsReportStudentListMinimized] =
+    useState<boolean>(false);
 
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
   const [isRecalculatingScores, setIsRecalculatingScores] = useState(false);
@@ -2521,79 +2538,99 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       Sync: {new Date(syncPulse.lastSyncedAt).toLocaleTimeString('id-ID')}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => setIsTopMetricsMinimized((prev) => !prev)}
+                    title="Minimize / Buka Kartu Ringkasan Metrik Atas"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-amber-300 cursor-pointer transition-colors"
+                  >
+                    {isTopMetricsMinimized ? (
+                      <>
+                        <ChevronDown className="w-3.5 h-3.5" />
+                        <span>Buka Ringkasan</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp className="w-3.5 h-3.5" />
+                        <span>Minimize Ringkasan</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
 
-            {/* 4-Metric Institutional Summary Cards */}
-            <div className="p-3.5 bg-slate-50/60 grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-blue-200/90 shadow-2xs flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">
-                    Paket Ujian Aktif
+            {/* 4-Metric Institutional Summary Cards (Minimizable) */}
+            {!isTopMetricsMinimized && (
+              <div className="p-3.5 bg-slate-50/60 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="px-3.5 py-2.5 rounded-xl bg-white border border-blue-200/90 shadow-2xs flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">
+                      Paket Ujian Aktif
+                    </div>
+                    <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
+                      {exams.length}{' '}
+                      <span className="text-[11px] font-semibold font-sans text-slate-500">
+                        paket ({availableMataPelajaran.length} mapel)
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
-                    {exams.length}{' '}
-                    <span className="text-[11px] font-semibold font-sans text-slate-500">
-                      paket ({availableMataPelajaran.length} mapel)
-                    </span>
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200/80 text-blue-600 flex items-center justify-center shrink-0">
+                    <ClipboardList className="w-4 h-4" />
                   </div>
                 </div>
-                <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200/80 text-blue-600 flex items-center justify-center shrink-0">
-                  <ClipboardList className="w-4 h-4" />
-                </div>
-              </div>
 
-              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-violet-200/90 shadow-2xs flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wider">
-                    Sebaran 3 Tingkatan
+                <div className="px-3.5 py-2.5 rounded-xl bg-white border border-violet-200/90 shadow-2xs flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wider">
+                      Sebaran 3 Tingkatan
+                    </div>
+                    <div className="text-xs font-extrabold font-mono tabular-nums text-slate-900 mt-1">
+                      X: {countTingkat10} <span className="text-slate-300">|</span> XI:{' '}
+                      {countTingkat11} <span className="text-slate-300">|</span> XII:{' '}
+                      {countTingkat12}
+                    </div>
                   </div>
-                  <div className="text-xs font-extrabold font-mono tabular-nums text-slate-900 mt-1">
-                    X: {countTingkat10} <span className="text-slate-300">|</span> XI:{' '}
-                    {countTingkat11} <span className="text-slate-300">|</span> XII:{' '}
-                    {countTingkat12}
+                  <div className="w-8 h-8 rounded-lg bg-violet-50 border border-violet-200/80 text-violet-600 flex items-center justify-center shrink-0">
+                    <Users className="w-4 h-4" />
                   </div>
                 </div>
-                <div className="w-8 h-8 rounded-lg bg-violet-50 border border-violet-200/80 text-violet-600 flex items-center justify-center shrink-0">
-                  <Users className="w-4 h-4" />
-                </div>
-              </div>
 
-              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-amber-200/90 shadow-2xs flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">
-                    Total Bank Soal
+                <div className="px-3.5 py-2.5 rounded-xl bg-white border border-amber-200/90 shadow-2xs flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">
+                      Total Bank Soal
+                    </div>
+                    <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
+                      {questions.length}{' '}
+                      <span className="text-[11px] font-semibold font-sans text-slate-500">
+                        butir soal
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
-                    {questions.length}{' '}
-                    <span className="text-[11px] font-semibold font-sans text-slate-500">
-                      butir soal
-                    </span>
+                  <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-600 flex items-center justify-center shrink-0">
+                    <FileSpreadsheet className="w-4 h-4" />
                   </div>
                 </div>
-                <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200/80 text-amber-600 flex items-center justify-center shrink-0">
-                  <FileSpreadsheet className="w-4 h-4" />
-                </div>
-              </div>
 
-              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-emerald-200/90 shadow-2xs flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">
-                    Hasil Ujian Masuk
+                <div className="px-3.5 py-2.5 rounded-xl bg-white border border-emerald-200/90 shadow-2xs flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">
+                      Hasil Ujian Masuk
+                    </div>
+                    <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
+                      {results.length}{' '}
+                      <span className="text-[11px] font-semibold font-sans text-slate-500">
+                        selesai
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-lg font-extrabold font-mono tabular-nums text-slate-900 mt-0.5">
-                    {results.length}{' '}
-                    <span className="text-[11px] font-semibold font-sans text-slate-500">
-                      selesai
-                    </span>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200/80 text-emerald-600 flex items-center justify-center shrink-0">
+                    <Sparkles className="w-4 h-4" />
                   </div>
-                </div>
-                <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200/80 text-emerald-600 flex items-center justify-center shrink-0">
-                  <Sparkles className="w-4 h-4" />
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
       {/* ===================================================================== */}
@@ -2601,35 +2638,64 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ===================================================================== */}
       {(activeTab === 'ujian' || activeTab === 'token_distribusi') && (
         <div className="bg-white border border-blue-200/80 rounded-2xl p-2 shadow-2xs flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
+          {!isSubMenuBarMinimized ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab('ujian')}
+                className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'ujian'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                }`}
+              >
+                <ClipboardList className="w-4 h-4" />
+                <span>01A. Kelola Jadwal &amp; Paket Ujian ({exams.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('token_distribusi')}
+                className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'token_distribusi'
+                    ? 'bg-rose-600 text-white shadow-xs'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                }`}
+              >
+                <KeyRound className="w-4 h-4" />
+                <span>01B. Token Ujian, Distribusi Ganjil-Genap &amp; Cetak Kartu</span>
+              </button>
+            </div>
+          ) : (
+            <span className="text-xs font-extrabold text-blue-950 px-2">
+              Sub-Menu Modul 01 (Diminimize):{' '}
+              {activeTab === 'ujian'
+                ? '01A. Kelola Jadwal & Paket Ujian'
+                : '01B. Token Ujian & Distribusi Ganjil-Genap'}
+            </span>
+          )}
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold text-slate-500 px-2 hidden sm:inline">
+              Modul 01 Terpadu
+            </span>
             <button
               type="button"
-              onClick={() => setActiveTab('ujian')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                activeTab === 'ujian'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
-              }`}
+              onClick={() => setIsSubMenuBarMinimized((prev) => !prev)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+              title="Minimize / Buka Baris Sub-Menu"
             >
-              <ClipboardList className="w-4 h-4" />
-              <span>Kelola Jadwal &amp; Paket Ujian ({exams.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('token_distribusi')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                activeTab === 'token_distribusi'
-                  ? 'bg-rose-600 text-white shadow-xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
-              }`}
-            >
-              <KeyRound className="w-4 h-4" />
-              <span>Token Ujian, Distribusi Ganjil-Genap &amp; Cetak Kartu</span>
+              {isSubMenuBarMinimized ? (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>Buka Sub-Menu</span>
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5" />
+                  <span>Minimize</span>
+                </>
+              )}
             </button>
           </div>
-          <span className="text-[11px] font-semibold text-slate-500 px-2 hidden sm:inline">
-            Modul 01 Terpadu: Jadwal, Paket Ujian &amp; Token Akses
-          </span>
         </div>
       )}
 
@@ -6203,36 +6269,152 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* SUB-MENU NAVIGASI MODUL 05: REKAP NILAI HUMANIS VS ANALISIS ANBUSO     */}
       {/* ===================================================================== */}
       {(activeTab === 'laporan' || activeTab === 'anbuso') && (
-        <div className="bg-white border border-purple-200/80 rounded-2xl p-2 shadow-2xs flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setActiveTab('laporan')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                activeTab === 'laporan'
-                  ? 'bg-purple-600 text-white shadow-xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
-              }`}
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>Rekap Nilai Humanis, LOTS/HOTS &amp; Ekspor PDF/Excel ({results.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('anbuso')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                activeTab === 'anbuso'
-                  ? 'bg-cyan-600 text-white shadow-xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
-              }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span>Analisis Butir Soal (AnBuso), Daya Beda &amp; Remedial</span>
-            </button>
+        <div className="bg-white border border-purple-200/80 rounded-2xl p-2.5 shadow-2xs space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {!isSubMenuBarMinimized ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('laporan')}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                    activeTab === 'laporan'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                  }`}
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>05A. Rekap Nilai, Analisis Per Kelas &amp; Per Soal ({results.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('anbuso')}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
+                    activeTab === 'anbuso'
+                      ? 'bg-cyan-600 text-white shadow-xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                  }`}
+                >
+                  <BarChart3 className="w-4 h-4" />
+                  <span>05B. Laboratorium AnBuso, Daya Beda &amp; Remedial</span>
+                </button>
+              </div>
+            ) : (
+              <span className="text-xs font-extrabold text-purple-950 px-2">
+                Sub-Menu Modul 05 (Diminimize):{' '}
+                {activeTab === 'laporan'
+                  ? '05A. Rekap Nilai, Analisis Per Kelas & Per Soal'
+                  : '05B. Laboratorium AnBuso & Remedial'}
+              </span>
+            )}
+            <div className="flex items-center gap-2">
+              {activeTab === 'laporan' && !isSubMenuBarMinimized && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const anyOpen =
+                      !isReportSummaryMinimized ||
+                      !isReportClassTableMinimized ||
+                      !isReportQuestionPanelMinimized ||
+                      !isReportStudentListMinimized;
+                    setIsReportSummaryMinimized(anyOpen);
+                    setIsReportClassTableMinimized(anyOpen);
+                    setIsReportQuestionPanelMinimized(anyOpen);
+                    setIsReportStudentListMinimized(anyOpen);
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 cursor-pointer"
+                >
+                  {!isReportSummaryMinimized ||
+                  !isReportClassTableMinimized ||
+                  !isReportQuestionPanelMinimized ||
+                  !isReportStudentListMinimized ? (
+                    <>
+                      <Minimize2 className="w-3 h-3" />
+                      <span>Minimize Semua Sub-Panel</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize2 className="w-3 h-3" />
+                      <span>Buka Semua Sub-Panel</span>
+                    </>
+                  )}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsSubMenuBarMinimized((prev) => !prev)}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+              >
+                {isSubMenuBarMinimized ? (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>Buka Sub-Menu</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Minimize Sub-Menu</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-          <span className="text-[11px] font-semibold text-slate-500 px-2 hidden sm:inline">
-            Modul 05 Terpadu: Evaluasi Nilai &amp; Statistik Butir Soal
-          </span>
+
+          {/* Sub-Sub-Menu Quick Toggles for Laporan Sections */}
+          {activeTab === 'laporan' && !isSubMenuBarMinimized && (
+            <div className="pt-2 border-t border-purple-100 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500 mr-1">
+                Tampilkan / Minimize Sub-Bagian Laporan:
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsReportSummaryMinimized((p) => !p)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isReportSummaryMinimized
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                5A. Statistik &amp; Grafik LOTS/HOTS{' '}
+                {isReportSummaryMinimized ? '(Tertutup)' : '(Terbuka)'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsReportClassTableMinimized((p) => !p)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isReportClassTableMinimized
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                5B. Rekapitulasi Per Kelas ({classAnalyticsData.perClass.length}){' '}
+                {isReportClassTableMinimized ? '(Tertutup)' : '(Terbuka)'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsReportQuestionPanelMinimized((p) => !p)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isReportQuestionPanelMinimized
+                    ? 'bg-emerald-600 text-white border-emerald-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                5C. Analisis Per Kelas &amp; Per Soal{' '}
+                {isReportQuestionPanelMinimized ? '(Tertutup)' : '(Terbuka)'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsReportStudentListMinimized((p) => !p)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isReportStudentListMinimized
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                5D. Daftar Nilai &amp; Evaluasi Siswa ({filteredResults.length}){' '}
+                {isReportStudentListMinimized ? '(Tertutup)' : '(Terbuka)'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -6243,20 +6425,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="space-y-6">
           {/* Panel Rekapitulasi Analisis & Download Per Kelas dan Semua Kelas */}
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
-            <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-5 text-white">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                Pusat Pelaporan &amp; Evaluasi Akademik
+            <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                  Sub-Modul 5A &amp; 5B · Pusat Pelaporan &amp; Evaluasi Akademik Per Kelas
+                </div>
+                <h2 className="text-lg font-extrabold text-white mt-0.5">
+                  Analisis Statistik, Grafik LOTS/HOTS &amp; Rekapitulasi Per Kelas
+                </h2>
+                {!isReportSummaryMinimized && (
+                  <p className="text-xs text-blue-200/90 mt-1 max-w-4xl leading-relaxed">
+                    Lihat analisis capaian nilai rata-rata, ketuntasan, sebaran
+                    predikat (A/B/C/D), serta unduh laporan hasil ujian siswa baik{' '}
+                    <strong className="text-amber-300">per kelas (rombel)</strong> maupun{' '}
+                    <strong className="text-amber-300">semua kelas sekaligus</strong> dalam format PDF, Excel
+                    (.xls) &amp; CSV.
+                  </p>
+                )}
               </div>
-              <h2 className="text-lg font-extrabold text-white mt-0.5">
-                Analisis Statistik &amp; Download Hasil Ujian Siswa Per Kelas &amp; Semuanya
-              </h2>
-              <p className="text-xs text-blue-200/90 mt-1 max-w-4xl leading-relaxed">
-                Lihat analisis capaian nilai rata-rata, ketuntasan, sebaran
-                predikat (A/B/C/D), serta unduh laporan hasil ujian siswa baik{' '}
-                <strong className="text-amber-300">per kelas (rombel)</strong> maupun{' '}
-                <strong className="text-amber-300">semua kelas sekaligus</strong> dalam format PDF, Excel
-                (.xls) &amp; CSV.
-              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsReportSummaryMinimized((p) => !p)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-amber-300 cursor-pointer"
+                >
+                  {isReportSummaryMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Buka Statistik &amp; Grafik</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Minimize Statistik</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsReportClassTableMinimized((p) => !p)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white cursor-pointer"
+                >
+                  {isReportClassTableMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5 text-cyan-300" />
+                      <span>Buka Tabel Kelas</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5 text-cyan-300" />
+                      <span>Minimize Tabel Kelas</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Dedicated Full-Width Export & Action Bar */}
@@ -6351,9 +6573,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* 4 Kartu Ringkasan Statistik Keseluruhan (Berwarna & Terstruktur) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-white to-indigo-50/40 border border-blue-200/90 shadow-2xs">
+            {/* 4 Kartu Ringkasan Statistik Keseluruhan & Grafik LOTS/HOTS (Sub-Modul 5A) */}
+            {!isReportSummaryMinimized && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-white to-indigo-50/40 border border-blue-200/90 shadow-2xs">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
                   Rata-Rata Skor Sekolah
                 </div>
@@ -6469,20 +6693,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            {/* Visualisasi Recharts LOTS vs HOTS per Kelas */}
-            <ClassPerformanceLotsHotsChart
-              classAnalytics={classAnalyticsData}
-              questions={questions}
-              exams={exams}
-              selectedClassFilter={filterResultKelas}
-              onSelectClass={(kls) => {
-                setFilterResultTingkat('SEMUA');
-                setFilterResultKelas(kls);
-              }}
-            />
+                {/* Visualisasi Recharts LOTS vs HOTS per Kelas */}
+                <ClassPerformanceLotsHotsChart
+                  classAnalytics={classAnalyticsData}
+                  questions={questions}
+                  exams={exams}
+                  selectedClassFilter={filterResultKelas}
+                  onSelectClass={(kls) => {
+                    setFilterResultTingkat('SEMUA');
+                    setFilterResultKelas(kls);
+                  }}
+                />
+              </>
+            )}
 
-            {/* Tabel Rekapitulasi Analisis & Download Per Kelas */}
-            {classAnalyticsData.perClass.length > 0 && (
+            {/* Tabel Rekapitulasi Analisis & Download Per Kelas (Sub-Modul 5B) */}
+            {!isReportClassTableMinimized && classAnalyticsData.perClass.length > 0 && (
               <div className="space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-indigo-50 via-blue-50 to-slate-50 px-4 py-2.5 rounded-xl border border-indigo-100">
                   <div>
@@ -6710,14 +6936,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Tabel Detail Hasil Ujian Siswa (Dengan Filter Per Kelas, Tingkatan & Paket Ujian) */}
+          {/* ================================================================= */}
+          {/* SUB-MODUL 5C: ANALISIS PER KELAS & PER BUTIR SOAL TERPADU         */}
+          {/* ================================================================= */}
+          <QuestionLevelReportPanel
+            exams={exams}
+            questions={questions}
+            students={students}
+            results={results}
+            selectedClass={filterResultKelas}
+            onSelectClass={(kls) => {
+              setFilterResultTingkat('SEMUA');
+              setFilterResultKelas(kls);
+            }}
+            selectedMapel={filterResultMapel}
+            onSelectMapel={(mp) => {
+              setFilterResultMapel(mp);
+              setFilterResultExamId('SEMUA');
+            }}
+            selectedExamId={filterResultExamId}
+            onSelectExamId={(exId) => setFilterResultExamId(exId)}
+            uniqueClasses={uniqueClasses}
+            availableMataPelajaran={availableMataPelajaran}
+            teacherName={teacherProfile.name}
+            isMinimized={isReportQuestionPanelMinimized}
+            onToggleMinimize={() =>
+              setIsReportQuestionPanelMinimized((prev) => !prev)
+            }
+          />
+
+          {/* Tabel Detail Hasil Ujian Siswa (Dengan Filter Per Kelas, Tingkatan & Paket Ujian - Sub-Modul 5D) */}
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             {/* Full-Width Colorful Institutional Header Banner (Never Squished) */}
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                    Daftar Nilai, Pembahasan Soal &amp; Evaluasi Kognitif Siswa
+                    Sub-Modul 5D · Daftar Nilai, Pembahasan Soal &amp; Evaluasi Kognitif Siswa
                   </div>
                   <h2 className="text-base sm:text-lg font-extrabold text-white mt-0.5">
                     Daftar Nilai &amp; Evaluasi Capaian Peserta (
@@ -6726,15 +6981,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       : `Kelas ${filterResultKelas}`}{' '}
                     — {filteredResults.length} Peserta)
                   </h2>
-                  <p className="text-xs text-blue-200/90 mt-0.5">
-                    Pilih filter Kelas/Rombel di bawah untuk melihat nilai akhir, mengunduh PDF Nilai lengkap beserta rincian soal &amp; jawaban siswa, atau mengunduh Excel kelas.
-                  </p>
+                  {!isReportStudentListMinimized && (
+                    <p className="text-xs text-blue-200/90 mt-0.5">
+                      Pilih filter Kelas/Rombel di bawah untuk melihat nilai akhir, mengunduh PDF Nilai lengkap beserta rincian soal &amp; jawaban siswa, atau mengunduh Excel kelas.
+                    </p>
+                  )}
                 </div>
-                <span className="px-3 py-1.5 rounded-xl bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200 shrink-0">
-                  {filteredResults.length} Hasil Ujian
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="px-3 py-1.5 rounded-xl bg-white/15 border border-white/20 text-xs font-mono font-bold text-amber-200 shrink-0">
+                    {filteredResults.length} Hasil Ujian
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsReportStudentListMinimized((prev) => !prev)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white cursor-pointer"
+                  >
+                    {isReportStudentListMinimized ? (
+                      <>
+                        <ChevronDown className="w-3.5 h-3.5 text-amber-300" />
+                        <span>Buka Daftar Nilai</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp className="w-3.5 h-3.5 text-amber-300" />
+                        <span>Minimize</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
+
+            {!isReportStudentListMinimized && (
+              <>
 
             {/* Dedicated Full-Width Filter & Action Bar */}
             <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3">
@@ -7091,6 +7370,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
             </div>
+              </>
+            )}
           </div>
         </div>
       )}

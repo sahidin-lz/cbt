@@ -13,6 +13,11 @@ import {
   Printer,
   Edit3,
   BookOpen,
+  ChevronDown,
+  ChevronUp,
+  Minimize2,
+  Maximize2,
+  Filter,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
 import {
@@ -172,12 +177,29 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
   const [filterDifficulty, setFilterDifficulty] = useState<
     'ALL' | 'Mudah' | 'Sedang' | 'Sukar'
   >('ALL');
+  const [filterQuestionNum, setFilterQuestionNum] = useState<string>('ALL');
+  const [filterQuestionTypeCog, setFilterQuestionTypeCog] = useState<
+    'ALL' | 'PG' | 'Kompleks' | 'LOTS' | 'HOTS'
+  >('ALL');
   const [remedialSearch, setRemedialSearch] = useState<string>('');
   const [remedialStatusFilter, setRemedialStatusFilter] = useState<
     'ALL' | 'REMEDIAL' | 'TUNTAS'
   >('ALL');
+  const [remedialQuestionFilter, setRemedialQuestionFilter] =
+    useState<string>('ALL');
   const [selectedQuestionPreview, setSelectedQuestionPreview] =
     useState<QuestionItem | null>(null);
+
+  // Minimizable sub-panels inside AnBuso
+  const [isHeaderSummaryMinimized, setIsHeaderSummaryMinimized] =
+    useState<boolean>(false);
+  const [isSubMenuMinimized, setIsSubMenuMinimized] = useState<boolean>(false);
+  const [isKeyTableMinimized, setIsKeyTableMinimized] =
+    useState<boolean>(false);
+  const [isMatrixTableMinimized, setIsMatrixTableMinimized] =
+    useState<boolean>(false);
+  const [isRemedialPriorityMinimized, setIsRemedialPriorityMinimized] =
+    useState<boolean>(false);
 
   // Questions belonging to activeExam
   const examQuestions = useMemo(() => {
@@ -244,9 +266,28 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
       const matchDiff =
         filterDifficulty === 'ALL' ||
         item.difficultyCategory === filterDifficulty;
-      return matchDecision && matchDiff;
+      const matchQNum =
+        filterQuestionNum === 'ALL' ||
+        String(item.questionNumber) === filterQuestionNum;
+      const matchTypeCog =
+        filterQuestionTypeCog === 'ALL'
+          ? true
+          : filterQuestionTypeCog === 'PG'
+          ? item.questionType === 'PG'
+          : filterQuestionTypeCog === 'Kompleks'
+          ? item.questionType === 'Kompleks'
+          : filterQuestionTypeCog === 'HOTS'
+          ? item.cognitiveLevel.toUpperCase().includes('HOTS')
+          : item.cognitiveLevel.toUpperCase().includes('LOTS');
+      return matchDecision && matchDiff && matchQNum && matchTypeCog;
     });
-  }, [anBusoReport.items, filterDecision, filterDifficulty]);
+  }, [
+    anBusoReport.items,
+    filterDecision,
+    filterDifficulty,
+    filterQuestionNum,
+    filterQuestionTypeCog,
+  ]);
 
   const filteredRemedialStudents = useMemo(() => {
     return anBusoReport.studentRemedial.filter((st) => {
@@ -264,9 +305,19 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
           : remedialStatusFilter === 'REMEDIAL'
           ? !st.isPassedKkm || st.failedNumbers.length > 0
           : st.isPassedKkm && st.failedNumbers.length === 0;
-      return matchSearch && matchStatus;
+      const matchSpecificQuestion =
+        remedialQuestionFilter === 'ALL'
+          ? true
+          : st.failedNumbers.includes(Number(remedialQuestionFilter)) ||
+            st.partialNumbers.includes(Number(remedialQuestionFilter));
+      return matchSearch && matchStatus && matchSpecificQuestion;
     });
-  }, [anBusoReport.studentRemedial, remedialSearch, remedialStatusFilter]);
+  }, [
+    anBusoReport.studentRemedial,
+    remedialSearch,
+    remedialStatusFilter,
+    remedialQuestionFilter,
+  ]);
 
   const handleExportExcel = () => {
     const html = generateAnBusoExcelReport(anBusoReport);
@@ -338,21 +389,63 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
     <div className="space-y-6">
       {/* Top Banner & Filter Bar */}
       <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
-        <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-5 text-white">
-          <div className="text-xs font-bold text-amber-300 uppercase tracking-wider">
-            Laboratorium Psikometri &amp; Evaluasi Pendidikan (Standar AnBuso)
+        <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-bold text-amber-300 uppercase tracking-wider">
+              Laboratorium Psikometri &amp; Evaluasi Pendidikan (Standar AnBuso)
+            </div>
+            <h2 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
+              Analisis Butir Soal (AnBuso) &amp; Pemetaan Remedial Personal Siswa
+            </h2>
+            {!isHeaderSummaryMinimized && (
+              <p className="text-xs text-blue-200/90 mt-1 max-w-4xl leading-relaxed">
+                Evaluasi kualitas instrumen tes secara objektif berbasis respons empiris siswa (Tingkat Kesukaran{' '}
+                <span className="font-mono font-semibold text-amber-300">P</span>, Daya Beda{' '}
+                <span className="font-mono font-semibold text-amber-300">D</span>, Korelasi{' '}
+                <span className="font-mono font-semibold text-amber-300">r_pbi</span>, Efektivitas Pengecoh{' '}
+                <span className="font-mono font-semibold text-amber-300">A–E</span>, dan Reliabilitas Tes{' '}
+                <span className="font-mono font-semibold text-amber-300">Cronbach&apos;s Alpha</span>) serta petakan kebutuhan remedial personal setiap siswa per kelas &amp; per butir soal.
+              </p>
+            )}
           </div>
-          <h2 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
-            Analisis Butir Soal (AnBuso) &amp; Pemetaan Remedial Personal Siswa
-          </h2>
-          <p className="text-xs text-blue-200/90 mt-1 max-w-4xl leading-relaxed">
-            Evaluasi kualitas instrumen tes secara objektif berbasis respons empiris siswa (Tingkat Kesukaran{' '}
-            <span className="font-mono font-semibold text-amber-300">P</span>, Daya Beda{' '}
-            <span className="font-mono font-semibold text-amber-300">D</span>, Korelasi{' '}
-            <span className="font-mono font-semibold text-amber-300">r_pbi</span>, Efektivitas Pengecoh{' '}
-            <span className="font-mono font-semibold text-amber-300">A–E</span>, dan Reliabilitas Tes{' '}
-            <span className="font-mono font-semibold text-amber-300">Cronbach&apos;s Alpha</span>) serta petakan kebutuhan remedial personal setiap siswa per butir soal.
-          </p>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsSubMenuMinimized((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-amber-300 cursor-pointer transition-colors"
+              title="Minimize / Buka Kartu Sub-Menu Tahapan AnBuso"
+            >
+              {isSubMenuMinimized ? (
+                <>
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>Perbesar Sub-Menu</span>
+                </>
+              ) : (
+                <>
+                  <Minimize2 className="w-3.5 h-3.5" />
+                  <span>Minimize Sub-Menu</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsHeaderSummaryMinimized((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white cursor-pointer transition-colors"
+              title="Sembunyikan / Tampilkan Ringkasan Statistik Atas"
+            >
+              {isHeaderSummaryMinimized ? (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Buka Ringkasan</span>
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Minimize Ringkasan</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-emerald-50/50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
@@ -501,8 +594,14 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
           </div>
         </div>
 
-        {/* 4-Step Systematic Workflow Navigation (Prinsip 1 AnBuso) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+        {/* 4-Step Systematic Workflow Navigation (Prinsip 1 AnBuso - Minimizable) */}
+        <div
+          className={`grid gap-2.5 pt-1 ${
+            isSubMenuMinimized
+              ? 'grid-cols-2 lg:grid-cols-4'
+              : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3'
+          }`}
+        >
           {(
             [
               {
@@ -546,14 +645,18 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveStep(tab.id)}
-                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3 ${
+                className={`${
+                  isSubMenuMinimized ? 'px-3 py-2' : 'p-3.5'
+                } rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
                   isActive
                     ? tab.activeClass
                     : 'bg-white hover:bg-blue-50/50 text-slate-800 border-slate-200 hover:border-blue-300'
                 }`}
               >
                 <div
-                  className={`p-2 rounded-lg shrink-0 ${
+                  className={`${
+                    isSubMenuMinimized ? 'p-1.5' : 'p-2'
+                  } rounded-lg shrink-0 ${
                     isActive
                       ? 'bg-white/20 text-amber-300'
                       : 'bg-blue-50 text-blue-600 border border-blue-100'
@@ -562,95 +665,99 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                   <Icon className="w-4 h-4" />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-xs sm:text-sm font-extrabold leading-snug">
+                  <div className="text-xs font-extrabold leading-snug truncate">
                     {tab.step}
                   </div>
-                  <div
-                    className={`text-[11px] leading-snug mt-0.5 ${
-                      isActive ? 'text-white/90' : 'text-slate-500'
-                    }`}
-                  >
-                    {tab.desc}
-                  </div>
+                  {!isSubMenuMinimized && (
+                    <div
+                      className={`text-[11px] leading-snug mt-0.5 ${
+                        isActive ? 'text-white/90' : 'text-slate-500'
+                      }`}
+                    >
+                      {tab.desc}
+                    </div>
+                  )}
                 </div>
               </button>
             );
           })}
         </div>
 
-        {/* 5 Key Psychometric Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 pt-1">
-          <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-50 via-white to-blue-50/40 border border-indigo-200/90">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
-              Reliabilitas (Alpha)
+        {/* 5 Key Psychometric Summary Cards (Collapsible via isHeaderSummaryMinimized) */}
+        {!isHeaderSummaryMinimized && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 pt-1">
+            <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-50 via-white to-blue-50/40 border border-indigo-200/90">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
+                Reliabilitas (Alpha)
+              </div>
+              <div className="text-xl font-extrabold font-mono tabular-nums text-indigo-950 mt-1">
+                {anBusoReport.summary.reliabilityAlpha.toFixed(3)}
+              </div>
+              <div className="text-[11px] text-indigo-800/80 mt-1">
+                Kategori: <strong>{anBusoReport.summary.reliabilityCategory}</strong>
+              </div>
             </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-indigo-950 mt-1">
-              {anBusoReport.summary.reliabilityAlpha.toFixed(3)}
-            </div>
-            <div className="text-[11px] text-indigo-800/80 mt-1">
-              Kategori: <strong>{anBusoReport.summary.reliabilityCategory}</strong>
-            </div>
-          </div>
 
-          <div className="p-4 rounded-xl bg-gradient-to-br from-blue-50 via-white to-cyan-50/40 border border-blue-200/90">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
-              Rata-Rata &amp; Simpangan
+            <div className="p-4 rounded-xl bg-gradient-to-br from-blue-50 via-white to-cyan-50/40 border border-blue-200/90">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
+                Rata-Rata &amp; Simpangan
+              </div>
+              <div className="text-xl font-extrabold font-mono tabular-nums text-blue-950 mt-1">
+                {anBusoReport.summary.meanScore}{' '}
+                <span className="text-xs font-normal text-blue-700">
+                  ± {anBusoReport.summary.stdDeviation}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-600 mt-1 font-mono tabular-nums">
+                Max: {anBusoReport.summary.highestScore} · Min:{' '}
+                {anBusoReport.summary.lowestScore}
+              </div>
             </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-blue-950 mt-1">
-              {anBusoReport.summary.meanScore}{' '}
-              <span className="text-xs font-normal text-blue-700">
-                ± {anBusoReport.summary.stdDeviation}
-              </span>
-            </div>
-            <div className="text-[11px] text-slate-600 mt-1 font-mono tabular-nums">
-              Max: {anBusoReport.summary.highestScore} · Min:{' '}
-              {anBusoReport.summary.lowestScore}
-            </div>
-          </div>
 
-          <div className="p-4 rounded-xl bg-gradient-to-br from-amber-50 via-white to-orange-50/40 border border-amber-200/90">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
-              Tingkat Kesukaran (P)
+            <div className="p-4 rounded-xl bg-gradient-to-br from-amber-50 via-white to-orange-50/40 border border-amber-200/90">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                Tingkat Kesukaran (P)
+              </div>
+              <div className="text-xs font-extrabold font-mono tabular-nums text-amber-950 mt-1.5">
+                Mudah: {anBusoReport.summary.difficultySummary.mudahCount} · Sedang:{' '}
+                {anBusoReport.summary.difficultySummary.sedangCount} · Sukar:{' '}
+                {anBusoReport.summary.difficultySummary.sukarCount}
+              </div>
+              <div className="text-[11px] text-amber-800/80 mt-1">
+                Proporsi ideal mayoritas Sedang
+              </div>
             </div>
-            <div className="text-xs font-extrabold font-mono tabular-nums text-amber-950 mt-1.5">
-              Mudah: {anBusoReport.summary.difficultySummary.mudahCount} · Sedang:{' '}
-              {anBusoReport.summary.difficultySummary.sedangCount} · Sukar:{' '}
-              {anBusoReport.summary.difficultySummary.sukarCount}
-            </div>
-            <div className="text-[11px] text-amber-800/80 mt-1">
-              Proporsi ideal mayoritas Sedang
-            </div>
-          </div>
 
-          <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 border border-emerald-200/90">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
-              Keputusan Bank Soal
+            <div className="p-4 rounded-xl bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 border border-emerald-200/90">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                Keputusan Bank Soal
+              </div>
+              <div className="text-xs font-extrabold font-mono tabular-nums text-emerald-950 mt-1.5">
+                Simpan: {anBusoReport.summary.bankSoalSummary.savedCount} · Revisi:{' '}
+                {anBusoReport.summary.bankSoalSummary.revisedCount} · Buang:{' '}
+                {anBusoReport.summary.bankSoalSummary.discardedCount}
+              </div>
+              <div className="text-[11px] text-emerald-800/80 mt-1">
+                Berdasarkan Daya Beda &amp; Distraktor
+              </div>
             </div>
-            <div className="text-xs font-extrabold font-mono tabular-nums text-emerald-950 mt-1.5">
-              Simpan: {anBusoReport.summary.bankSoalSummary.savedCount} · Revisi:{' '}
-              {anBusoReport.summary.bankSoalSummary.revisedCount} · Buang:{' '}
-              {anBusoReport.summary.bankSoalSummary.discardedCount}
-            </div>
-            <div className="text-[11px] text-emerald-800/80 mt-1">
-              Berdasarkan Daya Beda &amp; Distraktor
-            </div>
-          </div>
 
-          <div className="p-4 rounded-xl bg-gradient-to-br from-purple-50 via-white to-violet-50/40 border border-purple-200/90">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800">
-              Kelompok Atas vs Bawah
-            </div>
-            <div className="text-xl font-extrabold font-mono tabular-nums text-purple-950 mt-1">
-              {anBusoReport.summary.upperGroupSize}{' '}
-              <span className="text-xs font-normal text-purple-700">vs</span>{' '}
-              {anBusoReport.summary.lowerGroupSize}{' '}
-              <span className="text-xs font-normal text-purple-700">siswa</span>
-            </div>
-            <div className="text-[11px] text-purple-800/80 mt-1">
-              Total Responden: {anBusoReport.summary.totalRespondents} Siswa
+            <div className="p-4 rounded-xl bg-gradient-to-br from-purple-50 via-white to-violet-50/40 border border-purple-200/90">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800">
+                Kelompok Atas vs Bawah
+              </div>
+              <div className="text-xl font-extrabold font-mono tabular-nums text-purple-950 mt-1">
+                {anBusoReport.summary.upperGroupSize}{' '}
+                <span className="text-xs font-normal text-purple-700">vs</span>{' '}
+                {anBusoReport.summary.lowerGroupSize}{' '}
+                <span className="text-xs font-normal text-purple-700">siswa</span>
+              </div>
+              <div className="text-[11px] text-purple-800/80 mt-1">
+                Total Responden: {anBusoReport.summary.totalRespondents} Siswa
+              </div>
             </div>
           </div>
-        </div>
+        )}
         </div>
       </div>
 
@@ -847,19 +954,39 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                   Anda dapat menyesuaikan <strong>Kunci Jawaban</strong> (simulasi koreksi kunci) maupun nama <strong>Indikator / Konsep Materi</strong> agar laporan remedial personal siswa lebih spesifik.
                 </p>
               </div>
-              {hasCustomOverrides && (
+              <div className="flex items-center gap-2 shrink-0">
+                {hasCustomOverrides && (
+                  <button
+                    type="button"
+                    onClick={handleResetOverrides}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg cursor-pointer shrink-0"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset ke Data Asli Bank Soal</span>
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={handleResetOverrides}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg cursor-pointer shrink-0"
+                  onClick={() => setIsKeyTableMinimized((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reset ke Data Asli Bank Soal</span>
+                  {isKeyTableMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Buka Tabel Kunci</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Minimize</span>
+                    </>
+                  )}
                 </button>
-              )}
+              </div>
             </div>
 
-            <div className="overflow-x-auto max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
+            {!isKeyTableMinimized && (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
               <table className="w-full text-left border-collapse text-xs">
                 <thead className="sticky top-0 bg-slate-100 border-b border-slate-200 text-slate-700">
                   <tr>
@@ -944,7 +1071,8 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                   })}
                 </tbody>
               </table>
-            </div>
+              </div>
+            )}
           </div>
 
           {/* Matriks Lembar Jawaban Siswa (Bisa Diedit Langsung) */}
@@ -958,21 +1086,41 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                   Seluruh opsi jawaban siswa yang diacak (<code className="font-mono">acak_opsi</code>) telah otomatis diselaraskan ke kunci kanonik Bank Soal. Klik pada sel jawaban siswa jika Anda ingin mengoreksi atau melakukan simulasi input manual.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setActiveStep('statistik_soal')}
-                className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer shrink-0"
-              >
-                Lihat Hasil Analisis Otomatis →
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsMatrixTableMinimized((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                >
+                  {isMatrixTableMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Buka Matriks</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Minimize</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveStep('statistik_soal')}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer shrink-0"
+                >
+                  Lihat Hasil Analisis Otomatis →
+                </button>
+              </div>
             </div>
 
-            {anBusoReport.studentRemedial.length === 0 ? (
-              <div className="py-12 text-center text-xs text-slate-500">
-                Belum ada lembar jawaban siswa yang masuk untuk paket ujian dan filter kelas ini.
-              </div>
-            ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            {!isMatrixTableMinimized && (
+              anBusoReport.studentRemedial.length === 0 ? (
+                <div className="py-12 text-center text-xs text-slate-500">
+                  Belum ada lembar jawaban siswa yang masuk untuk paket ujian dan filter kelas ini.
+                </div>
+              ) : (
+                <div className="overflow-x-auto border border-slate-200 rounded-xl">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="bg-slate-100 border-b border-slate-200 text-slate-700">
@@ -1108,7 +1256,8 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                     ))}
                   </tbody>
                 </table>
-              </div>
+                </div>
+              )
             )}
           </div>
         </div>
@@ -1132,16 +1281,51 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
           </div>
 
           <div className="px-6 py-3.5 bg-gradient-to-r from-indigo-50/80 via-blue-50/60 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
-            <span className="text-xs font-bold text-indigo-950">
-              Filter Kualitas &amp; Tingkat Kesukaran Butir Soal:
-            </span>
+            <div className="flex items-center gap-2">
+              <Filter className="w-3.5 h-3.5 text-indigo-700" />
+              <span className="text-xs font-bold text-indigo-950">
+                Filter Per Nomor Soal, Tipe, Kualitas &amp; Tingkat Kesukaran:
+              </span>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
+              {/* Filter Pilih Per Nomor Soal */}
+              <select
+                aria-label="Pilih Spesifik Nomor Butir Soal"
+                value={filterQuestionNum}
+                onChange={(e) => setFilterQuestionNum(e.target.value)}
+                className="px-3 py-1.5 text-xs font-bold text-indigo-950 bg-white border border-indigo-300 rounded-lg cursor-pointer"
+              >
+                <option value="ALL">
+                  Semua Nomor Soal (1 s/d {anBusoReport.items.length})
+                </option>
+                {anBusoReport.items.map((it) => (
+                  <option key={it.questionId} value={String(it.questionNumber)}>
+                    Soal No. {it.questionNumber} ({it.questionType} · Kunci:{' '}
+                    {it.correctKeys.join(',')})
+                  </option>
+                ))}
+              </select>
+
+              {/* Filter Tipe Soal & Level Kognitif */}
+              <select
+                aria-label="Filter Tipe dan Level Kognitif"
+                value={filterQuestionTypeCog}
+                onChange={(e) => setFilterQuestionTypeCog(e.target.value as any)}
+                className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-lg cursor-pointer"
+              >
+                <option value="ALL">Semua Tipe &amp; Level (LOTS/HOTS)</option>
+                <option value="PG">Pilihan Ganda Tunggal (PG)</option>
+                <option value="Kompleks">PG Kompleks (Multi-Jawaban)</option>
+                <option value="LOTS">Level Kognitif LOTS (C1–C3)</option>
+                <option value="HOTS">Level Kognitif HOTS (C4–C6)</option>
+              </select>
+
               {/* Filter Keputusan Bank Soal */}
               <select
                 aria-label="Filter Keputusan Bank Soal"
                 value={filterDecision}
                 onChange={(e) => setFilterDecision(e.target.value as any)}
-                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg"
+                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg cursor-pointer"
               >
                 <option value="ALL">
                   Semua Keputusan ({anBusoReport.items.length} Soal)
@@ -1162,7 +1346,7 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                 aria-label="Filter Tingkat Kesukaran"
                 value={filterDifficulty}
                 onChange={(e) => setFilterDifficulty(e.target.value as any)}
-                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg"
+                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg cursor-pointer"
               >
                 <option value="ALL">Semua Tingkat Kesukaran</option>
                 <option value="Mudah">
@@ -1175,6 +1359,24 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                   Sukar ({anBusoReport.summary.difficultySummary.sukarCount})
                 </option>
               </select>
+
+              {(filterQuestionNum !== 'ALL' ||
+                filterQuestionTypeCog !== 'ALL' ||
+                filterDecision !== 'ALL' ||
+                filterDifficulty !== 'ALL') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterQuestionNum('ALL');
+                    setFilterQuestionTypeCog('ALL');
+                    setFilterDecision('ALL');
+                    setFilterDifficulty('ALL');
+                  }}
+                  className="px-2.5 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg cursor-pointer"
+                >
+                  Reset Filter
+                </button>
+              )}
             </div>
           </div>
 
@@ -1382,70 +1584,91 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
         <div className="space-y-6">
           {/* Ringkasan Prioritas Remedial Klasikal vs Kelompok per Butir Soal */}
           <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
-            <div className="border-b border-slate-200 pb-3">
-              <h3 className="text-base font-bold text-slate-900">
-                04A. Peta Prioritas Remedial Kelas Berdasarkan Ketuntasan Butir Soal
-              </h3>
-              <p className="text-xs text-slate-600 mt-0.5">
-                Mengidentifikasi konsep soal yang membutuhkan <strong>Pembelajaran Ulang Klasikal</strong> (daya serap butir &lt; 45%) vs <strong>Tutor Sebaya / Bimbingan Kelompok</strong> (45%–70%).
-              </p>
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  04A. Peta Prioritas Remedial Kelas Berdasarkan Ketuntasan Butir Soal
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Mengidentifikasi konsep soal yang membutuhkan <strong>Pembelajaran Ulang Klasikal</strong> (daya serap butir &lt; 45%) vs <strong>Tutor Sebaya / Bimbingan Kelompok</strong> (45%–70%).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRemedialPriorityMinimized((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer shrink-0"
+              >
+                {isRemedialPriorityMinimized ? (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    <span>Buka Peta Prioritas</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Minimize</span>
+                  </>
+                )}
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 rounded-xl bg-rose-50/60 border border-rose-200 space-y-2">
-                <div className="text-xs font-bold text-rose-900">
-                  Prioritas 1: Remedial Klasikal / Pembelajaran Ulang
+            {!isRemedialPriorityMinimized && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 rounded-xl bg-rose-50/60 border border-rose-200 space-y-2">
+                  <div className="text-xs font-bold text-rose-900">
+                    Prioritas 1: Remedial Klasikal / Pembelajaran Ulang
+                  </div>
+                  <p className="text-[11px] text-rose-700">
+                    Butir soal dengan tingkat penguasaan kelas di bawah 45%:
+                  </p>
+                  <div className="text-xs font-mono font-bold text-rose-950">
+                    {anBusoReport.items
+                      .filter(
+                        (i) =>
+                          i.remedialPriority === 'Remedial Klasikal (Ulang Konsep)'
+                      )
+                      .map((i) => `No.${i.questionNumber}`)
+                      .join(', ') || 'Tidak ada (Seluruh butir ≥ 45%)'}
+                  </div>
                 </div>
-                <p className="text-[11px] text-rose-700">
-                  Butir soal dengan tingkat penguasaan kelas di bawah 45%:
-                </p>
-                <div className="text-xs font-mono font-bold text-rose-950">
-                  {anBusoReport.items
-                    .filter(
-                      (i) =>
-                        i.remedialPriority === 'Remedial Klasikal (Ulang Konsep)'
-                    )
-                    .map((i) => `No.${i.questionNumber}`)
-                    .join(', ') || 'Tidak ada (Seluruh butir ≥ 45%)'}
-                </div>
-              </div>
 
-              <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200 space-y-2">
-                <div className="text-xs font-bold text-amber-900">
-                  Prioritas 2: Remedial Kelompok / Tutor Sebaya
+                <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200 space-y-2">
+                  <div className="text-xs font-bold text-amber-900">
+                    Prioritas 2: Remedial Kelompok / Tutor Sebaya
+                  </div>
+                  <p className="text-[11px] text-amber-800">
+                    Butir soal dengan tingkat penguasaan kelas 45% s.d. 70%:
+                  </p>
+                  <div className="text-xs font-mono font-bold text-amber-950">
+                    {anBusoReport.items
+                      .filter(
+                        (i) =>
+                          i.remedialPriority ===
+                          'Remedial Kelompok / Tutor Sebaya'
+                      )
+                      .map((i) => `No.${i.questionNumber}`)
+                      .join(', ') || 'Tidak ada'}
+                  </div>
                 </div>
-                <p className="text-[11px] text-amber-800">
-                  Butir soal dengan tingkat penguasaan kelas 45% s.d. 70%:
-                </p>
-                <div className="text-xs font-mono font-bold text-amber-950">
-                  {anBusoReport.items
-                    .filter(
-                      (i) =>
-                        i.remedialPriority ===
-                        'Remedial Kelompok / Tutor Sebaya'
-                    )
-                    .map((i) => `No.${i.questionNumber}`)
-                    .join(', ') || 'Tidak ada'}
-                </div>
-              </div>
 
-              <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-2">
-                <div className="text-xs font-bold text-emerald-900">
-                  Tuntas Klasikal (Penguasaan &ge; 70%)
-                </div>
-                <p className="text-[11px] text-emerald-800">
-                  Butir soal yang telah dikuasai secara merata oleh kelas:
-                </p>
-                <div className="text-xs font-mono font-bold text-emerald-950">
-                  {anBusoReport.items
-                    .filter(
-                      (i) => i.remedialPriority === 'Aman (Tuntas Klasikal)'
-                    )
-                    .map((i) => `No.${i.questionNumber}`)
-                    .join(', ') || 'Belum ada'}
+                <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-2">
+                  <div className="text-xs font-bold text-emerald-900">
+                    Tuntas Klasikal (Penguasaan &ge; 70%)
+                  </div>
+                  <p className="text-[11px] text-emerald-800">
+                    Butir soal yang telah dikuasai secara merata oleh kelas:
+                  </p>
+                  <div className="text-xs font-mono font-bold text-emerald-950">
+                    {anBusoReport.items
+                      .filter(
+                        (i) => i.remedialPriority === 'Aman (Tuntas Klasikal)'
+                      )
+                      .map((i) => `No.${i.questionNumber}`)
+                      .join(', ') || 'Belum ada'}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* Tabel Pemetaan Remedial Personal per Siswa (Prinsip 2 AnBuso) */}
@@ -1479,12 +1702,26 @@ export const AnBusoAnalysisTab: React.FC<AnBusoAnalysisTabProps> = ({
                 </div>
 
                 <select
+                  aria-label="Filter Siswa Berdasarkan Butir Soal Belum Dikuasai"
+                  value={remedialQuestionFilter}
+                  onChange={(e) => setRemedialQuestionFilter(e.target.value)}
+                  className="px-3 py-1.5 text-xs font-bold text-indigo-950 bg-white border border-indigo-300 rounded-lg cursor-pointer"
+                >
+                  <option value="ALL">Semua Butir Soal</option>
+                  {anBusoReport.items.map((it) => (
+                    <option key={it.questionId} value={String(it.questionNumber)}>
+                      Salah / Parsial di Soal No. {it.questionNumber}
+                    </option>
+                  ))}
+                </select>
+
+                <select
                   aria-label="Filter Status Remedial"
                   value={remedialStatusFilter}
                   onChange={(e) =>
                     setRemedialStatusFilter(e.target.value as any)
                   }
-                  className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg"
+                  className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg cursor-pointer"
                 >
                   <option value="ALL">Semua Siswa</option>
                   <option value="REMEDIAL">
