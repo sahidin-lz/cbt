@@ -334,6 +334,7 @@ interface StudentExamPortalProps {
   students: StudentItem[];
   results?: ResultItem[];
   onExamCompleted: () => void;
+  onRefreshData?: () => void;
   onExamStateChange?: (isActive: boolean) => void;
 }
 
@@ -343,6 +344,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   students,
   results = [],
   onExamCompleted,
+  onRefreshData,
   onExamStateChange,
 }) => {
   const [selectedKelas, setSelectedKelas] = useState('');
@@ -2151,7 +2153,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           saveLoggedInStudentAccount(updated);
           onExamCompleted();
         }}
-        onRefreshData={onExamCompleted}
+        onRefreshData={onRefreshData || onExamCompleted}
         onLogout={() => {
           clearLoggedInStudentAccount();
           clearActiveStudentSession();

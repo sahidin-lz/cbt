@@ -112,7 +112,7 @@ export default function App() {
   const fetchDashboardData = useCallback(async () => {
     try {
       setLoadError(null);
-      const data = await loadUnifiedDashboardData();
+      const data = await loadUnifiedDashboardData({ preferLocalCache: false });
       setExams(data.exams || []);
       setQuestions(data.questions || []);
       setStudents(data.students || []);
@@ -127,6 +127,21 @@ export default function App() {
     } catch (err: any) {
       console.error('Error fetching dashboard data:', err);
       setLoadError(err.message || 'Gagal memuat data CBT.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Zero-Firestore-read state sync after local student exam start/submit/profile update or in-exam browser refresh
+  const syncDashboardFromLocalCache = useCallback(async () => {
+    try {
+      const data = await loadUnifiedDashboardData({ preferLocalCache: true });
+      setExams(data.exams || []);
+      setQuestions(data.questions || []);
+      setStudents(data.students || []);
+      setResults(data.results || []);
+    } catch (err) {
+      console.error('Error syncing local cache data:', err);
     } finally {
       setIsLoading(false);
     }
@@ -180,10 +195,19 @@ export default function App() {
     }
   }, [exams, students, questions, results, fetchDashboardData]);
 
-  // One-time load on mount (no background onSnapshot listeners to preserve Spark Plan quota)
+  // One-time load on mount (uses local cache if student refreshes browser mid-exam so 0 reads are consumed on refresh)
   useEffect(() => {
+    try {
+      const activeStudentSession = localStorage.getItem(
+        'cbt_active_student_session'
+      );
+      if (activeStudentSession) {
+        syncDashboardFromLocalCache();
+        return;
+      }
+    } catch {}
     fetchDashboardData();
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, syncDashboardFromLocalCache]);
 
   // Ensure only questions and results belonging to active exams & students are counted,
   // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula
@@ -386,7 +410,8 @@ export default function App() {
             questions={activeQuestions}
             students={students}
             results={activeResults}
-            onExamCompleted={fetchDashboardData}
+            onExamCompleted={syncDashboardFromLocalCache}
+            onRefreshData={fetchDashboardData}
             onExamStateChange={setIsStudentInExam}
           />
         ) : (

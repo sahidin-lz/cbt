@@ -637,6 +637,48 @@ export function loadLocalCbtSnapshotCache(): {
   }
 }
 
+export function patchLocalCbtSnapshotCache(patch: {
+  student?: StudentItem;
+  result?: ResultItem;
+}): void {
+  const current = loadLocalCbtSnapshotCache();
+  if (!current) return;
+
+  let nextStudents = current.students;
+  if (patch.student) {
+    const targetId = Number(patch.student.id);
+    const exists = nextStudents.some((s) => Number(s.id) === targetId);
+    nextStudents = exists
+      ? nextStudents.map((s) =>
+          Number(s.id) === targetId ? { ...s, ...patch.student } : s
+        )
+      : [patch.student, ...nextStudents];
+  }
+
+  let nextResults = current.results;
+  if (patch.result) {
+    const targetResId = Number(patch.result.id);
+    const targetStudentId = Number(patch.result.student_id);
+    const targetExamId = Number(patch.result.exam_id);
+    const filtered = nextResults.filter(
+      (r) =>
+        Number(r.id) !== targetResId &&
+        !(
+          Number(r.student_id) === targetStudentId &&
+          Number(r.exam_id) === targetExamId
+        )
+    );
+    nextResults = [patch.result, ...filtered];
+  }
+
+  saveLocalCbtSnapshotCache({
+    exams: current.exams,
+    students: nextStudents,
+    questions: current.questions,
+    results: nextResults,
+  });
+}
+
 async function updateFirestorePulse(
   eventText: string,
   counts?: {
@@ -688,10 +730,12 @@ export async function fetchAllFromFirestore(): Promise<{
     if (localSnap) return localSnap;
   }
   try {
-    const [exSnap, stSnap, qSnap, rSnap] = await Promise.all([
+    // Ambil koleksi ujian, peserta, dan hasil terlebih dahulu.
+    // Untuk soal ujian, prioritaskan cache lokal `cbt_soal_${examId}` (0 Read) atau dokumen tunggal `questions/bundle_${examId}` (1 Read per paket)
+    // agar tidak membaca ratusan dokumen butir soal individual setiap kali aplikasi dimuat.
+    const [exSnap, stSnap, rSnap] = await Promise.all([
       safeGetCollectionDocs('exams'),
       safeGetCollectionDocs('students'),
-      safeGetCollectionDocs('questions'),
       safeGetCollectionDocs('results'),
     ]);
 
@@ -704,49 +748,63 @@ export async function fetchAllFromFirestore(): Promise<{
       .sort((a, b) => b.id - a.id);
 
     const questionMap = new Map<number, QuestionItem>();
-    qSnap.docs.forEach((d) => {
-      const raw = d.data() as any;
-      if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
-        raw.data_opsi.items.forEach((item: any) => {
+    const perExamQuestionLists = await Promise.all(
+      exams.map((ex) => fetchExamQuestionsBundleOnce(Number(ex.id)))
+    );
+    perExamQuestionLists.forEach((list) => {
+      list.forEach((q) => {
+        questionMap.set(Number(q.id), q);
+      });
+    });
+
+    // Fallback satu kali jika ada ujian tapi belum ada soal sama sekali di cache maupun bundel
+    if (questionMap.size === 0 && exams.length > 0) {
+      const qSnap = await safeGetCollectionDocs('questions');
+      qSnap.docs.forEach((d) => {
+        const raw = d.data() as any;
+        if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
+          raw.data_opsi.items.forEach((item: any) => {
+            const qObj: QuestionItem = {
+              id: Number(item.id),
+              exam_id: Number(item.exam_id || raw.exam_id),
+              teks_soal: String(item.teks_soal || ''),
+              tipe_soal: item.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+              data_opsi: item.data_opsi || {
+                wacana: '',
+                opsi: { A: '', B: '', C: '', D: '', E: '' },
+              },
+              kunci_jawaban: Array.isArray(item.kunci_jawaban)
+                ? item.kunci_jawaban
+                : ['A'],
+              bobot: Number(item.bobot) || 2,
+            };
+            questionMap.set(qObj.id, qObj);
+          });
+        } else if (
+          raw?.teks_soal &&
+          !String(raw.teks_soal).startsWith('BUNDLE_PAKET_SOAL_')
+        ) {
           const qObj: QuestionItem = {
-            id: Number(item.id),
-            exam_id: Number(item.exam_id || raw.exam_id),
-            teks_soal: String(item.teks_soal || ''),
-            tipe_soal: item.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
-            data_opsi: item.data_opsi || {
+            id: Number(raw.id),
+            exam_id: Number(raw.exam_id),
+            teks_soal: String(raw.teks_soal || ''),
+            tipe_soal: raw.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+            data_opsi: raw.data_opsi || {
               wacana: '',
               opsi: { A: '', B: '', C: '', D: '', E: '' },
             },
-            kunci_jawaban: Array.isArray(item.kunci_jawaban)
-              ? item.kunci_jawaban
+            kunci_jawaban: Array.isArray(raw.kunci_jawaban)
+              ? raw.kunci_jawaban
               : ['A'],
-            bobot: Number(item.bobot) || 2,
+            bobot: Number(raw.bobot) || 2,
           };
-          questionMap.set(qObj.id, qObj);
-        });
-      } else if (
-        raw?.teks_soal &&
-        !String(raw.teks_soal).startsWith('BUNDLE_PAKET_SOAL_')
-      ) {
-        const qObj: QuestionItem = {
-          id: Number(raw.id),
-          exam_id: Number(raw.exam_id),
-          teks_soal: String(raw.teks_soal || ''),
-          tipe_soal: raw.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
-          data_opsi: raw.data_opsi || {
-            wacana: '',
-            opsi: { A: '', B: '', C: '', D: '', E: '' },
-          },
-          kunci_jawaban: Array.isArray(raw.kunci_jawaban)
-            ? raw.kunci_jawaban
-            : ['A'],
-          bobot: Number(raw.bobot) || 2,
-        };
-        if (!questionMap.has(qObj.id)) {
-          questionMap.set(qObj.id, qObj);
+          if (!questionMap.has(qObj.id)) {
+            questionMap.set(qObj.id, qObj);
+          }
         }
-      }
-    });
+      });
+    }
+
     const questions: QuestionItem[] = Array.from(questionMap.values()).sort(
       (a, b) => a.id - b.id
     );
@@ -1002,12 +1060,25 @@ export async function pushSnapshotToFirestoreClient(
   }
 }
 
-export async function loadUnifiedDashboardData(): Promise<{
+export async function loadUnifiedDashboardData(options?: {
+  preferLocalCache?: boolean;
+}): Promise<{
   exams: ExamItem[];
   students: StudentItem[];
   questions: QuestionItem[];
   results: ResultItem[];
 }> {
+  if (options?.preferLocalCache) {
+    const cached = loadLocalCbtSnapshotCache();
+    if (
+      cached &&
+      cached.exams.length > 0 &&
+      cached.students.length > 0
+    ) {
+      return cached;
+    }
+  }
+
   const [apiRes, firestoreData] = await Promise.all([
     safeApiJson<{
       exams: ExamItem[];
@@ -1589,6 +1660,7 @@ export async function updateStudentStatusCbt(
     );
   }
 
+  patchLocalCbtSnapshotCache({ student: updated });
   return updated;
 }
 
@@ -2285,6 +2357,8 @@ export async function loginStudentExamCbt(
     }),
   }).catch(() => {});
 
+  patchLocalCbtSnapshotCache({ student: updatedStudent });
+
   return {
     student: updatedStudent,
     exam: activeExam,
@@ -2413,6 +2487,31 @@ export async function submitStudentExamCbt(payload: {
 
     await finalBatch.commit();
   }
+
+  // Perbarui cache snapshot lokal secara instan tanpa perlu mengunduh ulang seluruh koleksi dari Firestore
+  const studentPkgFinal =
+    payload.student.kode_soal?.slice(0, 32) ||
+    payload.exam.kode_paket?.slice(0, 32) ||
+    payload.student.variasi_paket?.slice(0, 32) ||
+    'PAKET-A';
+  patchLocalCbtSnapshotCache({
+    student: {
+      ...payload.student,
+      status_ujian: 'Selesai',
+      kode_soal: studentPkgFinal,
+      variasi_paket: studentPkgFinal,
+    },
+    result: {
+      id: Number(resultId),
+      student_id: Number(payload.student.id),
+      exam_id: Number(payload.exam.id),
+      skor_angka: scoreSummary.normalizedScore,
+      jawaban_siswa: canonicalAnswers,
+      analisis_ai: null,
+      pelanggaran_tab: Number(payload.pelanggaranTab) || 0,
+      created_at: nowIso,
+    },
+  });
 
   // Bersihkan data jawaban sementara di localStorage setelah ujian selesai
   clearLocalStudentAnswers(payload.exam.id, payload.student.id);
