@@ -35,6 +35,7 @@ import {
   updateStudentStatusCbt,
   syncStudentLiveTelemetryCbt,
   fetchSingleStudentStatusOnce,
+  clearLocalStudentBlockCacheCbt,
   getCachedExamQuestionsLocal,
   saveCachedExamQuestionsLocal,
   saveLocalStudentAnswers,
@@ -419,14 +420,21 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const [accountDashboardMenu, setAccountDashboardMenu] =
     useState<StudentDashboardMenu>('beranda');
 
-  // Keep loggedInAccount synced when students list updates from Firestore
+  // Keep loggedInAccount synced when students list updates from Firestore,
+  // while preventing stale local cache 'Diblokir' from overwriting a freshly unblocked student
   useEffect(() => {
     if (!loggedInAccount || students.length === 0) return;
     const fresh = students.find((s) => Number(s.id) === Number(loggedInAccount.id));
     if (fresh) {
+      const effectiveStatus =
+        loggedInAccount.status_ujian !== 'Diblokir' &&
+        fresh.status_ujian === 'Diblokir'
+          ? loggedInAccount.status_ujian
+          : fresh.status_ujian;
       const merged: StudentItem = {
         ...loggedInAccount,
         ...fresh,
+        status_ujian: effectiveStatus,
         password_login: fresh.password_login ?? loggedInAccount.password_login,
         nisn: fresh.nisn ?? loggedInAccount.nisn,
       };
@@ -482,10 +490,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     return initialSession?.student?.status_ujian === 'Diblokir';
   });
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
+  const [unlockCheckMessage, setUnlockCheckMessage] = useState<string | null>(null);
   const [lastViolationTime, setLastViolationTime] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const lastViolationTimestampRef = useRef<number>(0);
   const lastInspectAttemptRef = useRef<number>(0);
+  const unlockGraceUntilRef = useRef<number>(0);
   const baselineWindowGapRef = useRef<{ wGap: number; hGap: number } | null>(null);
 
   // Submission state
@@ -817,17 +827,44 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   // Start Exam Worksheet from Student Account Dashboard (after Teacher's Exam Session Token is verified)
   const handleStartExamFromDashboard = async (targetExam: ExamItem) => {
-    const currentAccount = loggedInAccount || selectedStudentObj;
+    let currentAccount = loggedInAccount || selectedStudentObj;
     if (!currentAccount) {
       throw new Error('Sesi akun siswa tidak ditemukan. Silakan login kembali.');
     }
 
     if (currentAccount.status_ujian === 'Diblokir') {
-      throw new Error(
-        'Akses ujian Anda saat ini DIBLOKIR / DIKUNCI karena terdeteksi berpindah tab atau dikunci pengawas. Silakan hubungi Guru Pengawas untuk membuka blokir Anda.'
-      );
+      // Jangan langsung menolak dari cache localStorage! Verifikasi ke server Firestore terlebih dahulu.
+      const freshServerStatus = await fetchSingleStudentStatusOnce(currentAccount.id);
+      if (freshServerStatus && freshServerStatus !== 'Diblokir') {
+        clearLocalStudentBlockCacheCbt(
+          currentAccount.id,
+          currentAccount.token_ujian,
+          targetExam.id,
+          freshServerStatus
+        );
+        currentAccount = {
+          ...currentAccount,
+          status_ujian: freshServerStatus,
+          live_telemetry: currentAccount.live_telemetry
+            ? {
+                ...currentAccount.live_telemetry,
+                tab_violations: 0,
+                inspect_attempts: 0,
+                devtools_open: false,
+              }
+            : undefined,
+        };
+        setLoggedInAccount(currentAccount);
+        saveLoggedInStudentAccount(currentAccount);
+        onExamCompleted();
+      } else {
+        throw new Error(
+          'Akses ujian Anda saat ini masih tercatat DIBLOKIR di server pengawas. Silakan minta Guru Pengawas menekan tombol [Buka Kunci] pada Konsol Guru.'
+        );
+      }
     }
 
+    unlockGraceUntilRef.current = Date.now() + 8000;
     setIsClosedByOtherExamTab(false);
     broadcastCloseOtherTabsAndApps(currentAccount.nama, targetExam.judul_ujian);
     requestExamFullscreen();
@@ -931,6 +968,18 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
       if (hasExistingSessionProgress && savedProgress) {
         const restoredAnswers = savedProgress.answers || {};
+        // Jika siswa sudah diizinkan masuk kembali (status bukan Diblokir), reset hitungan pelanggaran lama yang mencapai >= 3 di localStorage agar tidak langsung terblokir ulang!
+        const cleanRestoredViolations =
+          session.student.status_ujian !== 'Diblokir' &&
+          (savedProgress.tabViolations || 0) >= MAX_TAB_VIOLATIONS
+            ? 0
+            : savedProgress.tabViolations || 0;
+        const cleanRestoredInspect =
+          session.student.status_ujian !== 'Diblokir' &&
+          (savedProgress.tabViolations || 0) >= MAX_TAB_VIOLATIONS
+            ? 0
+            : savedProgress.inspectAttempts || 0;
+
         setAnswers(restoredAnswers);
         setCurrentIndex(savedProgress.currentIndex || 0);
         setRemainingSeconds(
@@ -938,23 +987,25 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
             ? savedProgress.remainingSeconds
             : fullExamDurationSecs
         );
-        setTabViolations(savedProgress.tabViolations || 0);
-        setInspectAttempts(savedProgress.inspectAttempts || 0);
-        saveLocalStudentAnswers(session.exam.id, updatedStudent.id, {
-          examId: session.exam.id,
+        setTabViolations(cleanRestoredViolations);
+        setInspectAttempts(cleanRestoredInspect);
+        saveLocalProgress(updatedStudent.token_ujian, {
           studentId: updatedStudent.id,
           nama: updatedStudent.nama,
           kelas: updatedStudent.kelas,
           token_ujian: updatedStudent.token_ujian,
+          examId: session.exam.id,
+          assignedPackageCode: prepared.studentPackageCode,
+          questionOrderIds: prepared.questions.map((q) => Number(q.id)),
+          preparedQuestions: prepared.questions,
           answers: restoredAnswers,
           currentIndex: savedProgress.currentIndex || 0,
           remainingSeconds:
             savedProgress.remainingSeconds || fullExamDurationSecs,
-          tabViolations: savedProgress.tabViolations || 0,
-          inspectAttempts: savedProgress.inspectAttempts || 0,
-          assignedPackageCode: prepared.studentPackageCode,
-          questionOrderIds: prepared.questions.map((q) => Number(q.id)),
-          updatedAt: new Date().toISOString(),
+          tabViolations: cleanRestoredViolations,
+          inspectAttempts: cleanRestoredInspect,
+          logs: savedProgress.logs || [],
+          lastSavedAt: new Date().toISOString(),
         });
         const resumedLogs: StudentActivityLog[] = [
           ...(savedProgress.logs || []),
@@ -1021,15 +1072,126 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     }
   };
 
-  // Manual one-time status check (replaces real-time onSnapshot listener to save daily Firestore reads)
+  // Manual & Automatic one-time status check (bypasses IndexedDB/localStorage cache to verify teacher unlock)
   const [isCheckingUnlockStatus, setIsCheckingUnlockStatus] = useState(false);
 
+  const applyLocalUnblockAndContinue = useCallback(
+    (targetStudent: StudentItem, resolvedStatus: string = 'Sedang Ujian') => {
+      const nextStatusForActiveExam =
+        resolvedStatus === 'Belum Mulai' && Object.keys(answers).length > 0
+          ? 'Sedang Ujian'
+          : resolvedStatus;
+
+      clearLocalStudentBlockCacheCbt(
+        targetStudent.id,
+        targetStudent.token_ujian,
+        activeExam?.id,
+        nextStatusForActiveExam
+      );
+
+      unlockGraceUntilRef.current = Date.now() + 8000;
+      lastViolationTimestampRef.current = Date.now();
+      lastInspectAttemptRef.current = Date.now();
+      baselineWindowGapRef.current = {
+        wGap: Math.max(0, window.outerWidth - window.innerWidth),
+        hGap: Math.max(0, window.outerHeight - window.innerHeight),
+      };
+
+      setTabViolations(0);
+      setInspectAttempts(0);
+      setIsDevToolsOpen(false);
+      setIsStudentBlocked(false);
+      setShowCheatLockModal(false);
+      setShowCheatBanner(false);
+      setUnlockCheckMessage(null);
+      setSecurityNotice(
+        'Kunci ujian telah dibuka oleh Guru Pengawas & cache blokir lokal telah dibersihkan! Silakan lanjutkan ujian dengan tertib.'
+      );
+
+      const unblockedLog: StudentActivityLog = {
+        timestamp: new Date().toLocaleTimeString('id-ID'),
+        action: 'unblocked',
+        detail:
+          'Kunci ujian dibuka oleh Guru Pengawas. Cache blokir localStorage & hitungan pelanggaran di-reset ke 0 (seluruh jawaban & sisa waktu tetap aman).',
+      };
+      const nextLogs = [...activityLogs, unblockedLog];
+      setActivityLogs(nextLogs);
+
+      const updatedStudentObj: StudentItem = {
+        ...targetStudent,
+        status_ujian: nextStatusForActiveExam,
+        live_telemetry: targetStudent.live_telemetry
+          ? {
+              ...targetStudent.live_telemetry,
+              tab_violations: 0,
+              inspect_attempts: 0,
+              devtools_open: false,
+              last_action: 'KUNCI DIBUKA PENGAWAS (Melanjutkan Ujian)',
+              last_active_at: new Date().toISOString(),
+            }
+          : undefined,
+      };
+
+      setActiveStudent((prev) => (prev ? updatedStudentObj : null));
+      setLoggedInAccount((prev) =>
+        prev && Number(prev.id) === Number(targetStudent.id)
+          ? updatedStudentObj
+          : prev
+      );
+      saveLoggedInStudentAccount(updatedStudentObj);
+
+      if (activeExam) {
+        saveActiveStudentSession({
+          student: updatedStudentObj,
+          exam: activeExam,
+          questions: examQuestions,
+        });
+        saveLocalProgress(targetStudent.token_ujian, {
+          studentId: targetStudent.id,
+          nama: targetStudent.nama,
+          kelas: targetStudent.kelas,
+          token_ujian: targetStudent.token_ujian,
+          examId: activeExam.id,
+          assignedPackageCode:
+            targetStudent.kode_soal || activeExam.kode_paket || 'PAKET-A',
+          questionOrderIds: examQuestions.map((q) => Number(q.id)),
+          preparedQuestions: examQuestions,
+          answers,
+          currentIndex,
+          remainingSeconds,
+          tabViolations: 0,
+          inspectAttempts: 0,
+          logs: nextLogs,
+          lastSavedAt: new Date().toISOString(),
+        });
+      }
+
+      onExamCompleted();
+    },
+    [
+      activeExam,
+      examQuestions,
+      answers,
+      currentIndex,
+      remainingSeconds,
+      activityLogs,
+      onExamCompleted,
+    ]
+  );
+
   const handleCheckStudentStatusManual = useCallback(async () => {
-    if (!activeStudent || submittedSummary) return;
+    const targetStudent = activeStudent || loggedInAccount;
+    if (!targetStudent || submittedSummary) return;
     setIsCheckingUnlockStatus(true);
+    setUnlockCheckMessage(null);
     try {
-      const freshStatus = await fetchSingleStudentStatusOnce(activeStudent.id);
-      if (!freshStatus) return;
+      const freshStatus = await fetchSingleStudentStatusOnce(targetStudent.id);
+      if (!freshStatus) {
+        setUnlockCheckMessage(
+          'Gagal menghubungi server untuk memverifikasi status. Pastikan koneksi internet aktif lalu coba lagi.'
+        );
+        return;
+      }
       const newStatus = (
         freshStatus === 'Diblokir' ||
         freshStatus === 'Sedang Ujian' ||
@@ -1039,55 +1201,81 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           : 'Belum Mulai'
       ) as StudentItem['status_ujian'];
 
-      setActiveStudent((prev) => {
-        if (!prev) return null;
-        const updated = { ...prev, status_ujian: newStatus };
-        if (activeExam) {
-          saveActiveStudentSession({
-            student: updated,
-            exam: activeExam,
-            questions: examQuestions,
-          });
-        }
-        return updated;
-      });
-
       if (newStatus === 'Diblokir') {
         setIsStudentBlocked(true);
         setShowCheatLockModal(true);
-      } else if (newStatus === 'Sedang Ujian') {
-        setIsStudentBlocked((wasBlocked) => {
-          if (wasBlocked) {
-            setShowCheatLockModal(false);
-            setShowCheatBanner(false);
-            setSecurityNotice(
-              'Kunci ujian telah dibuka oleh Guru Pengawas! Silakan lanjutkan ujian dengan tertib.'
-            );
-            setActivityLogs((prev) => [
-              ...prev,
-              {
-                timestamp: new Date().toLocaleTimeString('id-ID'),
-                action: 'unblocked',
-                detail: 'Kunci ujian telah dibuka oleh Guru Pengawas di Dashboard.',
-              },
-            ]);
-          }
-          return false;
-        });
+        setUnlockCheckMessage(
+          `Dicek pukul ${new Date().toLocaleTimeString('id-ID')}: Status Anda di server masih "Diblokir". Pastikan Guru Pengawas sudah menekan tombol [Buka Kunci] pada menu Live Monitor / Database Siswa, lalu klik tombol ini kembali.`
+        );
+      } else if (
+        newStatus === 'Sedang Ujian' ||
+        (newStatus === 'Belum Mulai' &&
+          (isStudentBlocked ||
+            targetStudent.status_ujian === 'Diblokir' ||
+            Object.keys(answers).length > 0))
+      ) {
+        // Teacher unlocked the student! Clean all local block caches and preserve 100% of answers & remaining time
+        applyLocalUnblockAndContinue(targetStudent, 'Sedang Ujian');
+        if (newStatus === 'Belum Mulai' && activeStudent) {
+          // Sync status back to 'Sedang Ujian' in Firestore so teacher monitor sees the student is active again
+          updateStudentStatusCbt(targetStudent, 'Sedang Ujian').catch(() => {});
+        }
       } else if (newStatus === 'Belum Mulai') {
         clearLocalProgress(
-          activeStudent.token_ujian,
+          targetStudent.token_ujian,
           activeExam?.id,
-          activeStudent.id
+          targetStudent.id
         );
         clearActiveStudentSession();
         setActiveStudent(null);
+        setIsStudentBlocked(false);
+        setShowCheatLockModal(false);
         setSubmittedSummary(null);
+        onExamCompleted();
+      } else {
+        applyLocalUnblockAndContinue(targetStudent, newStatus);
       }
     } finally {
       setIsCheckingUnlockStatus(false);
     }
-  }, [activeStudent, activeExam, examQuestions, submittedSummary]);
+  }, [
+    activeStudent,
+    loggedInAccount,
+    activeExam,
+    answers,
+    isStudentBlocked,
+    submittedSummary,
+    applyLocalUnblockAndContinue,
+    onExamCompleted,
+  ]);
+
+  // Automatically verify with Firestore server on mount/reload (F5) or window focus ONLY when localStorage says student is 'Diblokir'
+  useEffect(() => {
+    const targetId = activeStudent?.id || loggedInAccount?.id;
+    const isLocallyBlocked =
+      isStudentBlocked ||
+      activeStudent?.status_ujian === 'Diblokir' ||
+      loggedInAccount?.status_ujian === 'Diblokir';
+    if (!targetId || !isLocallyBlocked || submittedSummary) return;
+
+    handleCheckStudentStatusManual();
+
+    const onWindowFocusWhileBlocked = () => {
+      handleCheckStudentStatusManual();
+    };
+    window.addEventListener('focus', onWindowFocusWhileBlocked);
+    return () => {
+      window.removeEventListener('focus', onWindowFocusWhileBlocked);
+    };
+  }, [
+    isStudentBlocked,
+    activeStudent?.id,
+    activeStudent?.status_ujian,
+    loggedInAccount?.id,
+    loggedInAccount?.status_ujian,
+    submittedSummary,
+    handleCheckStudentStatusManual,
+  ]);
 
   const getBrowserDeviceSummary = useCallback(() => {
     try {
@@ -1125,8 +1313,11 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     ) => {
       if (!activeStudent || submittedSummary || isStudentBlocked) return;
 
-      // Debounce rapid duplicate events within 450ms
       const now = Date.now();
+      // Grace period after teacher unblocks or exam starts so fullscreen/focus transition never re-blocks the student
+      if (!forceImmediateBlock && now < unlockGraceUntilRef.current) return;
+
+      // Debounce rapid duplicate events within 450ms
       if (now - lastViolationTimestampRef.current < 450) return;
       lastViolationTimestampRef.current = now;
 
@@ -3245,9 +3436,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     Anda <strong>TIDAK DAPAT MEMBUKA KUNCI SENDIRI</strong> sampai Guru Pengawas mengizinkan. Silakan lapor kepada Guru Pengawas di ruang kelas.
                   </p>
                   <div className="p-2 bg-white/70 rounded border border-red-200 font-mono text-[11px] text-red-800">
-                    Guru membuka via: Konsol Guru → Modul 04 (Live Monitor &amp; Anti-Cheat) → Klik [Buka Kunci]
+                    Guru membuka via: Konsol Guru → Modul 03 (Live Monitor) atau Modul 04 (Database Siswa) → Klik [Buka Kunci]
                   </div>
                 </div>
+
+                {unlockCheckMessage && (
+                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-950 font-medium">
+                    {unlockCheckMessage}
+                  </div>
+                )}
 
                 <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
@@ -3255,7 +3452,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                       type="button"
                       disabled={isCheckingUnlockStatus}
                       onClick={handleCheckStudentStatusManual}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg cursor-pointer shadow-2xs"
                     >
                       <RotateCcw
                         className={`w-3.5 h-3.5 ${
@@ -3264,8 +3461,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                       />
                       <span>
                         {isCheckingUnlockStatus
-                          ? 'Mengecek Status...'
-                          : 'Cek Status Buka Kunci'}
+                          ? 'Menyinkronkan Server & Membersihkan Cache...'
+                          : 'Buka Kunci & Bersihkan Cache Blokir Lokal'}
                       </span>
                     </button>
 
@@ -3289,7 +3486,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     }}
                     className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
                   >
-                    Keluar ke Halaman Login
+                    Keluar ke Dashboard Akun
                   </button>
                 </div>
               </div>

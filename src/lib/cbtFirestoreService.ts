@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   getDocFromCache,
+  getDocFromServer,
   getDocs,
   getDocsFromCache,
   setDoc,
@@ -1661,6 +1662,118 @@ export async function regenerateStudentTokenCbt(
   return updated;
 }
 
+export function clearLocalStudentBlockCacheCbt(
+  studentId: number,
+  tokenUjian?: string,
+  examId?: number,
+  newStatus: string = 'Sedang Ujian'
+): void {
+  if (typeof window === 'undefined') return;
+  const cleanToken = (tokenUjian || '').toUpperCase().trim();
+
+  // 1. Update cbt_offline_snapshot_v1 in localStorage
+  try {
+    const snap = loadLocalCbtSnapshotCache();
+    if (snap && Array.isArray(snap.students)) {
+      const target = snap.students.find((s) => Number(s.id) === Number(studentId));
+      if (target) {
+        const updatedStudent: StudentItem = {
+          ...target,
+          status_ujian: newStatus,
+          live_telemetry: target.live_telemetry
+            ? {
+                ...target.live_telemetry,
+                tab_violations: 0,
+                inspect_attempts: 0,
+                devtools_open: false,
+                last_action: 'KUNCI DIBUKA PENGAWAS (Cache Blokir Lokal Dibersihkan)',
+              }
+            : undefined,
+        };
+        patchLocalCbtSnapshotCache({ student: updatedStudent });
+      }
+    }
+  } catch {}
+
+  // 2. Update cbt_logged_in_student_account in localStorage
+  try {
+    const rawAcc = localStorage.getItem('cbt_logged_in_student_account');
+    if (rawAcc) {
+      const parsedAcc = JSON.parse(rawAcc);
+      if (parsedAcc && Number(parsedAcc.id) === Number(studentId)) {
+        const updatedAcc = {
+          ...parsedAcc,
+          status_ujian: newStatus,
+          live_telemetry: parsedAcc.live_telemetry
+            ? {
+                ...parsedAcc.live_telemetry,
+                tab_violations: 0,
+                inspect_attempts: 0,
+                devtools_open: false,
+              }
+            : undefined,
+        };
+        localStorage.setItem('cbt_logged_in_student_account', JSON.stringify(updatedAcc));
+      }
+    }
+  } catch {}
+
+  // 3. Update cbt_active_student_session in localStorage
+  try {
+    const rawSession = localStorage.getItem('cbt_active_student_session');
+    if (rawSession) {
+      const parsedSession = JSON.parse(rawSession);
+      if (parsedSession?.student && Number(parsedSession.student.id) === Number(studentId)) {
+        parsedSession.student = {
+          ...parsedSession.student,
+          status_ujian: newStatus,
+          live_telemetry: parsedSession.student.live_telemetry
+            ? {
+                ...parsedSession.student.live_telemetry,
+                tab_violations: 0,
+                inspect_attempts: 0,
+                devtools_open: false,
+              }
+            : undefined,
+        };
+        localStorage.setItem('cbt_active_student_session', JSON.stringify(parsedSession));
+      }
+    }
+  } catch {}
+
+  // 4. Reset tabViolations & inspectAttempts to 0 in all cbt_progress_token_* and cbt_jawaban_* keys while preserving 100% of answers & remaining time
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (
+        key.startsWith('cbt_progress_token_') ||
+        key.startsWith('cbt_jawaban_')
+      ) {
+        const rawVal = localStorage.getItem(key);
+        if (!rawVal) continue;
+        const parsedVal = JSON.parse(rawVal);
+        if (!parsedVal || typeof parsedVal !== 'object') continue;
+
+        const matchesStudent =
+          Number(parsedVal.studentId) === Number(studentId) ||
+          (cleanToken &&
+            String(parsedVal.token_ujian || '')
+              .toUpperCase()
+              .trim() === cleanToken) ||
+          (cleanToken && key.includes(cleanToken)) ||
+          key.endsWith(`_${studentId}`);
+
+        if (matchesStudent) {
+          parsedVal.tabViolations = 0;
+          parsedVal.inspectAttempts = 0;
+          localStorage.setItem(key, JSON.stringify(parsedVal));
+        }
+      }
+    }
+  } catch {}
+}
+
 export async function updateStudentStatusCbt(
   student: StudentItem,
   status_ujian: string
@@ -1674,10 +1787,25 @@ export async function updateStudentStatusCbt(
     }
   );
 
+  const isUnblocking = status_ujian !== 'Diblokir';
+  const updatedTelemetry: StudentLiveTelemetry | undefined = student.live_telemetry
+    ? {
+        ...student.live_telemetry,
+        tab_violations: isUnblocking ? 0 : student.live_telemetry.tab_violations,
+        inspect_attempts: isUnblocking ? 0 : student.live_telemetry.inspect_attempts,
+        devtools_open: isUnblocking ? false : student.live_telemetry.devtools_open,
+        last_action: isUnblocking
+          ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
+          : student.live_telemetry.last_action,
+        last_active_at: new Date().toISOString(),
+      }
+    : undefined;
+
   const updated: StudentItem = {
     ...student,
     ...(apiRes.ok && apiRes.data?.student ? apiRes.data.student : {}),
     status_ujian,
+    live_telemetry: updatedTelemetry,
   };
 
   if (db) {
@@ -1692,6 +1820,9 @@ export async function updateStudentStatusCbt(
   }
 
   patchLocalCbtSnapshotCache({ student: updated });
+  if (isUnblocking) {
+    clearLocalStudentBlockCacheCbt(updated.id, updated.token_ujian, undefined, status_ujian);
+  }
   return updated;
 }
 
@@ -1743,15 +1874,37 @@ export async function bulkUpdateStudentStatusCbt(
     }),
   });
 
+  const isUnblocking = status_ujian !== 'Diblokir';
+
   if (db) {
     const nowIso = new Date().toISOString();
     const batch = writeBatch(db);
     for (const st of targetStudents) {
+      const updatedSt: StudentItem = {
+        ...st,
+        status_ujian,
+        live_telemetry: st.live_telemetry
+          ? {
+              ...st.live_telemetry,
+              tab_violations: isUnblocking ? 0 : st.live_telemetry.tab_violations,
+              inspect_attempts: isUnblocking ? 0 : st.live_telemetry.inspect_attempts,
+              devtools_open: isUnblocking ? false : st.live_telemetry.devtools_open,
+              last_action: isUnblocking
+                ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
+                : st.live_telemetry.last_action,
+              last_active_at: nowIso,
+            }
+          : undefined,
+      };
       batch.set(
         doc(db, 'students', String(st.id)),
-        buildCleanStudentFirestoreDoc({ ...st, status_ujian }, nowIso),
+        buildCleanStudentFirestoreDoc(updatedSt, nowIso),
         { merge: true }
       );
+      patchLocalCbtSnapshotCache({ student: updatedSt });
+      if (isUnblocking) {
+        clearLocalStudentBlockCacheCbt(st.id, st.token_ujian, undefined, status_ujian);
+      }
     }
     await batch.commit();
     await updateFirestorePulse(
@@ -1761,18 +1914,52 @@ export async function bulkUpdateStudentStatusCbt(
 }
 
 /**
- * 1. Hapus onSnapshot pada status siswa -> gunakan pembacaan satu kali `getDoc` (`fetchSingleStudentStatusOnce`)
+ * 1. Hapus onSnapshot pada status siswa -> gunakan pembacaan satu kali langsung dari server (`getDocFromServer` dengan fallback `getDoc`)
+ * agar tidak pernah membaca cache IndexedDB/localStorage yang masih terjebak status 'Diblokir'.
  */
 export async function fetchSingleStudentStatusOnce(
   studentId: number
 ): Promise<string | null> {
   if (!db) return null;
   try {
-    const snap = await safeGetSingleDoc('students', String(studentId));
-    if (snap.exists()) {
+    const ref = doc(db, 'students', String(studentId));
+    let snap;
+    if (!isFirestoreQuotaCooldownActive()) {
+      try {
+        snap = await getDocFromServer(ref);
+      } catch {
+        snap = await safeGetSingleDoc('students', String(studentId));
+      }
+    } else {
+      snap = await safeGetSingleDoc('students', String(studentId));
+    }
+
+    if (snap && snap.exists()) {
       const data = snap.data() as any;
       if (data?.status_ujian) {
-        return String(data.status_ujian);
+        const freshStatus = String(data.status_ujian);
+        const mappedStudent: StudentItem = {
+          id: Number(data.id ?? studentId),
+          nama: String(data.nama || ''),
+          kelas: String(data.kelas || ''),
+          token_ujian: String(data.token_ujian || ''),
+          status_ujian: freshStatus,
+          kode_soal: data.kode_soal ? String(data.kode_soal) : undefined,
+          variasi_paket: data.variasi_paket ? String(data.variasi_paket) : undefined,
+          nisn: data.nisn ? String(data.nisn) : undefined,
+          password_login: data.password_login ? String(data.password_login) : undefined,
+          live_telemetry: data.live_telemetry || undefined,
+        };
+        patchLocalCbtSnapshotCache({ student: mappedStudent });
+        if (freshStatus !== 'Diblokir') {
+          clearLocalStudentBlockCacheCbt(
+            Number(studentId),
+            mappedStudent.token_ujian,
+            mappedStudent.live_telemetry?.exam_id,
+            freshStatus
+          );
+        }
+        return freshStatus;
       }
     }
   } catch {
@@ -2307,9 +2494,21 @@ export async function loginStudentExamCbt(
   }
 
   if (matchedStudent.status_ujian === 'Diblokir') {
-    throw new Error(
-      'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.'
-    );
+    // Jangan langsung menolak dari cache localStorage! Cek langsung status terbaru di server Firestore (1 dokumen).
+    const latestServerStatus = await fetchSingleStudentStatusOnce(matchedStudent.id);
+    if (latestServerStatus && latestServerStatus !== 'Diblokir') {
+      matchedStudent.status_ujian = latestServerStatus;
+      clearLocalStudentBlockCacheCbt(
+        matchedStudent.id,
+        matchedStudent.token_ujian,
+        examId,
+        latestServerStatus
+      );
+    } else {
+      throw new Error(
+        'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.'
+      );
+    }
   }
 
   if (snapshot.exams.length === 0) {

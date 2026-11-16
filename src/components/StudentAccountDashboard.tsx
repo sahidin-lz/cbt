@@ -28,6 +28,7 @@ import {
   PanelLeftOpen,
   ChevronDown,
   ChevronUp,
+  RotateCcw,
 } from 'lucide-react';
 import {
   ExamItem,
@@ -51,6 +52,8 @@ import {
 import {
   updateStudentProfileAndPasswordCbt,
   generateAiAnalysisCbt,
+  fetchSingleStudentStatusOnce,
+  clearLocalStudentBlockCacheCbt,
 } from '../lib/cbtFirestoreService';
 import {
   downloadSingleStudentResultPdf,
@@ -607,16 +610,80 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     setTokenModalExam(exam);
   };
 
+  const [isSyncingUnblockStatus, setIsSyncingUnblockStatus] = useState(false);
+  const [unblockBannerFeedback, setUnblockBannerFeedback] = useState<string | null>(null);
+
+  const handleSyncUnblockFromDashboard = useCallback(async () => {
+    setIsSyncingUnblockStatus(true);
+    setUnblockBannerFeedback(null);
+    try {
+      const serverStatus = await fetchSingleStudentStatusOnce(student.id);
+      if (serverStatus && serverStatus !== 'Diblokir') {
+        clearLocalStudentBlockCacheCbt(
+          student.id,
+          student.token_ujian,
+          undefined,
+          serverStatus
+        );
+        const updatedStudent: StudentItem = {
+          ...student,
+          status_ujian: serverStatus,
+          live_telemetry: student.live_telemetry
+            ? {
+                ...student.live_telemetry,
+                tab_violations: 0,
+                inspect_attempts: 0,
+                devtools_open: false,
+              }
+            : undefined,
+        };
+        onStudentUpdated(updatedStudent);
+        onRefreshData();
+      } else {
+        setUnblockBannerFeedback(
+          `Dicek pukul ${new Date().toLocaleTimeString('id-ID')}: Status di server masih "Diblokir". Pastikan Guru Pengawas sudah mengklik tombol [Buka Kunci] pada menu Live Monitor / Database Siswa.`
+        );
+      }
+    } finally {
+      setIsSyncingUnblockStatus(false);
+    }
+  }, [student, onStudentUpdated, onRefreshData]);
+
   const handleConfirmSessionTokenAndStart = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tokenModalExam) return;
     setSessionTokenError(null);
 
     if (student.status_ujian === 'Diblokir') {
-      setSessionTokenError(
-        'Akun ujian Anda sedang DIBLOKIR karena pelanggaran Anti-Cheat. Silakan lapor kepada Guru Pengawas untuk membuka kunci status Anda.'
-      );
-      return;
+      setIsStartingExam(true);
+      const latestServerStatus = await fetchSingleStudentStatusOnce(student.id);
+      setIsStartingExam(false);
+
+      if (latestServerStatus && latestServerStatus !== 'Diblokir') {
+        clearLocalStudentBlockCacheCbt(
+          student.id,
+          student.token_ujian,
+          tokenModalExam.id,
+          latestServerStatus
+        );
+        onStudentUpdated({
+          ...student,
+          status_ujian: latestServerStatus,
+          live_telemetry: student.live_telemetry
+            ? {
+                ...student.live_telemetry,
+                tab_violations: 0,
+                inspect_attempts: 0,
+                devtools_open: false,
+              }
+            : undefined,
+        });
+      } else {
+        setSessionTokenError(
+          'Akun ujian Anda masih tercatat DIBLOKIR di server. Silakan minta Guru Pengawas klik [Buka Kunci] pada Konsol Guru, lalu coba kembali.'
+        );
+        return;
+      }
     }
 
     const check = verifyExamSessionToken({
@@ -1135,19 +1202,40 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       {student.status_ujian === 'Diblokir' && (
         <div
           role="alert"
-          className="p-4 rounded-xl bg-red-50 border border-red-300 text-xs text-red-900 flex items-start gap-3"
+          className="p-4 rounded-xl bg-red-50 border border-red-300 text-xs text-red-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
         >
-          <Lock className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-          <div>
-            <div className="font-bold text-sm text-red-950">
-              Status Sesi Ujian Anda Sedang Diblokir / Dikunci Sementara
+          <div className="flex items-start gap-3">
+            <Lock className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold text-sm text-red-950">
+                Status Sesi Ujian Anda Sedang Diblokir / Dikunci Sementara
+              </div>
+              <p className="mt-0.5 leading-relaxed">
+                Sistem mendeteksi perpindahan tab/jendela saat ujian berlangsung.
+                Jika Guru Pengawas sudah membuka blokir Anda, klik tombol di samping untuk membersihkan cache blokir browser dan melanjutkan ujian.
+              </p>
+              {unblockBannerFeedback && (
+                <p className="mt-1.5 font-semibold text-amber-900 bg-amber-100/80 border border-amber-300 rounded px-2.5 py-1">
+                  {unblockBannerFeedback}
+                </p>
+              )}
             </div>
-            <p className="mt-0.5 leading-relaxed">
-              Sistem mendeteksi perpindahan tab/jendela saat ujian berlangsung.
-              Silakan lapor kepada Guru Pengawas di kelas agar status Anda dibuka
-              kembali (<strong>Buka Kunci</strong>) sebelum melanjutkan ujian.
-            </p>
           </div>
+          <button
+            type="button"
+            disabled={isSyncingUnblockStatus}
+            onClick={handleSyncUnblockFromDashboard}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 shrink-0 cursor-pointer shadow-2xs"
+          >
+            <RotateCcw
+              className={`w-3.5 h-3.5 ${isSyncingUnblockStatus ? 'animate-spin' : ''}`}
+            />
+            <span>
+              {isSyncingUnblockStatus
+                ? 'Menyinkronkan Server...'
+                : 'Buka Kunci & Bersihkan Cache Blokir'}
+            </span>
+          </button>
         </div>
       )}
 
