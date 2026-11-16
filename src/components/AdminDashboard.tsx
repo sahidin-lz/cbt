@@ -236,6 +236,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     useState<boolean>(false);
   const [isReportSummaryMinimized, setIsReportSummaryMinimized] =
     useState<boolean>(false);
+  const [isReportLotsHotsMinimized, setIsReportLotsHotsMinimized] =
+    useState<boolean>(false);
   const [isReportClassTableMinimized, setIsReportClassTableMinimized] =
     useState<boolean>(false);
   const [isReportQuestionPanelMinimized, setIsReportQuestionPanelMinimized] =
@@ -3687,6 +3689,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   questions={questions}
                   exams={exams}
                   selectedClassFilter={filterResultKelas}
+                  isMinimized={isUjianChartMinimized}
+                  onToggleMinimize={() => setIsUjianChartMinimized((p) => !p)}
                   onSelectClass={(kls) => {
                     setFilterResultKelas(kls);
                     if (kls !== 'SEMUA') {
@@ -6724,10 +6728,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onClick={() => {
                     const anyOpen =
                       !isReportSummaryMinimized ||
+                      !isReportLotsHotsMinimized ||
                       !isReportClassTableMinimized ||
                       !isReportQuestionPanelMinimized ||
                       !isReportStudentListMinimized;
                     setIsReportSummaryMinimized(anyOpen);
+                    setIsReportLotsHotsMinimized(anyOpen);
                     setIsReportClassTableMinimized(anyOpen);
                     setIsReportQuestionPanelMinimized(anyOpen);
                     setIsReportStudentListMinimized(anyOpen);
@@ -6735,6 +6741,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 cursor-pointer"
                 >
                   {!isReportSummaryMinimized ||
+                  !isReportLotsHotsMinimized ||
                   !isReportClassTableMinimized ||
                   !isReportQuestionPanelMinimized ||
                   !isReportStudentListMinimized ? (
@@ -6785,8 +6792,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                5A. Statistik &amp; Grafik LOTS/HOTS{' '}
+                5A-1. Statistik Sekolah{' '}
                 {isReportSummaryMinimized ? '(Tertutup)' : '(Terbuka)'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsReportLotsHotsMinimized((p) => !p)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isReportLotsHotsMinimized
+                    ? 'bg-teal-600 text-white border-teal-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                5A-2. Visualisasi Performa Kelas: LOTS vs HOTS{' '}
+                {isReportLotsHotsMinimized ? '(Tertutup)' : '(Terbuka)'}
               </button>
               <button
                 type="button"
@@ -6854,7 +6873,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsReportSummaryMinimized((p) => !p)}
@@ -6863,12 +6882,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {isReportSummaryMinimized ? (
                     <>
                       <ChevronDown className="w-3.5 h-3.5" />
-                      <span>Buka Statistik &amp; Grafik</span>
+                      <span>Buka Statistik</span>
                     </>
                   ) : (
                     <>
                       <ChevronUp className="w-3.5 h-3.5" />
                       <span>Minimize Statistik</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsReportLotsHotsMinimized((p) => !p)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-emerald-300 cursor-pointer"
+                >
+                  {isReportLotsHotsMinimized ? (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Buka LOTS vs HOTS</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Minimize LOTS vs HOTS</span>
                     </>
                   )}
                 </button>
@@ -6984,139 +7020,139 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {/* 4 Kartu Ringkasan Statistik Keseluruhan & Grafik LOTS/HOTS (Sub-Modul 5A) */}
+            {/* 4 Kartu Ringkasan Statistik Keseluruhan (Sub-Modul 5A-1) */}
             {!isReportSummaryMinimized && (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-white to-indigo-50/40 border border-blue-200/90 shadow-2xs">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
-                  Rata-Rata Skor Sekolah
-                </div>
-                <div className="text-2xl font-extrabold font-mono tabular-nums text-blue-950 mt-1">
-                  {classAnalyticsData.overall.averageScore}
-                  <span className="text-xs font-semibold font-sans text-blue-700 ml-1">
-                    / 100
-                  </span>
-                </div>
-                <div className="w-full h-2 bg-blue-200/60 rounded-full overflow-hidden mt-2">
-                  <div
-                    className="h-full bg-blue-600 rounded-full"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        Math.max(4, classAnalyticsData.overall.averageScore)
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <div className="text-[11px] font-medium text-slate-600 mt-1.5">
-                  Tertinggi:{' '}
-                  <strong className="font-mono text-emerald-700">
-                    {classAnalyticsData.overall.highestScore}
-                  </strong>{' '}
-                  · Terendah:{' '}
-                  <strong className="font-mono text-rose-700">
-                    {classAnalyticsData.overall.lowestScore}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 border border-emerald-200/90 shadow-2xs">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
-                  Tingkat Ketuntasan KKM (&ge; 70)
-                </div>
-                <div className="text-2xl font-extrabold font-mono tabular-nums text-emerald-950 mt-1">
-                  {classAnalyticsData.overall.passRate}%
-                </div>
-                <div className="w-full h-2 bg-emerald-200/60 rounded-full overflow-hidden mt-2">
-                  <div
-                    className="h-full bg-emerald-600 rounded-full"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        Math.max(4, classAnalyticsData.overall.passRate)
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <div className="text-[11px] font-medium text-slate-600 mt-1.5">
-                  <strong className="font-mono text-emerald-800">
-                    {classAnalyticsData.overall.passCount}
-                  </strong>{' '}
-                  dari{' '}
-                  <strong className="font-mono text-slate-800">
-                    {classAnalyticsData.overall.resultCount}
-                  </strong>{' '}
-                  peserta tuntas
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 via-white to-orange-50/40 border border-amber-200/90 shadow-2xs">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
-                  Sebaran Predikat (A / B / C / D)
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 font-mono tabular-nums text-xs font-extrabold mt-2">
-                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
-                    A: {classAnalyticsData.overall.gradeDistribution.A}
-                  </span>
-                  <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">
-                    B: {classAnalyticsData.overall.gradeDistribution.B}
-                  </span>
-                  <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
-                    C: {classAnalyticsData.overall.gradeDistribution.C}
-                  </span>
-                  <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
-                    D: {classAnalyticsData.overall.gradeDistribution.D}
-                  </span>
-                </div>
-                <div className="text-[11px] text-slate-600 mt-2">
-                  A (&ge;85), B (70–84), C (55–69), D (&lt;55)
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-50 via-white to-indigo-50/40 border border-purple-200/90 shadow-2xs">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800">
-                  Cakupan Evaluasi LOTS vs HOTS
-                </div>
-                <div className="text-2xl font-extrabold font-mono tabular-nums text-purple-950 mt-1">
-                  {classAnalyticsData.overall.analyzedCount}
-                  <span className="text-xs font-semibold font-sans text-purple-700 ml-1">
-                    / {classAnalyticsData.overall.resultCount} hasil
-                  </span>
-                </div>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    disabled={
-                      results.length === 0 || isAnalyzingBatchClass
-                    }
-                    onClick={() => handleBatchAiAnalysisForList(results)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold disabled:opacity-50 cursor-pointer transition-colors"
-                  >
-                    <Sparkles className="w-3 h-3 text-amber-300" />
-                    <span>
-                      {isAnalyzingBatchClass
-                        ? 'Sedang Menyusun Evaluasi...'
-                        : 'Evaluasi Semua Peserta'}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-white to-indigo-50/40 border border-blue-200/90 shadow-2xs">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-blue-800">
+                    Rata-Rata Skor Sekolah
+                  </div>
+                  <div className="text-2xl font-extrabold font-mono tabular-nums text-blue-950 mt-1">
+                    {classAnalyticsData.overall.averageScore}
+                    <span className="text-xs font-semibold font-sans text-blue-700 ml-1">
+                      / 100
                     </span>
-                  </button>
+                  </div>
+                  <div className="w-full h-2 bg-blue-200/60 rounded-full overflow-hidden mt-2">
+                    <div
+                      className="h-full bg-blue-600 rounded-full"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(4, classAnalyticsData.overall.averageScore)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-[11px] font-medium text-slate-600 mt-1.5">
+                    Tertinggi:{' '}
+                    <strong className="font-mono text-emerald-700">
+                      {classAnalyticsData.overall.highestScore}
+                    </strong>{' '}
+                    · Terendah:{' '}
+                    <strong className="font-mono text-rose-700">
+                      {classAnalyticsData.overall.lowestScore}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 border border-emerald-200/90 shadow-2xs">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                    Tingkat Ketuntasan KKM (&ge; 70)
+                  </div>
+                  <div className="text-2xl font-extrabold font-mono tabular-nums text-emerald-950 mt-1">
+                    {classAnalyticsData.overall.passRate}%
+                  </div>
+                  <div className="w-full h-2 bg-emerald-200/60 rounded-full overflow-hidden mt-2">
+                    <div
+                      className="h-full bg-emerald-600 rounded-full"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          Math.max(4, classAnalyticsData.overall.passRate)
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="text-[11px] font-medium text-slate-600 mt-1.5">
+                    <strong className="font-mono text-emerald-800">
+                      {classAnalyticsData.overall.passCount}
+                    </strong>{' '}
+                    dari{' '}
+                    <strong className="font-mono text-slate-800">
+                      {classAnalyticsData.overall.resultCount}
+                    </strong>{' '}
+                    peserta tuntas
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 via-white to-orange-50/40 border border-amber-200/90 shadow-2xs">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                    Sebaran Predikat (A / B / C / D)
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 font-mono tabular-nums text-xs font-extrabold mt-2">
+                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      A: {classAnalyticsData.overall.gradeDistribution.A}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">
+                      B: {classAnalyticsData.overall.gradeDistribution.B}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                      C: {classAnalyticsData.overall.gradeDistribution.C}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                      D: {classAnalyticsData.overall.gradeDistribution.D}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-600 mt-2">
+                    A (&ge;85), B (70–84), C (55–69), D (&lt;55)
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-50 via-white to-indigo-50/40 border border-purple-200/90 shadow-2xs">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800">
+                    Cakupan Evaluasi LOTS vs HOTS
+                  </div>
+                  <div className="text-2xl font-extrabold font-mono tabular-nums text-purple-950 mt-1">
+                    {classAnalyticsData.overall.analyzedCount}
+                    <span className="text-xs font-semibold font-sans text-purple-700 ml-1">
+                      / {classAnalyticsData.overall.resultCount} hasil
+                    </span>
+                  </div>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      disabled={
+                        results.length === 0 || isAnalyzingBatchClass
+                      }
+                      onClick={() => handleBatchAiAnalysisForList(results)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold disabled:opacity-50 cursor-pointer transition-colors"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-300" />
+                      <span>
+                        {isAnalyzingBatchClass
+                          ? 'Sedang Menyusun Evaluasi...'
+                          : 'Evaluasi Semua Peserta'}
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-
-                {/* Visualisasi Recharts LOTS vs HOTS per Kelas */}
-                <ClassPerformanceLotsHotsChart
-                  classAnalytics={classAnalyticsData}
-                  questions={questions}
-                  exams={exams}
-                  selectedClassFilter={filterResultKelas}
-                  onSelectClass={(kls) => {
-                    setFilterResultTingkat('SEMUA');
-                    setFilterResultKelas(kls);
-                  }}
-                />
-              </>
             )}
+
+            {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Sub-Modul 5A-2 - Minimizable Independently) */}
+            <ClassPerformanceLotsHotsChart
+              classAnalytics={classAnalyticsData}
+              questions={questions}
+              exams={exams}
+              selectedClassFilter={filterResultKelas}
+              isMinimized={isReportLotsHotsMinimized}
+              onToggleMinimize={() => setIsReportLotsHotsMinimized((p) => !p)}
+              onSelectClass={(kls) => {
+                setFilterResultTingkat('SEMUA');
+                setFilterResultKelas(kls);
+              }}
+            />
 
             {/* Tabel Rekapitulasi Analisis & Download Per Kelas (Sub-Modul 5B) */}
             {!isReportClassTableMinimized && classAnalyticsData.perClass.length > 0 && (
