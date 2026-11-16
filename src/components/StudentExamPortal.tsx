@@ -1925,20 +1925,35 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           totalQuestions: examQuestions.length,
           pelanggaranTab: tabViolations,
           jawabanSiswa: outcome.canonicalAnswers || answers,
+          analisisAi: outcome.aiAnalysis || undefined,
           logs: finalLogs,
           submittedAt: new Date().toISOString(),
         };
         saveLocalReceipt(finalReceipt);
 
+        const finishedStudentState: StudentItem = {
+          ...activeStudent,
+          status_ujian: 'Selesai',
+        };
+        setActiveStudent(finishedStudentState);
+        if (loggedInAccount && Number(loggedInAccount.id) === Number(activeStudent.id)) {
+          const updatedAccount: StudentItem = {
+            ...loggedInAccount,
+            status_ujian: 'Selesai',
+          };
+          setLoggedInAccount(updatedAccount);
+          saveLoggedInStudentAccount(updatedAccount);
+        }
+
+        onExamCompleted();
         setSubmittedSummary({
           resultId: outcome.resultId,
           skor: outcome.skor,
           kategori: outcome.kategori,
           rawEarned: outcome.rawEarned,
           rawMax: outcome.rawMax,
-          aiResult: null,
+          aiResult: outcome.aiAnalysis || null,
         });
-        onExamCompleted();
       } finally {
         setIsSubmitting(false);
       }
@@ -1956,6 +1971,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       remainingSeconds,
       remainingMinSubmitLockSeconds,
       elapsedExamSeconds,
+      loggedInAccount,
     ]
   );
 

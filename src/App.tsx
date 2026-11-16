@@ -17,6 +17,8 @@ import {
   loadLocalCbtSnapshotCache,
   pushSnapshotToFirestoreClient,
   saveLocalCbtSnapshotCache,
+  reconcileFinishedStudentsWithResults,
+  syncDeltaFromPulseOnce,
   safeApiJson,
 } from './lib/cbtFirestoreService';
 import {
@@ -263,6 +265,74 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Ultra-low-quota real-time delta sync for Teacher Console & finished students:
+  // Checks ONLY 1 doc (`cbt_sync/live_state` = 1 Read) every 15s when teacher tab is visible.
+  // When a student finishes an exam (`[RES:id:STU:id]`), fetches ONLY those 2 docs (2 Reads total)
+  // so status 'Selesai' + skor_angka appear immediately in real-time without draining daily quota.
+  useEffect(() => {
+    if (isStudentInExam) return;
+
+    const hasFinishedStudentMissingResult = students.some(
+      (st) =>
+        st.status_ujian === 'Selesai' &&
+        !results.some((r) => Number(r.student_id) === Number(st.id))
+    );
+
+    if (portalView !== 'teacher' && !hasFinishedStudentMissingResult) return;
+
+    let isCancelled = false;
+    let isChecking = false;
+
+    const checkDeltaPulse = async () => {
+      if (isCancelled || isChecking) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
+      isChecking = true;
+      try {
+        const delta = await syncDeltaFromPulseOnce({
+          currentExams: exams,
+          currentStudents: students,
+          currentQuestions: questions,
+          currentResults: results,
+          lastSeenPulseAt: lastSeenSyncTimestamp.current,
+        });
+        if (!isCancelled && delta.changed) {
+          setExams(delta.exams);
+          setQuestions(delta.questions);
+          setStudents(delta.students);
+          setResults(delta.results);
+          if (delta.pulse) {
+            setSyncPulse(delta.pulse);
+            if (delta.pulse.lastSyncedAt) {
+              lastSeenSyncTimestamp.current = delta.pulse.lastSyncedAt;
+            }
+          }
+        }
+      } catch {
+        // Ignore transient network errors
+      } finally {
+        isChecking = false;
+      }
+    };
+
+    if (hasFinishedStudentMissingResult) {
+      checkDeltaPulse();
+    }
+
+    const intervalId = window.setInterval(checkDeltaPulse, 15000);
+    const handleWindowFocus = () => {
+      checkDeltaPulse();
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [portalView, isStudentInExam, exams, students, questions, results]);
+
   // Ensure only questions and results belonging to active exams & students are counted,
   // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula
   const activeQuestions = useMemo(() => {
@@ -271,11 +341,18 @@ export default function App() {
   }, [exams, questions]);
 
   const recalculatedBundle = useMemo(() => {
+    const reconciledResults = reconcileFinishedStudentsWithResults({
+      students,
+      results,
+      exams,
+      questions: activeQuestions,
+    });
+
     const activeExamIds = new Set(exams.map((e) => Number(e.id)));
     const studentById = new Map<number, StudentItem>();
     students.forEach((s) => studentById.set(Number(s.id), s));
 
-    const rawValidResults = results
+    const rawValidResults = reconciledResults
       .filter((r) => studentById.has(Number(r.student_id)))
       .map((r) => {
         if (activeExamIds.has(Number(r.exam_id))) return r;
