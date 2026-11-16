@@ -14,6 +14,7 @@ import {
 } from './lib/firebase';
 import {
   loadUnifiedDashboardData,
+  loadLocalCbtSnapshotCache,
   pushSnapshotToFirestoreClient,
   saveLocalCbtSnapshotCache,
   safeApiJson,
@@ -99,20 +100,70 @@ export default function App() {
   }, [portalView]);
 
   const [isStudentInExam, setIsStudentInExam] = useState(false);
-  const [exams, setExams] = useState<ExamItem[]>([]);
-  const [questions, setQuestions] = useState<QuestionItem[]>([]);
-  const [students, setStudents] = useState<StudentItem[]>([]);
-  const [results, setResults] = useState<ResultItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+
+  // Instant 0ms initial hydration from local snapshot cache so UI renders immediately without waiting
+  const initialCachedSnapshot = useMemo(() => loadLocalCbtSnapshotCache(), []);
+  const [exams, setExams] = useState<ExamItem[]>(
+    () => initialCachedSnapshot?.exams || []
+  );
+  const [questions, setQuestions] = useState<QuestionItem[]>(
+    () => initialCachedSnapshot?.questions || []
+  );
+  const [students, setStudents] = useState<StudentItem[]>(
+    () => initialCachedSnapshot?.students || []
+  );
+  const [results, setResults] = useState<ResultItem[]>(
+    () => initialCachedSnapshot?.results || []
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(
+    () =>
+      !initialCachedSnapshot ||
+      (initialCachedSnapshot.exams.length === 0 &&
+        initialCachedSnapshot.students.length === 0)
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [syncPulse, setSyncPulse] = useState<CbtSyncPulseData | null>(null);
   const [isSyncingFirebase, setIsSyncingFirebase] = useState(false);
   const lastSeenSyncTimestamp = useRef<string>('');
 
+  // Manual / explicit refresh (forces fresh pull from Firestore)
   const fetchDashboardData = useCallback(async () => {
     try {
       setLoadError(null);
-      const data = await loadUnifiedDashboardData({ preferLocalCache: false });
+      const data = await loadUnifiedDashboardData({
+        preferLocalCache: false,
+        checkPulseFirst: false,
+      });
+      setExams(data.exams || []);
+      setQuestions(data.questions || []);
+      setStudents(data.students || []);
+      setResults(data.results || []);
+      const pulse = await fetchCbtSyncPulseOnce();
+      if (pulse) {
+        setSyncPulse(pulse);
+        if (pulse.lastSyncedAt) {
+          lastSeenSyncTimestamp.current = pulse.lastSyncedAt;
+          try {
+            localStorage.setItem('cbt_last_synced_pulse_at', pulse.lastSyncedAt);
+          } catch {}
+        }
+      }
+    } catch (err: any) {
+      console.error('Error fetching dashboard data:', err);
+      setLoadError(err.message || 'Gagal memuat data CBT.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Fast pulse-checked initial load on mount (1 Read if unchanged, full pull only if changed)
+  const fetchInitialDashboardDataFast = useCallback(async () => {
+    try {
+      setLoadError(null);
+      const data = await loadUnifiedDashboardData({
+        preferLocalCache: false,
+        checkPulseFirst: true,
+      });
       setExams(data.exams || []);
       setQuestions(data.questions || []);
       setStudents(data.students || []);
@@ -125,12 +176,14 @@ export default function App() {
         }
       }
     } catch (err: any) {
-      console.error('Error fetching dashboard data:', err);
-      setLoadError(err.message || 'Gagal memuat data CBT.');
+      console.error('Error fetching initial dashboard data:', err);
+      if (exams.length === 0 && students.length === 0) {
+        setLoadError(err.message || 'Gagal memuat data CBT.');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [exams.length, students.length]);
 
   // Zero-Firestore-read state sync after local student exam start/submit/profile update or in-exam browser refresh
   const syncDashboardFromLocalCache = useCallback(async () => {
@@ -195,7 +248,7 @@ export default function App() {
     }
   }, [exams, students, questions, results, fetchDashboardData]);
 
-  // One-time load on mount (uses local cache if student refreshes browser mid-exam so 0 reads are consumed on refresh)
+  // One-time load on mount (uses 0-read local cache if student refreshes mid-exam, or fast pulse-checked load otherwise)
   useEffect(() => {
     try {
       const activeStudentSession = localStorage.getItem(
@@ -206,8 +259,9 @@ export default function App() {
         return;
       }
     } catch {}
-    fetchDashboardData();
-  }, [fetchDashboardData, syncDashboardFromLocalCache]);
+    fetchInitialDashboardDataFast();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Ensure only questions and results belonging to active exams & students are counted,
   // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula

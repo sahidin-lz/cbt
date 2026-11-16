@@ -21,6 +21,7 @@ import {
   markFirestoreQuotaExhausted,
   isFirestoreQuotaCooldownActive,
   saveCachedSyncPulseLocal,
+  fetchCbtSyncPulseOnce,
 } from './firebase';
 
 function cbtCollectionQuery(collectionName: 'exams' | 'students' | 'questions' | 'results') {
@@ -1060,22 +1061,52 @@ export async function pushSnapshotToFirestoreClient(
   }
 }
 
+const LAST_SYNCED_PULSE_KEY = 'cbt_last_synced_pulse_at';
+
 export async function loadUnifiedDashboardData(options?: {
   preferLocalCache?: boolean;
+  checkPulseFirst?: boolean;
 }): Promise<{
   exams: ExamItem[];
   students: StudentItem[];
   questions: QuestionItem[];
   results: ResultItem[];
 }> {
-  if (options?.preferLocalCache) {
-    const cached = loadLocalCbtSnapshotCache();
-    if (
-      cached &&
-      cached.exams.length > 0 &&
-      cached.students.length > 0
-    ) {
-      return cached;
+  const cached = loadLocalCbtSnapshotCache();
+  const hasValidCache =
+    Boolean(cached) &&
+    cached!.exams.length > 0 &&
+    cached!.students.length > 0;
+
+  if (options?.preferLocalCache && hasValidCache && cached) {
+    return cached;
+  }
+
+  // Tarikan data super cepat & hemat kuota: jika cache lokal sudah ada dan checkPulseFirst aktif,
+  // cek 1 dokumen ringan `cbt_sync/live_state` terlebih dahulu. Jika `lastSyncedAt` belum berubah,
+  // langsung gunakan cache lokal tanpa mengunduh seluruh koleksi (1 Read saja).
+  if (options?.checkPulseFirst && hasValidCache && cached) {
+    try {
+      const pulse = await fetchCbtSyncPulseOnce();
+      const savedPulseAt =
+        typeof window !== 'undefined' && window.localStorage
+          ? window.localStorage.getItem(LAST_SYNCED_PULSE_KEY)
+          : null;
+      if (
+        pulse?.lastSyncedAt &&
+        savedPulseAt &&
+        pulse.lastSyncedAt === savedPulseAt &&
+        (!pulse.totalResults || cached.results.length === pulse.totalResults) &&
+        (!pulse.totalExams || cached.exams.length === pulse.totalExams) &&
+        (!pulse.totalStudents || cached.students.length === pulse.totalStudents)
+      ) {
+        return cached;
+      }
+      if (pulse?.lastSyncedAt && typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(LAST_SYNCED_PULSE_KEY, pulse.lastSyncedAt);
+      }
+    } catch {
+      // Lanjut ke pembacaan koleksi jika gagal cek pulse
     }
   }
 

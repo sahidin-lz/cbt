@@ -2177,10 +2177,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const teacherSidebarMenus = [
     {
       id: 'ujian' as const,
-      matchIds: ['ujian', 'token_distribusi'],
+      matchIds: ['ujian'],
       num: '01',
-      title: 'Jadwal, Paket & Token',
-      subtitle: 'Paket Ujian, Token & Ganjil-Genap',
+      title: 'Jadwal & Paket Ujian',
+      subtitle: 'Kelola Paket, Mapel & Rombel',
       badge: `${exams.length} PKT`,
       icon: ClipboardList,
       activeClass:
@@ -2191,41 +2191,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       badgeIdle: 'bg-blue-50 text-blue-700 border border-blue-200/70',
     },
     {
-      id: 'soal' as const,
-      matchIds: ['soal'],
+      id: 'token_distribusi' as const,
+      matchIds: ['token_distribusi'],
       num: '02',
-      title: 'Bank Soal & Word',
-      subtitle: 'Soal, Rumus & Gambar',
-      badge: `${questions.length}`,
-      icon: FileSpreadsheet,
+      title: 'Token & Distribusi Paket',
+      subtitle: 'Token Sesi, Ganjil-Genap & Kartu',
+      badge: 'TOKEN',
+      icon: KeyRound,
       activeClass:
-        'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-500 shadow-xs ring-2 ring-amber-300/60',
-      iconBoxActive: 'bg-white/20 text-white',
-      iconBoxIdle: 'bg-amber-50 text-amber-600 border border-amber-200/70',
-      badgeActive: 'bg-white/20 text-white',
-      badgeIdle: 'bg-amber-50 text-amber-800 border border-amber-200/70',
-    },
-    {
-      id: 'siswa' as const,
-      matchIds: ['siswa'],
-      num: '03',
-      title: 'Database Siswa',
-      subtitle: 'Data Rombel & Kartu Akun',
-      badge: `${students.length}`,
-      icon: Users,
-      activeClass:
-        'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-xs ring-2 ring-emerald-300/60',
+        'bg-gradient-to-r from-rose-600 to-pink-600 text-white border-rose-500 shadow-xs ring-2 ring-rose-300/60',
       iconBoxActive: 'bg-white/20 text-amber-200',
-      iconBoxIdle: 'bg-emerald-50 text-emerald-600 border border-emerald-200/70',
+      iconBoxIdle: 'bg-rose-50 text-rose-600 border border-rose-200/70',
       badgeActive: 'bg-white/20 text-white',
-      badgeIdle: 'bg-emerald-50 text-emerald-800 border border-emerald-200/70',
+      badgeIdle: 'bg-rose-50 text-rose-800 border border-rose-200/70',
     },
     {
       id: 'manajemen' as const,
       matchIds: ['manajemen'],
-      num: '04',
+      num: '03',
       title: 'Live Monitor & Anti-Cheat',
-      subtitle: 'Radar Web & Log Pelanggaran',
+      subtitle: 'Radar Web, Blokir & Per Kelas',
       badge: activeStudentsCount > 0 ? `${activeStudentsCount} LIVE` : 'RADAR',
       icon: Layers,
       activeClass:
@@ -2239,11 +2224,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           : 'bg-indigo-600 text-white',
     },
     {
-      id: 'laporan' as const,
-      matchIds: ['laporan', 'anbuso'],
+      id: 'siswa' as const,
+      matchIds: ['siswa'],
+      num: '04',
+      title: 'Database Siswa & Rombel',
+      subtitle: 'Data Peserta & Kartu Login PDF',
+      badge: `${students.length}`,
+      icon: Users,
+      activeClass:
+        'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-xs ring-2 ring-emerald-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-200',
+      iconBoxIdle: 'bg-emerald-50 text-emerald-600 border border-emerald-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-emerald-50 text-emerald-800 border border-emerald-200/70',
+    },
+    {
+      id: 'soal' as const,
+      matchIds: ['soal'],
       num: '05',
-      title: 'Rekap Nilai & AnBuso',
-      subtitle: 'Nilai Humanis, AnBuso & PDF',
+      title: 'Bank Soal & Upload Word',
+      subtitle: 'Kelola Soal, Rumus & Gambar',
+      badge: `${questions.length}`,
+      icon: FileSpreadsheet,
+      activeClass:
+        'bg-gradient-to-r from-amber-500 to-orange-600 text-white border-amber-500 shadow-xs ring-2 ring-amber-300/60',
+      iconBoxActive: 'bg-white/20 text-white',
+      iconBoxIdle: 'bg-amber-50 text-amber-600 border border-amber-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-amber-50 text-amber-800 border border-amber-200/70',
+    },
+    {
+      id: 'laporan' as const,
+      matchIds: ['laporan'],
+      num: '06',
+      title: 'Laporan & Rekap Nilai',
+      subtitle: 'Nilai Humanis, LOTS/HOTS & PDF',
       badge: `${results.length}`,
       icon: Sparkles,
       activeClass:
@@ -2252,6 +2267,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       iconBoxIdle: 'bg-purple-50 text-purple-600 border border-purple-200/70',
       badgeActive: 'bg-white/20 text-white',
       badgeIdle: 'bg-purple-50 text-purple-800 border border-purple-200/70',
+    },
+    {
+      id: 'anbuso' as const,
+      matchIds: ['anbuso'],
+      num: '07',
+      title: 'Analisis AnBuso & Remedial',
+      subtitle: 'Daya Beda, Pengecoh & Remedial',
+      badge: 'ANBUSO',
+      icon: BarChart3,
+      activeClass:
+        'bg-gradient-to-r from-cyan-600 to-blue-700 text-white border-cyan-500 shadow-xs ring-2 ring-cyan-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-cyan-50 text-cyan-600 border border-cyan-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-cyan-50 text-cyan-800 border border-cyan-200/70',
     },
   ];
 
@@ -2280,7 +2310,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Menu Utama Guru
                   </div>
                   <div className="text-xs font-bold text-white truncate">
-                    5 Modul Terpadu CBT
+                    7 Menu Mandiri CBT
                   </div>
                 </div>
               )}
@@ -2648,47 +2678,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
       {/* ===================================================================== */}
-      {/* SUB-MENU NAVIGASI MODUL 01: JADWAL & PAKET UJIAN VS TOKEN & DISTRIBUSI */}
+      {/* KONTROL SUB-PANEL MENU 01: JADWAL & PAKET UJIAN                        */}
       {/* ===================================================================== */}
-      {(activeTab === 'ujian' || activeTab === 'token_distribusi') && (
-        <div className="bg-white border border-blue-200/80 rounded-2xl p-2 shadow-2xs flex flex-wrap items-center justify-between gap-2">
+      {activeTab === 'ujian' && (
+        <div className="bg-white border border-blue-200/80 rounded-2xl p-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2">
           {!isSubMenuBarMinimized ? (
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-extrabold text-blue-950 px-2">
+                Sub-Panel Menu 01 (Jadwal &amp; Paket Ujian):
+              </span>
               <button
                 type="button"
-                onClick={() => setActiveTab('ujian')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'ujian'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                onClick={() => setIsUjianFormMinimized((p) => !p)}
+                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isUjianFormMinimized
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                <ClipboardList className="w-4 h-4" />
-                <span>01A. Kelola Jadwal &amp; Paket Ujian ({exams.length})</span>
+                01-1. Form Paket Ujian {isUjianFormMinimized ? '(Tertutup)' : '(Terbuka)'}
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('token_distribusi')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'token_distribusi'
-                    ? 'bg-rose-600 text-white shadow-xs'
-                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                onClick={() => setIsUjianTableMinimized((p) => !p)}
+                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isUjianTableMinimized
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                <KeyRound className="w-4 h-4" />
-                <span>01B. Token Ujian, Distribusi Ganjil-Genap &amp; Cetak Kartu</span>
+                01-2. Tabel Distribusi Paket ({filteredExams.length}){' '}
+                {isUjianTableMinimized ? '(Tertutup)' : '(Terbuka)'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsUjianChartMinimized((p) => !p)}
+                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  !isUjianChartMinimized
+                    ? 'bg-teal-600 text-white border-teal-600'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                01-3. Visualisasi Performa Kelas: LOTS vs HOTS{' '}
+                {isUjianChartMinimized ? '(Tertutup)' : '(Terbuka)'}
               </button>
             </div>
           ) : (
             <span className="text-xs font-extrabold text-blue-950 px-2">
-              Sub-Menu Modul 01 (Diminimize):{' '}
-              {activeTab === 'ujian'
-                ? '01A. Kelola Jadwal & Paket Ujian'
-                : '01B. Token Ujian & Distribusi Ganjil-Genap'}
+              Sub-Panel Menu 01 (Jadwal &amp; Paket Ujian — Diminimize)
             </span>
           )}
           <div className="flex flex-wrap items-center gap-2">
-            {activeTab === 'ujian' && !isSubMenuBarMinimized && (
+            {!isSubMenuBarMinimized && (
               <button
                 type="button"
                 onClick={() => {
@@ -2721,12 +2762,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               type="button"
               onClick={() => setIsSubMenuBarMinimized((prev) => !prev)}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
-              title="Minimize / Buka Baris Sub-Menu"
+              title="Minimize / Buka Baris Kontrol Sub-Panel"
             >
               {isSubMenuBarMinimized ? (
                 <>
                   <ChevronDown className="w-3.5 h-3.5" />
-                  <span>Buka Sub-Menu</span>
+                  <span>Buka Sub-Panel</span>
                 </>
               ) : (
                 <>
@@ -6681,48 +6722,84 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* SUB-MENU NAVIGASI MODUL 05: REKAP NILAI HUMANIS VS ANALISIS ANBUSO     */}
+      {/* KONTROL SUB-PANEL MENU 06: LAPORAN & REKAP NILAI KELAS                 */}
       {/* ===================================================================== */}
-      {(activeTab === 'laporan' || activeTab === 'anbuso') && (
+      {activeTab === 'laporan' && (
         <div className="bg-white border border-purple-200/80 rounded-2xl p-2.5 shadow-2xs space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             {!isSubMenuBarMinimized ? (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-extrabold text-purple-950 mr-1 px-1">
+                  Sub-Panel Menu 06 (Laporan &amp; Rekap Nilai):
+                </span>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('laporan')}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                    activeTab === 'laporan'
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                  onClick={() => setIsReportSummaryMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                    !isReportSummaryMinimized
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>05A. Rekap Nilai, Analisis Per Kelas &amp; Per Soal ({results.length})</span>
+                  6A. Statistik Sekolah{' '}
+                  {isReportSummaryMinimized ? '(Tertutup)' : '(Terbuka)'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('anbuso')}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 cursor-pointer ${
-                    activeTab === 'anbuso'
-                      ? 'bg-cyan-600 text-white shadow-xs'
-                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                  onClick={() => setIsReportLotsHotsMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                    !isReportLotsHotsMinimized
+                      ? 'bg-teal-600 text-white border-teal-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
-                  <BarChart3 className="w-4 h-4" />
-                  <span>05B. Laboratorium AnBuso, Daya Beda &amp; Remedial</span>
+                  6B. Visualisasi Performa Kelas: LOTS vs HOTS{' '}
+                  {isReportLotsHotsMinimized ? '(Tertutup)' : '(Terbuka)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsReportClassTableMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                    !isReportClassTableMinimized
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  6C. Rekapitulasi Per Kelas ({classAnalyticsData.perClass.length}){' '}
+                  {isReportClassTableMinimized ? '(Tertutup)' : '(Terbuka)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsReportQuestionPanelMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                    !isReportQuestionPanelMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  6D. Analisis Per Kelas &amp; Per Soal{' '}
+                  {isReportQuestionPanelMinimized ? '(Tertutup)' : '(Terbuka)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsReportStudentListMinimized((p) => !p)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                    !isReportStudentListMinimized
+                      ? 'bg-purple-600 text-white border-purple-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  6E. Daftar Nilai &amp; Evaluasi Siswa ({filteredResults.length}){' '}
+                  {isReportStudentListMinimized ? '(Tertutup)' : '(Terbuka)'}
                 </button>
               </div>
             ) : (
               <span className="text-xs font-extrabold text-purple-950 px-2">
-                Sub-Menu Modul 05 (Diminimize):{' '}
-                {activeTab === 'laporan'
-                  ? '05A. Rekap Nilai, Analisis Per Kelas & Per Soal'
-                  : '05B. Laboratorium AnBuso & Remedial'}
+                Sub-Panel Menu 06 (Laporan &amp; Rekap Nilai — Diminimize)
               </span>
             )}
             <div className="flex items-center gap-2">
-              {activeTab === 'laporan' && !isSubMenuBarMinimized && (
+              {!isSubMenuBarMinimized && (
                 <button
                   type="button"
                   onClick={() => {
@@ -6765,86 +6842,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isSubMenuBarMinimized ? (
                   <>
                     <ChevronDown className="w-3.5 h-3.5" />
-                    <span>Buka Sub-Menu</span>
+                    <span>Buka Sub-Panel</span>
                   </>
                 ) : (
                   <>
                     <ChevronUp className="w-3.5 h-3.5" />
-                    <span>Minimize Sub-Menu</span>
+                    <span>Minimize</span>
                   </>
                 )}
               </button>
             </div>
           </div>
-
-          {/* Sub-Sub-Menu Quick Toggles for Laporan Sections */}
-          {activeTab === 'laporan' && !isSubMenuBarMinimized && (
-            <div className="pt-2 border-t border-purple-100 flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-bold text-slate-500 mr-1">
-                Tampilkan / Minimize Sub-Bagian Laporan:
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsReportSummaryMinimized((p) => !p)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                  !isReportSummaryMinimized
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                5A-1. Statistik Sekolah{' '}
-                {isReportSummaryMinimized ? '(Tertutup)' : '(Terbuka)'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsReportLotsHotsMinimized((p) => !p)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                  !isReportLotsHotsMinimized
-                    ? 'bg-teal-600 text-white border-teal-600'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                5A-2. Visualisasi Performa Kelas: LOTS vs HOTS{' '}
-                {isReportLotsHotsMinimized ? '(Tertutup)' : '(Terbuka)'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsReportClassTableMinimized((p) => !p)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                  !isReportClassTableMinimized
-                    ? 'bg-blue-600 text-white border-blue-600'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                5B. Rekapitulasi Per Kelas ({classAnalyticsData.perClass.length}){' '}
-                {isReportClassTableMinimized ? '(Tertutup)' : '(Terbuka)'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsReportQuestionPanelMinimized((p) => !p)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                  !isReportQuestionPanelMinimized
-                    ? 'bg-emerald-600 text-white border-emerald-600'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                5C. Analisis Per Kelas &amp; Per Soal{' '}
-                {isReportQuestionPanelMinimized ? '(Tertutup)' : '(Terbuka)'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsReportStudentListMinimized((p) => !p)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                  !isReportStudentListMinimized
-                    ? 'bg-purple-600 text-white border-purple-600'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                5D. Daftar Nilai &amp; Evaluasi Siswa ({filteredResults.length}){' '}
-                {isReportStudentListMinimized ? '(Tertutup)' : '(Terbuka)'}
-              </button>
-            </div>
-          )}
         </div>
       )}
 
