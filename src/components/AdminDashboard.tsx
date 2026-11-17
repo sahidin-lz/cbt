@@ -68,6 +68,8 @@ import {
   downloadStudentTokenCardsPdf,
   downloadSingleStudentResultPdf,
   resolveStudentPrecisionRecord,
+  formatExamAttemptTimeShort,
+  formatExamAttemptTimeFull,
 } from '../utils/cbtPdfGenerator';
 import {
   auth,
@@ -229,31 +231,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch {}
   }, [isSidebarMinimized]);
 
-  // Collapsible / Minimizable Sub-Menus & Sub-Panels States
+  // Exclusive sub-tab states: only 1 sub-tab is visible at a time per menu
   const [isTopMetricsMinimized, setIsTopMetricsMinimized] =
     useState<boolean>(false);
   const [isSubMenuBarMinimized, setIsSubMenuBarMinimized] =
     useState<boolean>(false);
   const [isReportSummaryMinimized, setIsReportSummaryMinimized] =
-    useState<boolean>(false);
+    useState<boolean>(true);
   const [isReportLotsHotsMinimized, setIsReportLotsHotsMinimized] =
-    useState<boolean>(false);
+    useState<boolean>(true);
   const [isReportClassTableMinimized, setIsReportClassTableMinimized] =
-    useState<boolean>(false);
+    useState<boolean>(true);
   const [isReportQuestionPanelMinimized, setIsReportQuestionPanelMinimized] =
-    useState<boolean>(false);
+    useState<boolean>(true);
   const [isReportStudentListMinimized, setIsReportStudentListMinimized] =
     useState<boolean>(false);
 
-  // Sub-panel minimize states for Modul 01A (ujian), Modul 02 (soal), and Modul 03 (siswa)
-  const [isUjianFormMinimized, setIsUjianFormMinimized] = useState<boolean>(false);
+  // Sub-panel exclusive tab states for Modul 01A (ujian) and Modul 03 (siswa)
+  const [isUjianFormMinimized, setIsUjianFormMinimized] = useState<boolean>(true);
   const [isUjianTableMinimized, setIsUjianTableMinimized] = useState<boolean>(false);
-  const [isUjianChartMinimized, setIsUjianChartMinimized] = useState<boolean>(false);
+  const [isUjianChartMinimized, setIsUjianChartMinimized] = useState<boolean>(true);
   const [isSiswaClassPanelMinimized, setIsSiswaClassPanelMinimized] =
-    useState<boolean>(false);
+    useState<boolean>(true);
   const [isSiswaStatusPanelMinimized, setIsSiswaStatusPanelMinimized] =
-    useState<boolean>(false);
-  const [isSiswaFormMinimized, setIsSiswaFormMinimized] = useState<boolean>(false);
+    useState<boolean>(true);
+  const [isSiswaFormMinimized, setIsSiswaFormMinimized] = useState<boolean>(true);
   const [isSiswaTableMinimized, setIsSiswaTableMinimized] = useState<boolean>(false);
 
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
@@ -773,6 +775,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setNewExamPengumuman('');
       }
       await onRefreshData();
+      setIsUjianFormMinimized(true);
+      setIsUjianTableMinimized(false);
+      setIsUjianChartMinimized(true);
     } finally {
       setIsSavingExam(false);
     }
@@ -1747,12 +1752,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             exams,
             questions,
             results,
+            preferredExamId: resItem.exam_id,
           })
         : null;
       const ai = resItem.analisis_ai;
       const ketuntasan =
         resItem.skor_angka >= 70 ? 'Tuntas (>=70)' : 'Belum Tuntas (<70)';
-      const kategori =
+      const baseKategori =
         ai?.kategori_nilai ||
         (resItem.skor_angka >= 85
           ? 'Sangat Baik (A)'
@@ -1761,6 +1767,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             : resItem.skor_angka >= 55
               ? 'Cukup (C)'
               : 'Perlu Bimbingan (D)');
+
+      const matchedAttemptInfo = rec?.attemptHistory.find(
+        (a) => Number(a.id) === Number(resItem.id)
+      );
+      const waktuUjianText = formatExamAttemptTimeFull(resItem.created_at);
+      const kategori =
+        rec && rec.hasRetakeHistory
+          ? `${matchedAttemptInfo?.attemptLabel || 'Ujian'} [${waktuUjianText}] · ${baseKategori} (Sebelum [${rec.initialTimeShort}]: ${rec.initialScore} -> Sesudah [${rec.retakeTimeShort}]: ${rec.retakeScore})`
+          : `${baseKategori} [Waktu: ${waktuUjianText}]`;
+
       const ringkasanJawaban = Object.entries(resItem.jawaban_siswa || {})
         .map(([qId, keys]) => `#${qId}:${(keys || []).join('')}`)
         .join(' ');
@@ -1784,7 +1800,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         kodePaket,
         ex?.judul_ujian || rec?.namaPaketSoal || `Ujian #${resItem.exam_id}`,
         tokenUjianSesi,
-        resItem.skor_angka,
+        rec && rec.hasRetakeHistory
+          ? `${resItem.skor_angka} (Awal: ${rec.initialScore} -> Ulang: ${rec.retakeScore})`
+          : resItem.skor_angka,
         kategori,
         ketuntasan,
         `${resItem.pelanggaran_tab || 0}x Pindah Tab`,
@@ -2678,96 +2696,80 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
       {/* ===================================================================== */}
-      {/* KONTROL SUB-PANEL MENU 01: JADWAL & PAKET UJIAN                        */}
+      {/* KONTROL SUB-TAB EKSKLUSIF MENU 01: JADWAL & PAKET UJIAN                */}
       {/* ===================================================================== */}
       {activeTab === 'ujian' && (
         <div className="bg-white border border-blue-200/80 rounded-2xl p-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2">
           {!isSubMenuBarMinimized ? (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-extrabold text-blue-950 px-2">
-                Sub-Panel Menu 01 (Jadwal &amp; Paket Ujian):
+                Sub-Tab Jadwal &amp; Paket Ujian:
               </span>
               <button
                 type="button"
-                onClick={() => setIsUjianFormMinimized((p) => !p)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                  !isUjianFormMinimized
-                    ? 'bg-blue-600 text-white border-blue-600'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                01-1. Form Paket Ujian {isUjianFormMinimized ? '(Tertutup)' : '(Terbuka)'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsUjianTableMinimized((p) => !p)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                onClick={() => {
+                  setIsUjianTableMinimized(false);
+                  setIsUjianFormMinimized(true);
+                  setIsUjianChartMinimized(true);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
                   !isUjianTableMinimized
-                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                01-2. Tabel Distribusi Paket ({filteredExams.length}){' '}
-                {isUjianTableMinimized ? '(Tertutup)' : '(Terbuka)'}
+                01-1. Tabel Distribusi Paket ({filteredExams.length})
               </button>
               <button
                 type="button"
-                onClick={() => setIsUjianChartMinimized((p) => !p)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                  !isUjianChartMinimized
-                    ? 'bg-teal-600 text-white border-teal-600'
+                onClick={() => {
+                  setIsUjianTableMinimized(true);
+                  setIsUjianFormMinimized(false);
+                  setIsUjianChartMinimized(true);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
+                  !isUjianFormMinimized
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                01-3. Visualisasi Performa Kelas: LOTS vs HOTS{' '}
-                {isUjianChartMinimized ? '(Tertutup)' : '(Terbuka)'}
+                01-2. {editingExamId ? 'Edit Paket Ujian' : 'Form Buat Paket Ujian'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsUjianTableMinimized(true);
+                  setIsUjianFormMinimized(true);
+                  setIsUjianChartMinimized(false);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
+                  !isUjianChartMinimized
+                    ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                01-3. Visualisasi Performa Kelas: LOTS vs HOTS
               </button>
             </div>
           ) : (
             <span className="text-xs font-extrabold text-blue-950 px-2">
-              Sub-Panel Menu 01 (Jadwal &amp; Paket Ujian — Diminimize)
+              Sub-Tab Menu 01 Jadwal &amp; Paket Ujian
             </span>
           )}
           <div className="flex flex-wrap items-center gap-2">
-            {!isSubMenuBarMinimized && (
-              <button
-                type="button"
-                onClick={() => {
-                  const anyOpen =
-                    !isUjianFormMinimized ||
-                    !isUjianTableMinimized ||
-                    !isUjianChartMinimized;
-                  setIsUjianFormMinimized(anyOpen);
-                  setIsUjianTableMinimized(anyOpen);
-                  setIsUjianChartMinimized(anyOpen);
-                }}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 cursor-pointer"
-              >
-                {!isUjianFormMinimized ||
-                !isUjianTableMinimized ||
-                !isUjianChartMinimized ? (
-                  <>
-                    <Minimize2 className="w-3 h-3" />
-                    <span>Minimize Semua Sub-Panel</span>
-                  </>
-                ) : (
-                  <>
-                    <Maximize2 className="w-3 h-3" />
-                    <span>Buka Semua Sub-Panel</span>
-                  </>
-                )}
-              </button>
-            )}
+            <span className="hidden sm:inline text-[11px] font-semibold text-slate-500">
+              Mode Tab Terpisah (1 tampilan aktif)
+            </span>
             <button
               type="button"
               onClick={() => setIsSubMenuBarMinimized((prev) => !prev)}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
-              title="Minimize / Buka Baris Kontrol Sub-Panel"
+              title="Minimize / Buka Baris Kontrol Sub-Tab"
             >
               {isSubMenuBarMinimized ? (
                 <>
                   <ChevronDown className="w-3.5 h-3.5" />
-                  <span>Buka Sub-Panel</span>
+                  <span>Buka Sub-Tab</span>
                 </>
               ) : (
                 <>
@@ -2785,7 +2787,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ===================================================================== */}
       {activeTab === 'ujian' && (
         <div className="space-y-6">
-          {/* Panduan Alur Distribusi Soal 3 Tingkatan */}
+          {/* Panduan Alur Distribusi Soal 3 Tingkatan — hanya tampil di sub-tab Form Paket */}
+          {!isUjianFormMinimized && (
           <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2 text-xs font-bold text-blue-700">
@@ -2800,18 +2803,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </p>
             </div>
           </div>
+          )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Form Buat / Edit Paket Ujian & Distribusi Tingkat (Minimizable) */}
-            <div
-              className={`${
-                isUjianFormMinimized
-                  ? 'lg:col-span-12'
-                  : isUjianTableMinimized
-                    ? 'lg:col-span-12'
-                    : 'lg:col-span-4'
-              } bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all`}
-            >
+          {/* Form Buat / Edit Paket Ujian & Distribusi Tingkat (Eksklusif Sub-Tab 01-2) */}
+          {!isUjianFormMinimized && (
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-base font-bold text-slate-900">
                   {editingExamId
@@ -3285,14 +3281,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {examFeedback}
                 </div>
               )}
-            </div>
+          </div>
+          )}
 
-            {/* Tabel Daftar Paket Ujian per Tingkatan (Minimizable) */}
-            <div
-              className={`${
-                isUjianFormMinimized ? 'lg:col-span-12' : 'lg:col-span-8'
-              } bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs transition-all`}
-            >
+          {/* Tabel Daftar Paket Ujian per Tingkatan (Eksklusif Sub-Tab 01-1) */}
+          {!isUjianTableMinimized && (
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs transition-all">
               <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
@@ -3635,6 +3629,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   type="button"
                                   onClick={() => {
                                     setEditingExamId(ex.id);
+                                    setIsUjianFormMinimized(false);
+                                    setIsUjianTableMinimized(true);
+                                    setIsUjianChartMinimized(true);
                                     setNewExamTitle(ex.judul_ujian);
                                     setNewExamDuration(String(ex.durasi_menit));
                                     setNewExamTargetTingkat(
@@ -3696,52 +3693,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
                 </>
               )}
-            </div>
           </div>
+          )}
 
-          {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Minimizable) */}
+          {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Eksklusif Sub-Tab 01-3) */}
+          {!isUjianChartMinimized && (
           <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
             <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
               <span className="text-xs font-extrabold text-slate-800">
                 Sub-Panel 01A-3 · Visualisasi Performa Kelas (Komparasi LOTS vs HOTS)
               </span>
-              <button
-                type="button"
-                onClick={() => setIsUjianChartMinimized((p) => !p)}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-xs font-bold text-slate-700 cursor-pointer"
-              >
-                {isUjianChartMinimized ? (
-                  <>
-                    <ChevronDown className="w-3.5 h-3.5" />
-                    <span>Buka Grafik Kelas</span>
-                  </>
-                ) : (
-                  <>
-                    <ChevronUp className="w-3.5 h-3.5" />
-                    <span>Minimize Grafik</span>
-                  </>
-                )}
-              </button>
             </div>
-            {!isUjianChartMinimized && (
-              <div className="p-4">
-                <ClassPerformanceLotsHotsChart
-                  classAnalytics={classAnalyticsData}
-                  questions={questions}
-                  exams={exams}
-                  selectedClassFilter={filterResultKelas}
-                  isMinimized={isUjianChartMinimized}
-                  onToggleMinimize={() => setIsUjianChartMinimized((p) => !p)}
-                  onSelectClass={(kls) => {
-                    setFilterResultKelas(kls);
-                    if (kls !== 'SEMUA') {
-                      setActiveTab('laporan');
-                    }
-                  }}
-                />
-              </div>
-            )}
+            <div className="p-4">
+              <ClassPerformanceLotsHotsChart
+                classAnalytics={classAnalyticsData}
+                questions={questions}
+                exams={exams}
+                selectedClassFilter={filterResultKelas}
+                isMinimized={false}
+                onToggleMinimize={() => {
+                  setIsUjianChartMinimized(true);
+                  setIsUjianTableMinimized(false);
+                }}
+                onSelectClass={(kls) => {
+                  setFilterResultKelas(kls);
+                  if (kls !== 'SEMUA') {
+                    setActiveTab('laporan');
+                  }
+                }}
+              />
+            </div>
           </div>
+          )}
         </div>
       )}
 
@@ -3765,97 +3748,88 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ===================================================================== */}
       {activeTab === 'siswa' && (
         <div className="space-y-6">
-          {/* Sub-Menu Kontrol Cepat Modul 03 (Minimize / Buka Sub-Panel Database Siswa) */}
+          {/* Sub-Tab Eksklusif Modul 03 (Hanya 1 sub-tab terbuka agar halaman tidak memanjang) */}
           <div className="bg-white border border-emerald-200/80 rounded-2xl px-4 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs">
             {!isSubMenuBarMinimized ? (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="font-extrabold text-emerald-950 mr-1">
-                  Sub-Panel Modul 03:
+                  Sub-Tab Database Siswa:
                 </span>
                 <button
                   type="button"
-                  onClick={() => setIsSiswaClassPanelMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
-                    !isSiswaClassPanelMinimized
-                      ? 'bg-emerald-600 text-white border-emerald-600'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  03A. Manajemen Rombel {isSiswaClassPanelMinimized ? '(Diminimize)' : '✓'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsSiswaStatusPanelMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
-                    !isSiswaStatusPanelMinimized
-                      ? 'bg-emerald-600 text-white border-emerald-600'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  03B. Status &amp; Kartu Token {isSiswaStatusPanelMinimized ? '(Diminimize)' : '✓'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsSiswaFormMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
-                    !isSiswaFormMinimized
-                      ? 'bg-emerald-600 text-white border-emerald-600'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  03C. Form Input/Upload Siswa {isSiswaFormMinimized ? '(Diminimize)' : '✓'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsSiswaTableMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+                  onClick={() => {
+                    setIsSiswaTableMinimized(false);
+                    setIsSiswaFormMinimized(true);
+                    setIsSiswaStatusPanelMinimized(true);
+                    setIsSiswaClassPanelMinimized(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold border transition-all cursor-pointer ${
                     !isSiswaTableMinimized
-                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
                       : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
-                  03D. Tabel Database Siswa {isSiswaTableMinimized ? '(Diminimize)' : '✓'}
+                  03A. Tabel Database Siswa ({filteredStudents.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSiswaTableMinimized(true);
+                    setIsSiswaFormMinimized(false);
+                    setIsSiswaStatusPanelMinimized(true);
+                    setIsSiswaClassPanelMinimized(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold border transition-all cursor-pointer ${
+                    !isSiswaFormMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  03B. Form Input/Upload Siswa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSiswaTableMinimized(true);
+                    setIsSiswaFormMinimized(true);
+                    setIsSiswaStatusPanelMinimized(false);
+                    setIsSiswaClassPanelMinimized(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold border transition-all cursor-pointer ${
+                    !isSiswaStatusPanelMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  03C. Status &amp; Kartu Token
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSiswaTableMinimized(true);
+                    setIsSiswaFormMinimized(true);
+                    setIsSiswaStatusPanelMinimized(true);
+                    setIsSiswaClassPanelMinimized(false);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold border transition-all cursor-pointer ${
+                    !isSiswaClassPanelMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  03D. Manajemen Rombel ({classAnalyticsData.perClass.length})
                 </button>
               </div>
             ) : (
               <span className="text-xs font-extrabold text-emerald-950">
-                Sub-Menu Modul 03 Database Siswa (Diminimize)
+                Sub-Tab Modul 03 Database Siswa
               </span>
             )}
 
             <div className="flex items-center gap-2">
-              {!isSubMenuBarMinimized && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const anyOpen =
-                      !isSiswaClassPanelMinimized ||
-                      !isSiswaStatusPanelMinimized ||
-                      !isSiswaFormMinimized ||
-                      !isSiswaTableMinimized;
-                    setIsSiswaClassPanelMinimized(anyOpen);
-                    setIsSiswaStatusPanelMinimized(anyOpen);
-                    setIsSiswaFormMinimized(anyOpen);
-                    setIsSiswaTableMinimized(anyOpen);
-                  }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 cursor-pointer"
-                >
-                  {!isSiswaClassPanelMinimized ||
-                  !isSiswaStatusPanelMinimized ||
-                  !isSiswaFormMinimized ||
-                  !isSiswaTableMinimized ? (
-                    <>
-                      <Minimize2 className="w-3 h-3" />
-                      <span>Minimize Semua Sub-Panel</span>
-                    </>
-                  ) : (
-                    <>
-                      <Maximize2 className="w-3 h-3" />
-                      <span>Buka Semua Sub-Panel</span>
-                    </>
-                  )}
-                </button>
-              )}
+              <span className="hidden sm:inline text-[11px] font-semibold text-slate-500">
+                Mode Tab Terpisah (1 tampilan aktif)
+              </span>
               <button
                 type="button"
                 onClick={() => setIsSubMenuBarMinimized((p) => !p)}
@@ -3864,7 +3838,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isSubMenuBarMinimized ? (
                   <>
                     <ChevronDown className="w-3.5 h-3.5" />
-                    <span>Buka Sub-Menu</span>
+                    <span>Buka Sub-Tab</span>
                   </>
                 ) : (
                   <>
@@ -3876,7 +3850,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Panel Manajemen Kelas / Rombel (Minimizable 03A) */}
+          {/* Panel Manajemen Kelas / Rombel (Eksklusif Sub-Tab 03D) */}
+          {!isSiswaClassPanelMinimized && (
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
@@ -4090,8 +4065,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
             )}
           </div>
+          )}
 
-          {/* Baris Ringkasan & Manajemen Status Ujian Siswa (Minimizable 03B) */}
+          {/* Baris Ringkasan & Manajemen Status Ujian Siswa (Eksklusif Sub-Tab 03C) */}
+          {!isSiswaStatusPanelMinimized && (
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -4249,18 +4226,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </>
             )}
           </div>
+          )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Panel Kiri: Switcher Tambah 1 Siswa vs Upload Massal Siswa Excel/CSV (Minimizable 03C) */}
-            <div
-              className={`${
-                isSiswaFormMinimized
-                  ? 'lg:col-span-12'
-                  : isSiswaTableMinimized
-                    ? 'lg:col-span-12'
-                    : 'lg:col-span-5'
-              } bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all`}
-            >
+          {/* Switcher Tambah 1 Siswa vs Upload Massal Siswa Excel/CSV (Eksklusif Sub-Tab 03B) */}
+          {!isSiswaFormMinimized && (
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-800">
                   Sub-Panel 03C · Input &amp; Upload Siswa
@@ -4571,14 +4541,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
                 </>
               )}
-            </div>
+          </div>
+          )}
 
-            {/* Tabel Database Siswa (Minimizable 03D) */}
-            <div
-              className={`${
-                isSiswaFormMinimized ? 'lg:col-span-12' : 'lg:col-span-7'
-              } bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs transition-all`}
-            >
+          {/* Tabel Database Siswa (Eksklusif Sub-Tab 03A) */}
+          {!isSiswaTableMinimized && (
+          <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs transition-all">
               <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
@@ -4824,11 +4792,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <span className="text-[11px] font-semibold text-slate-700 truncate max-w-[190px]" title={`${rec.namaPaketSoal} (${rec.mataPelajaran})`}>
                                   {rec.namaPaketSoal} ({rec.mataPelajaran})
                                 </span>
-                                {rec.score !== null && (
-                                  <span className="text-[10px] font-mono font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
-                                    Nilai: {rec.score}/100 ({rec.predikatLabel})
-                                  </span>
-                                )}
+                                {rec.hasRetakeHistory &&
+                                rec.initialScore !== null &&
+                                rec.retakeScore !== null ? (
+                                  <div className="flex flex-col gap-0.5 mt-0.5 p-1.5 rounded-md bg-indigo-50/80 border border-indigo-200 text-[10px] font-mono">
+                                    <span className="font-bold text-slate-700">
+                                      Sebelum ({rec.initialTimeShort}):{' '}
+                                      <strong className="text-indigo-900">
+                                        {rec.initialScore}/100
+                                      </strong>
+                                    </span>
+                                    <span className="font-extrabold text-emerald-800">
+                                      Sesudah ({rec.retakeTimeShort}):{' '}
+                                      <strong className="text-emerald-900">
+                                        {rec.retakeScore}/100 ({rec.predikatLabel})
+                                      </strong>
+                                    </span>
+                                  </div>
+                                ) : rec.score !== null ? (
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="text-[10px] font-mono font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded w-fit">
+                                      Nilai: {rec.score}/100 ({rec.predikatLabel}) ·{' '}
+                                      {rec.initialTimeShort}
+                                    </span>
+                                    {rec.isRescheduledRetakePending && (
+                                      <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded w-fit">
+                                        Dijadwalkan Ulang (Nilai Awal Tersimpan)
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : null}
                               </div>
                             </td>
                             <td className="py-3 px-3.5">
@@ -4895,16 +4888,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   {(isFinished || isOngoing) && (
                                     <button
                                       type="button"
+                                      title="Jadwalkan Ulang / Ujian Ulang (Nilai pertama tetap tersimpan, nilai ujian ulang akan ditambahkan berdasarkan waktu ujian)"
                                       onClick={() =>
                                         handleUpdateStudentStatus(
                                           st,
                                           'Belum Mulai'
                                         )
                                       }
-                                      className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                                      className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded cursor-pointer"
                                     >
                                       <RotateCcw className="w-3 h-3" />
-                                      Reset
+                                      {isFinished ? 'Jadwalkan Ulang' : 'Reset'}
                                     </button>
                                   )}
                                 </div>
@@ -4960,6 +4954,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   type="button"
                                   onClick={() => {
                                     setStudentInputMode('manual');
+                                    setIsSiswaFormMinimized(false);
+                                    setIsSiswaTableMinimized(true);
+                                    setIsSiswaStatusPanelMinimized(true);
+                                    setIsSiswaClassPanelMinimized(true);
                                     setEditingStudentId(st.id);
                                     setStudentNameInput(st.nama);
                                     setStudentClassInput(st.kelas);
@@ -4992,8 +4990,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
                 </>
               )}
-            </div>
           </div>
+          )}
         </div>
       )}
 
@@ -5002,14 +5000,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ===================================================================== */}
       {activeTab === 'soal' && (
         <div className="space-y-6">
-          {/* Sub-Menu Navigasi Modul 02 Bank Soal (Minimizable) */}
+          {/* Sub-Tab Eksklusif Modul 02 Bank Soal (Hanya tampil 1 sub-tab aktif) */}
           <div className="bg-white border border-amber-200/80 rounded-2xl px-4 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs">
             {!isSubMenuBarMinimized ? (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-extrabold text-amber-950 mr-1">
+                  Sub-Tab Bank Soal:
+                </span>
                 <button
                   type="button"
-                  onClick={() => setIsBankSoalDetailOpen(false)}
-                  className={`px-3.5 py-2 rounded-xl font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  onClick={() => {
+                    setIsBankSoalDetailOpen(false);
+                    setShowUploadPanel(false);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
                     !isBankSoalDetailOpen
                       ? 'bg-amber-500 text-slate-950 shadow-2xs'
                       : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
@@ -5020,27 +5024,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsBankSoalDetailOpen(true)}
-                  className={`px-3.5 py-2 rounded-xl font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
-                    isBankSoalDetailOpen
+                  onClick={() => {
+                    setIsBankSoalDetailOpen(true);
+                    setShowUploadPanel(false);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isBankSoalDetailOpen && !showUploadPanel
                       ? 'bg-indigo-600 text-white shadow-2xs'
                       : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
                   }`}
                 >
                   <BookOpen className="w-3.5 h-3.5" />
                   <span>
-                    02B. Kelola &amp; Upload Butir Soal Paket Aktif ({currentExamQuestions.length} Soal)
+                    02B. Daftar Butir Soal Paket Aktif ({currentExamQuestions.length} Soal)
                   </span>
                 </button>
-                {isBankSoalDetailOpen && (
-                  <button
-                    type="button"
-                    onClick={() => setShowUploadPanel((p) => !p)}
-                    className="px-3 py-1.5 rounded-xl font-bold bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 cursor-pointer"
-                  >
-                    {showUploadPanel ? 'Minimize Form Upload/Input Soal' : 'Buka Form Upload/Input Soal'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBankSoalDetailOpen(true);
+                    setShowUploadPanel(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isBankSoalDetailOpen && showUploadPanel
+                      ? 'bg-blue-600 text-white shadow-2xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  }`}
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>02C. Form Upload / Input Soal</span>
+                </button>
               </div>
             ) : (
               <span className="text-xs font-extrabold text-amber-950">
@@ -5532,10 +5545,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                {/* Left 5 Cols: Input Soal Manual atau Upload Word/Excel/CSV */}
+              <div className="space-y-6">
+                {/* Form Input Soal Manual atau Upload Word/Excel/CSV (Eksklusif Sub-Tab 02C) */}
                 {showUploadPanel && (
-                  <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                  <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
                     <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                       <div className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                         <Upload className="w-4 h-4 text-blue-600" />
@@ -6030,12 +6043,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
 
-          {/* Right Column: Manajemen & Tinjauan Soal Terstruktur pada Paket Ujian Terpilih */}
-          <div
-            className={`${
-              showUploadPanel ? 'lg:col-span-7' : 'lg:col-span-12'
-            } bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all duration-200`}
-          >
+          {/* Daftar Butir Soal Terstruktur (Eksklusif Sub-Tab 02B) */}
+          {!showUploadPanel && (
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all duration-200">
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 -mx-6 -mt-6 px-6 py-4 text-white rounded-t-xl space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -6715,6 +6725,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               })()
             )}
           </div>
+          )}
               </div>
             </div>
           )}
@@ -6722,7 +6733,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* KONTROL SUB-PANEL MENU 06: LAPORAN & REKAP NILAI KELAS                 */}
+      {/* KONTROL SUB-TAB EKSKLUSIF MENU 06: LAPORAN & REKAP NILAI KELAS         */}
       {/* ===================================================================== */}
       {activeTab === 'laporan' && (
         <div className="bg-white border border-purple-200/80 rounded-2xl p-2.5 shadow-2xs space-y-2">
@@ -6730,110 +6741,103 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {!isSubMenuBarMinimized ? (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-[11px] font-extrabold text-purple-950 mr-1 px-1">
-                  Sub-Panel Menu 06 (Laporan &amp; Rekap Nilai):
+                  Sub-Tab Laporan &amp; Rekap Nilai:
                 </span>
                 <button
                   type="button"
-                  onClick={() => setIsReportSummaryMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                    !isReportSummaryMinimized
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  6A. Statistik Sekolah{' '}
-                  {isReportSummaryMinimized ? '(Tertutup)' : '(Terbuka)'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsReportLotsHotsMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                    !isReportLotsHotsMinimized
-                      ? 'bg-teal-600 text-white border-teal-600'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  6B. Visualisasi Performa Kelas: LOTS vs HOTS{' '}
-                  {isReportLotsHotsMinimized ? '(Tertutup)' : '(Terbuka)'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsReportClassTableMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                    !isReportClassTableMinimized
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  6C. Rekapitulasi Per Kelas ({classAnalyticsData.perClass.length}){' '}
-                  {isReportClassTableMinimized ? '(Tertutup)' : '(Terbuka)'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsReportQuestionPanelMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
-                    !isReportQuestionPanelMinimized
-                      ? 'bg-emerald-600 text-white border-emerald-600'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  6D. Analisis Per Kelas &amp; Per Soal{' '}
-                  {isReportQuestionPanelMinimized ? '(Tertutup)' : '(Terbuka)'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsReportStudentListMinimized((p) => !p)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition-colors ${
+                  onClick={() => {
+                    setIsReportStudentListMinimized(false);
+                    setIsReportSummaryMinimized(true);
+                    setIsReportLotsHotsMinimized(true);
+                    setIsReportClassTableMinimized(true);
+                    setIsReportQuestionPanelMinimized(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
                     !isReportStudentListMinimized
-                      ? 'bg-purple-600 text-white border-purple-600'
+                      ? 'bg-purple-600 text-white border-purple-600 shadow-2xs'
                       : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
-                  6E. Daftar Nilai &amp; Evaluasi Siswa ({filteredResults.length}){' '}
-                  {isReportStudentListMinimized ? '(Tertutup)' : '(Terbuka)'}
+                  6A. Daftar Nilai &amp; Evaluasi Siswa ({filteredResults.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsReportStudentListMinimized(true);
+                    setIsReportSummaryMinimized(false);
+                    setIsReportLotsHotsMinimized(true);
+                    setIsReportClassTableMinimized(true);
+                    setIsReportQuestionPanelMinimized(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
+                    !isReportSummaryMinimized
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  6B. Statistik Sekolah &amp; Export
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsReportStudentListMinimized(true);
+                    setIsReportSummaryMinimized(true);
+                    setIsReportLotsHotsMinimized(false);
+                    setIsReportClassTableMinimized(true);
+                    setIsReportQuestionPanelMinimized(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
+                    !isReportLotsHotsMinimized
+                      ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  6C. Visualisasi Performa Kelas: LOTS vs HOTS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsReportStudentListMinimized(true);
+                    setIsReportSummaryMinimized(true);
+                    setIsReportLotsHotsMinimized(true);
+                    setIsReportClassTableMinimized(false);
+                    setIsReportQuestionPanelMinimized(true);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
+                    !isReportClassTableMinimized
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  6D. Rekapitulasi Per Kelas ({classAnalyticsData.perClass.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsReportStudentListMinimized(true);
+                    setIsReportSummaryMinimized(true);
+                    setIsReportLotsHotsMinimized(true);
+                    setIsReportClassTableMinimized(true);
+                    setIsReportQuestionPanelMinimized(false);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
+                    !isReportQuestionPanelMinimized
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  6E. Analisis Per Kelas &amp; Per Soal
                 </button>
               </div>
             ) : (
               <span className="text-xs font-extrabold text-purple-950 px-2">
-                Sub-Panel Menu 06 (Laporan &amp; Rekap Nilai — Diminimize)
+                Sub-Tab Menu 06 Laporan &amp; Rekap Nilai
               </span>
             )}
             <div className="flex items-center gap-2">
-              {!isSubMenuBarMinimized && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const anyOpen =
-                      !isReportSummaryMinimized ||
-                      !isReportLotsHotsMinimized ||
-                      !isReportClassTableMinimized ||
-                      !isReportQuestionPanelMinimized ||
-                      !isReportStudentListMinimized;
-                    setIsReportSummaryMinimized(anyOpen);
-                    setIsReportLotsHotsMinimized(anyOpen);
-                    setIsReportClassTableMinimized(anyOpen);
-                    setIsReportQuestionPanelMinimized(anyOpen);
-                    setIsReportStudentListMinimized(anyOpen);
-                  }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 cursor-pointer"
-                >
-                  {!isReportSummaryMinimized ||
-                  !isReportLotsHotsMinimized ||
-                  !isReportClassTableMinimized ||
-                  !isReportQuestionPanelMinimized ||
-                  !isReportStudentListMinimized ? (
-                    <>
-                      <Minimize2 className="w-3 h-3" />
-                      <span>Minimize Semua Sub-Panel</span>
-                    </>
-                  ) : (
-                    <>
-                      <Maximize2 className="w-3 h-3" />
-                      <span>Buka Semua Sub-Panel</span>
-                    </>
-                  )}
-                </button>
-              )}
+              <span className="hidden sm:inline text-[11px] font-semibold text-slate-500">
+                Mode Tab Terpisah (1 tampilan aktif)
+              </span>
               <button
                 type="button"
                 onClick={() => setIsSubMenuBarMinimized((prev) => !prev)}
@@ -6842,7 +6846,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isSubMenuBarMinimized ? (
                   <>
                     <ChevronDown className="w-3.5 h-3.5" />
-                    <span>Buka Sub-Panel</span>
+                    <span>Buka Sub-Tab</span>
                   </>
                 ) : (
                   <>
@@ -6861,7 +6865,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ===================================================================== */}
       {activeTab === 'laporan' && (
         <div className="space-y-6">
-          {/* Panel Rekapitulasi Analisis & Download Per Kelas dan Semua Kelas */}
+          {/* Panel Rekapitulasi Analisis & Download Per Kelas dan Semua Kelas (tampil hanya untuk sub-tab 6B/6C/6D) */}
+          {(!isReportSummaryMinimized ||
+            !isReportLotsHotsMinimized ||
+            !isReportClassTableMinimized) && (
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -7148,19 +7155,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
-            {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Sub-Modul 5A-2 - Minimizable Independently) */}
-            <ClassPerformanceLotsHotsChart
-              classAnalytics={classAnalyticsData}
-              questions={questions}
-              exams={exams}
-              selectedClassFilter={filterResultKelas}
-              isMinimized={isReportLotsHotsMinimized}
-              onToggleMinimize={() => setIsReportLotsHotsMinimized((p) => !p)}
-              onSelectClass={(kls) => {
-                setFilterResultTingkat('SEMUA');
-                setFilterResultKelas(kls);
-              }}
-            />
+            {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Eksklusif Sub-Tab 6C) */}
+            {!isReportLotsHotsMinimized && (
+              <ClassPerformanceLotsHotsChart
+                classAnalytics={classAnalyticsData}
+                questions={questions}
+                exams={exams}
+                selectedClassFilter={filterResultKelas}
+                isMinimized={false}
+                onToggleMinimize={() => {
+                  setIsReportLotsHotsMinimized(true);
+                  setIsReportStudentListMinimized(false);
+                }}
+                onSelectClass={(kls) => {
+                  setFilterResultTingkat('SEMUA');
+                  setFilterResultKelas(kls);
+                }}
+              />
+            )}
 
             {/* Tabel Rekapitulasi Analisis & Download Per Kelas (Sub-Modul 5B) */}
             {!isReportClassTableMinimized && classAnalyticsData.perClass.length > 0 && (
@@ -7390,10 +7402,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
             </div>
           </div>
+          )}
 
           {/* ================================================================= */}
-          {/* SUB-MODUL 5C: ANALISIS PER KELAS & PER BUTIR SOAL TERPADU         */}
+          {/* SUB-MODUL 5C: ANALISIS PER KELAS & PER BUTIR SOAL TERPADU (6E)    */}
           {/* ================================================================= */}
+          {!isReportQuestionPanelMinimized && (
           <QuestionLevelReportPanel
             exams={exams}
             questions={questions}
@@ -7414,13 +7428,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             uniqueClasses={uniqueClasses}
             availableMataPelajaran={availableMataPelajaran}
             teacherName={teacherProfile.name}
-            isMinimized={isReportQuestionPanelMinimized}
-            onToggleMinimize={() =>
-              setIsReportQuestionPanelMinimized((prev) => !prev)
-            }
+            isMinimized={false}
+            onToggleMinimize={() => {
+              setIsReportQuestionPanelMinimized(true);
+              setIsReportStudentListMinimized(false);
+            }}
           />
+          )}
 
-          {/* Tabel Detail Hasil Ujian Siswa (Dengan Filter Per Kelas, Tingkatan & Paket Ujian - Sub-Modul 5D) */}
+          {/* Tabel Detail Hasil Ujian Siswa (Eksklusif Sub-Tab 6A) */}
+          {!isReportStudentListMinimized && (
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             {/* Full-Width Colorful Institutional Header Banner (Never Squished) */}
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white">
@@ -7618,13 +7635,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       const isBusy = analyzingResultId === resItem.id;
                       const hasAi = Boolean(resItem.analisis_ai);
 
+                      // Urutkan seluruh percobaan ujian siswa ini pada paket ujian / mapel terkait berdasarkan waktu ujian (created_at)
+                      const sameStudentExamAttempts = results
+                        .filter(
+                          (r) =>
+                            Number(r.student_id) === Number(resItem.student_id) &&
+                            Number(r.exam_id) === Number(resItem.exam_id)
+                        )
+                        .sort((a, b) => {
+                          const tA = a.created_at ? Date.parse(a.created_at) : 0;
+                          const tB = b.created_at ? Date.parse(b.created_at) : 0;
+                          if (tA !== tB) return tA - tB;
+                          return Number(a.id) - Number(b.id);
+                        });
+                      const hasMultipleAttempts =
+                        sameStudentExamAttempts.length > 1;
+                      const attemptIndex = sameStudentExamAttempts.findIndex(
+                        (r) => Number(r.id) === Number(resItem.id)
+                      );
+                      const firstAttempt = sameStudentExamAttempts[0] || null;
+                      const latestAttempt =
+                        sameStudentExamAttempts.length > 1
+                          ? sameStudentExamAttempts[
+                              sameStudentExamAttempts.length - 1
+                            ]
+                          : null;
+                      const isRetakeRow =
+                        hasMultipleAttempts && attemptIndex > 0;
+
                       return (
                         <tr
                           key={resItem.id}
-                          className="hover:bg-slate-50/80 transition-colors"
+                          className={`hover:bg-slate-50/80 transition-colors ${
+                            hasMultipleAttempts
+                              ? isRetakeRow
+                                ? 'bg-emerald-50/25'
+                                : 'bg-indigo-50/20'
+                              : ''
+                          }`}
                         >
                           <td className="py-3.5 px-4 font-semibold text-slate-900">
-                            {st?.nama || `Siswa #${resItem.student_id}`}
+                            <div>{st?.nama || `Siswa #${resItem.student_id}`}</div>
+                            {hasMultipleAttempts && (
+                              <span
+                                className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-extrabold border ${
+                                  isRetakeRow
+                                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                    : 'bg-indigo-100 text-indigo-900 border-indigo-300'
+                                }`}
+                              >
+                                {isRetakeRow
+                                  ? `NILAI SESUDAH (UJIAN ULANG #${attemptIndex})`
+                                  : 'NILAI SEBELUM (UJIAN AWAL)'}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 text-xs text-slate-600">
                             <span className="font-semibold text-slate-800">
@@ -7639,7 +7703,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <div className="font-semibold text-slate-900">
                               {ex?.judul_ujian || `Ujian #${resItem.exam_id}`}
                             </div>
-                            <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1.5">
+                            <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-1.5">
                               <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-800 font-mono font-bold border border-indigo-200">
                                 {resItem.kode_soal ||
                                   st?.kode_soal ||
@@ -7649,24 +7713,52 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <span>·</span>
                               <span>{getEffectiveMataPelajaran(ex)}</span>
                             </div>
+                            <div className="text-[10px] font-mono text-slate-600 mt-1">
+                              Waktu Ujian:{' '}
+                              <strong className="text-slate-800">
+                                {formatExamAttemptTimeFull(resItem.created_at)}
+                              </strong>
+                            </div>
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold">
-                            <span
-                              className={`inline-flex items-center px-2.5 py-1 rounded-lg border text-sm font-extrabold ${
-                                resItem.skor_angka >= 85
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                  : resItem.skor_angka >= 70
-                                  ? 'bg-blue-50 text-blue-800 border-blue-200'
-                                  : resItem.skor_angka >= 55
-                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                  : 'bg-rose-50 text-rose-800 border-rose-200'
-                              }`}
-                            >
-                              {resItem.skor_angka}
-                              <span className="text-[11px] font-normal opacity-75 ml-0.5">
-                                /100
+                            <div className="inline-flex flex-col items-end gap-1">
+                              <span
+                                className={`inline-flex items-center px-2.5 py-1 rounded-lg border text-sm font-extrabold ${
+                                  resItem.skor_angka >= 85
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : resItem.skor_angka >= 70
+                                      ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                      : resItem.skor_angka >= 55
+                                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                        : 'bg-rose-50 text-rose-800 border-rose-200'
+                                }`}
+                              >
+                                {resItem.skor_angka}
+                                <span className="text-[11px] font-normal opacity-75 ml-0.5">
+                                  /100
+                                </span>
                               </span>
-                            </span>
+                              {hasMultipleAttempts &&
+                                firstAttempt &&
+                                latestAttempt && (
+                                  <div className="text-[10px] font-mono bg-slate-100 border border-slate-200 rounded px-2 py-0.5 text-slate-700 text-right">
+                                    <div>
+                                      Sebelum (
+                                      {formatExamAttemptTimeShort(
+                                        firstAttempt.created_at
+                                      )}
+                                      ): <strong>{firstAttempt.skor_angka}</strong>
+                                    </div>
+                                    <div className="text-emerald-800">
+                                      Sesudah (
+                                      {formatExamAttemptTimeShort(
+                                        latestAttempt.created_at
+                                      )}
+                                      ): <strong>{latestAttempt.skor_angka}</strong>
+                                    </div>
+                                  </div>
+                                )}
+                            </div>
                           </td>
                           <td className="py-3.5 px-4 text-xs font-mono tabular-nums">
                             {resItem.pelanggaran_tab > 0 ? (
@@ -7685,10 +7777,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 (resItem.skor_angka >= 85
                                   ? 'Sangat Baik (A)'
                                   : resItem.skor_angka >= 70
-                                  ? 'Baik (B)'
-                                  : resItem.skor_angka >= 55
-                                  ? 'Cukup (C)'
-                                  : 'Perlu Bimbingan (D)')}
+                                    ? 'Baik (B)'
+                                    : resItem.skor_angka >= 55
+                                      ? 'Cukup (C)'
+                                      : 'Perlu Bimbingan (D)')}
                             </div>
                             {hasAi ? (
                               <span className="text-[11px] text-emerald-700 font-semibold">
@@ -7828,6 +7920,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </>
             )}
           </div>
+          )}
         </div>
       )}
 

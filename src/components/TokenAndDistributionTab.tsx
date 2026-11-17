@@ -65,10 +65,10 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
   const [copiedExamId, setCopiedExamId] = useState<number | null>(null);
   const [tokenFeedback, setTokenFeedback] = useState<string | null>(null);
 
-  // Sub-panel minimize states for TokenAndDistributionTab (01B-1, 01B-2, 01B-3)
+  // Sub-panel exclusive tab states for TokenAndDistributionTab (only 1 sub-tab open at a time)
   const [isTokenSectionMinimized, setIsTokenSectionMinimized] = useState(false);
-  const [isDistFormMinimized, setIsDistFormMinimized] = useState(false);
-  const [isPreviewTableMinimized, setIsPreviewTableMinimized] = useState(false);
+  const [isDistFormMinimized, setIsDistFormMinimized] = useState(true);
+  const [isPreviewTableMinimized, setIsPreviewTableMinimized] = useState(true);
 
   // Distribution Editor State for selected Exam Package
   const [selectedDistExamId, setSelectedDistExamId] = useState<number>(() =>
@@ -403,79 +403,67 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
 
   return (
     <div className="space-y-6">
-      {/* SUB-MENU KONTROL CEPAT SUB-MODUL 01B (MINIMIZE / BUKA PANEL) */}
+      {/* SUB-TAB EKSKLUSIF MODUL 01B (HANYA TAMPIL 1 SUB-TAB AGAR TIDAK MEMANJANG KE BAWAH) */}
       <div className="bg-white border border-indigo-200/80 rounded-2xl px-4 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-extrabold text-indigo-950 mr-1">
-            Sub-Panel Modul 01B:
+            Pilih Sub-Tab Menu Token &amp; Distribusi:
           </span>
           <button
             type="button"
-            onClick={() => setIsTokenSectionMinimized((p) => !p)}
-            className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+            onClick={() => {
+              setIsTokenSectionMinimized(false);
+              setIsDistFormMinimized(true);
+              setIsPreviewTableMinimized(true);
+            }}
+            className={`px-3 py-1.5 rounded-xl font-extrabold border transition-all cursor-pointer ${
               !isTokenSectionMinimized
-                ? 'bg-indigo-600 text-white border-indigo-600'
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
                 : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
             }`}
           >
-            01B-1. Token Sesi Ujian {isTokenSectionMinimized ? '(Diminimize)' : '✓'}
+            01B-1. Token Sesi Ujian ({filteredTokenExams.length} Paket)
           </button>
           <button
             type="button"
-            onClick={() => setIsDistFormMinimized((p) => !p)}
-            className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+            onClick={() => {
+              setIsTokenSectionMinimized(true);
+              setIsDistFormMinimized(false);
+              setIsPreviewTableMinimized(true);
+            }}
+            className={`px-3 py-1.5 rounded-xl font-extrabold border transition-all cursor-pointer ${
               !isDistFormMinimized
-                ? 'bg-indigo-600 text-white border-indigo-600'
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
                 : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
             }`}
           >
-            01B-2. Form Distribusi Paket {isDistFormMinimized ? '(Diminimize)' : '✓'}
+            01B-2. Form Distribusi Paket &amp; Mapel
           </button>
           <button
             type="button"
-            onClick={() => setIsPreviewTableMinimized((p) => !p)}
-            className={`px-2.5 py-1 rounded-lg font-bold border transition-colors cursor-pointer ${
+            onClick={() => {
+              setIsTokenSectionMinimized(true);
+              setIsDistFormMinimized(true);
+              setIsPreviewTableMinimized(false);
+            }}
+            className={`px-3 py-1.5 rounded-xl font-extrabold border transition-all cursor-pointer ${
               !isPreviewTableMinimized
-                ? 'bg-indigo-600 text-white border-indigo-600'
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
                 : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
             }`}
           >
-            01B-3. Peta Paket Siswa {isPreviewTableMinimized ? '(Diminimize)' : '✓'}
+            01B-3. Peta Paket Siswa ({previewClassStudents.length} Siswa)
           </button>
         </div>
-
-        <button
-          type="button"
-          onClick={() => {
-            const anyOpen =
-              !isTokenSectionMinimized ||
-              !isDistFormMinimized ||
-              !isPreviewTableMinimized;
-            setIsTokenSectionMinimized(anyOpen);
-            setIsDistFormMinimized(anyOpen);
-            setIsPreviewTableMinimized(anyOpen);
-          }}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 cursor-pointer"
-        >
-          {!isTokenSectionMinimized ||
-          !isDistFormMinimized ||
-          !isPreviewTableMinimized ? (
-            <>
-              <Minimize2 className="w-3 h-3" />
-              <span>Minimize Semua Sub-Panel</span>
-            </>
-          ) : (
-            <>
-              <Maximize2 className="w-3 h-3" />
-              <span>Buka Semua Sub-Panel</span>
-            </>
-          )}
-        </button>
+        <span className="text-[11px] font-semibold text-slate-500">
+          Mode Tab Terpisah (1 tampilan aktif)
+        </span>
       </div>
 
       {/* ===================================================================== */}
       {/* BAGIAN 1: MENU KHUSUS TOMBOL TOKEN SESI UJIAN (SEMUA MAPEL & PAKET)    */}
       {/* ===================================================================== */}
+      {!isTokenSectionMinimized && (
       <div className="bg-white border border-indigo-200 rounded-2xl overflow-hidden shadow-xs">
         <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
@@ -791,20 +779,13 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
           </>
         )}
       </div>
+      )}
 
       {/* ===================================================================== */}
       {/* BAGIAN 2: PENGATURAN DISTRIBUSI PAKET SOAL MULTI-MAPEL & GANJIL-GENAP */}
       {/* ===================================================================== */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div
-          className={`${
-            isDistFormMinimized
-              ? 'lg:col-span-12'
-              : isPreviewTableMinimized
-                ? 'lg:col-span-12'
-                : 'lg:col-span-5'
-          } bg-white border border-slate-200 rounded-2xl p-6 space-y-4 shadow-2xs transition-all`}
-        >
+      {!isDistFormMinimized && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4 shadow-2xs transition-all">
           <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
             <div className="space-y-1">
               <div className="inline-flex items-center gap-1.5 text-xs font-extrabold text-indigo-700 uppercase tracking-wider">
@@ -1082,15 +1063,13 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
             </form>
           ))}
         </div>
+      )}
 
         {/* =================================================================== */}
         {/* BAGIAN 3: SIMULASI & PEMETAAN LANGSUNG GANJIL-GENAP PER KELAS       */}
         {/* =================================================================== */}
-        <div
-          className={`${
-            isDistFormMinimized ? 'lg:col-span-12' : 'lg:col-span-7'
-          } bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xs transition-all`}
-        >
+        {!isPreviewTableMinimized && (
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xs transition-all">
           <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-950 text-white flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
@@ -1306,10 +1285,32 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
                       )}
                     </td>
                     <td className="py-2.5 px-4 text-right font-mono">
-                      {row.precisionRec.score !== null ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                          {row.precisionRec.score}/100 ({row.precisionRec.predikatLabel})
-                        </span>
+                      {row.precisionRec.hasRetakeHistory &&
+                      row.precisionRec.initialScore !== null &&
+                      row.precisionRec.retakeScore !== null ? (
+                        <div className="inline-flex flex-col items-end gap-0.5 px-2 py-1 rounded-md bg-indigo-50 border border-indigo-200 text-[10px]">
+                          <span className="text-slate-700 font-bold">
+                            Sebelum ({row.precisionRec.initialTimeShort}):{' '}
+                            <strong className="text-indigo-900">
+                              {row.precisionRec.initialScore}/100
+                            </strong>
+                          </span>
+                          <span className="text-emerald-800 font-extrabold">
+                            Sesudah ({row.precisionRec.retakeTimeShort}):{' '}
+                            <strong className="text-emerald-950">
+                              {row.precisionRec.retakeScore}/100
+                            </strong>
+                          </span>
+                        </div>
+                      ) : row.precisionRec.score !== null ? (
+                        <div className="inline-flex flex-col items-end gap-0.5">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                            {row.precisionRec.score}/100 ({row.precisionRec.predikatLabel})
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            Waktu: {row.precisionRec.initialTimeShort}
+                          </span>
+                        </div>
                       ) : (
                         <span className="text-[11px] font-semibold text-slate-500">
                           {row.precisionRec.statusLabel}
@@ -1324,7 +1325,7 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
             </>
           )}
         </div>
-      </div>
+        )}
     </div>
   );
 };

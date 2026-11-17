@@ -58,6 +58,8 @@ import {
 import {
   downloadSingleStudentResultPdf,
   downloadStudentTokenCardsPdf,
+  formatExamAttemptTimeShort,
+  formatExamAttemptTimeFull,
 } from '../utils/cbtPdfGenerator';
 
 export type StudentDashboardMenu =
@@ -1615,7 +1617,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          {isDone && student.status_ujian === 'Selesai' ? (
+                          {isDone && student.status_ujian !== 'Belum Mulai' ? (
                             <div className="flex flex-col sm:items-end gap-1.5">
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
                                 <CheckCircle2 className="w-3.5 h-3.5" />
@@ -1636,18 +1638,31 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                               </button>
                             </div>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenStartExamModal(ex)}
-                              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 shadow-xs cursor-pointer"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                              <span>
-                                {progressInfo.hasProgress
-                                  ? `Lanjutkan Ujian (${progressInfo.answeredCount} Dijawab)`
-                                  : 'Mulai Ujian (Input Token)'}
-                              </span>
-                            </button>
+                            <div className="flex flex-col sm:items-end gap-1.5">
+                              {isDone && student.status_ujian === 'Belum Mulai' && (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                                  Dijadwalkan Ujian Ulang · Nilai Awal
+                                  {matchingResult && ex.tampilkan_nilai !== false
+                                    ? ` (${matchingResult.skor_angka}/100)`
+                                    : ''}{' '}
+                                  Tersimpan
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenStartExamModal(ex)}
+                                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 shadow-xs cursor-pointer"
+                              >
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                                <span>
+                                  {isDone && student.status_ujian === 'Belum Mulai'
+                                    ? 'Mulai Ujian Ulang (Input Token)'
+                                    : progressInfo.hasProgress
+                                      ? `Lanjutkan Ujian (${progressInfo.answeredCount} Dijawab)`
+                                      : 'Mulai Ujian (Input Token)'}
+                                </span>
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -1867,10 +1882,15 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                       <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-3">
                         <div className="text-xs">
                           {studentHasSubmitted &&
-                          student.status_ujian === 'Selesai' ? (
+                          student.status_ujian !== 'Belum Mulai' ? (
                             <span className="font-bold text-emerald-700 flex items-center gap-1">
                               <CheckCircle2 className="w-4 h-4" />
                               <span>Sudah Selesai Dikerjakan</span>
+                            </span>
+                          ) : studentHasSubmitted &&
+                            student.status_ujian === 'Belum Mulai' ? (
+                            <span className="font-bold text-amber-800 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded inline-block">
+                              Dijadwalkan Ujian Ulang (Nilai Awal Tersimpan)
                             </span>
                           ) : progressInfo.hasProgress ? (
                             <span className="font-bold text-blue-700">
@@ -1885,7 +1905,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                         </div>
 
                         {studentHasSubmitted &&
-                        student.status_ujian === 'Selesai' ? (
+                        student.status_ujian !== 'Belum Mulai' ? (
                           <button
                             type="button"
                             onClick={() => setActiveMenu('hasil')}
@@ -1902,9 +1922,12 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                           >
                             <KeyRound className="w-3.5 h-3.5" />
                             <span>
-                              {progressInfo.hasProgress
-                                ? 'Lanjutkan Ujian'
-                                : 'Mulai & Input Token'}
+                              {studentHasSubmitted &&
+                              student.status_ujian === 'Belum Mulai'
+                                ? 'Mulai Ujian Ulang'
+                                : progressInfo.hasProgress
+                                  ? 'Lanjutkan Ujian'
+                                  : 'Mulai & Input Token'}
                             </span>
                           </button>
                         ) : (
@@ -2578,6 +2601,25 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 const aiData =
                   localAiOverrides[resItem.id] || resItem.analisis_ai || null;
 
+                const sameExamAttempts = studentResults
+                  .filter((r) => Number(r.exam_id) === Number(resItem.exam_id))
+                  .sort((a, b) => {
+                    const tA = a.created_at ? Date.parse(a.created_at) : 0;
+                    const tB = b.created_at ? Date.parse(b.created_at) : 0;
+                    if (tA !== tB) return tA - tB;
+                    return Number(a.id) - Number(b.id);
+                  });
+                const hasMultipleAttempts = sameExamAttempts.length > 1;
+                const attemptIdx = sameExamAttempts.findIndex(
+                  (r) => Number(r.id) === Number(resItem.id)
+                );
+                const firstAttempt = sameExamAttempts[0] || null;
+                const latestAttempt =
+                  sameExamAttempts.length > 1
+                    ? sameExamAttempts[sameExamAttempts.length - 1]
+                    : null;
+                const isRetakeResult = hasMultipleAttempts && attemptIdx > 0;
+
                 let predikat = 'Perlu Bimbingan (D)';
                 let badgeColor = 'bg-rose-100 text-rose-800 border-rose-300';
                 if (resItem.skor_angka >= 85) {
@@ -2606,13 +2648,24 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                           <span className="px-2.5 py-0.5 rounded-md font-mono font-bold bg-blue-50 text-blue-800 border border-blue-200">
                             {resItem.kode_soal || assignedPackageBadge}
                           </span>
-                          <span className="text-slate-500">
-                            Dikumpulkan:{' '}
-                            {resItem.created_at
-                              ? new Date(resItem.created_at).toLocaleString(
-                                  'id-ID'
-                                )
-                              : 'Tersimpan'}
+                          {hasMultipleAttempts && (
+                            <span
+                              className={`px-2.5 py-0.5 rounded-md font-extrabold border ${
+                                isRetakeResult
+                                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                  : 'bg-indigo-100 text-indigo-900 border-indigo-300'
+                              }`}
+                            >
+                              {isRetakeResult
+                                ? `NILAI SESUDAH (UJIAN ULANG #${attemptIdx})`
+                                : 'NILAI SEBELUM (UJIAN AWAL)'}
+                            </span>
+                          )}
+                          <span className="text-slate-600 font-mono">
+                            Waktu Ujian:{' '}
+                            <strong>
+                              {formatExamAttemptTimeFull(resItem.created_at)}
+                            </strong>
                           </span>
                         </div>
                         <h3 className="text-lg font-extrabold text-slate-900">
@@ -2629,7 +2682,11 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                         <div className="flex flex-wrap items-center gap-3 shrink-0">
                           <div className="px-4 py-2.5 rounded-xl bg-white border border-indigo-200 text-right shadow-2xs">
                             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                              Nilai Akhir
+                              {hasMultipleAttempts
+                                ? isRetakeResult
+                                  ? 'Nilai Sesudah (Ujian Ulang)'
+                                  : 'Nilai Sebelum (Ujian Awal)'
+                                : 'Nilai Akhir'}
                             </div>
                             <div className="text-3xl font-extrabold font-mono text-blue-700">
                               {resItem.skor_angka}
@@ -2642,6 +2699,27 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                             >
                               {predikat}
                             </span>
+                            {hasMultipleAttempts &&
+                              firstAttempt &&
+                              latestAttempt && (
+                                <div className="mt-1.5 pt-1.5 border-t border-slate-200 text-[10px] font-mono text-slate-700">
+                                  <div>
+                                    Sebelum (
+                                    {formatExamAttemptTimeShort(
+                                      firstAttempt.created_at
+                                    )}
+                                    ): <strong>{firstAttempt.skor_angka}/100</strong>
+                                  </div>
+                                  <div className="text-emerald-800">
+                                    Sesudah (
+                                    {formatExamAttemptTimeShort(
+                                      latestAttempt.created_at
+                                    )}
+                                    ):{' '}
+                                    <strong>{latestAttempt.skor_angka}/100</strong>
+                                  </div>
+                                </div>
+                              )}
                           </div>
 
                           <div className="flex flex-col gap-2">
@@ -2794,7 +2872,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                       );
                       const progressInfo = hasSavedProgressForExam(ex.id);
                       const isDone = Boolean(
-                        resItem && student.status_ujian === 'Selesai'
+                        resItem && student.status_ujian !== 'Belum Mulai'
                       );
                       const isAktif = (ex.status_ujian || 'AKTIF') === 'AKTIF';
 

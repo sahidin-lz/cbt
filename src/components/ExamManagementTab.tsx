@@ -121,12 +121,12 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     message: string;
   } | null>(null);
 
-  // Sub-panel minimize states for Modul 04 (04A, 04B, 04C, 04D)
+  // Sub-panel exclusive tab states for Modul 04 (only 1 sub-tab open at a time)
   const [isSubMenuMinimized, setIsSubMenuMinimized] = useState(false);
-  const [isClassKpiMinimized, setIsClassKpiMinimized] = useState(false);
-  const [isLiveRadarMinimized, setIsLiveRadarMinimized] = useState(false);
+  const [isClassKpiMinimized, setIsClassKpiMinimized] = useState(true);
+  const [isLiveRadarMinimized, setIsLiveRadarMinimized] = useState(true);
   const [isStudentTableMinimized, setIsStudentTableMinimized] = useState(false);
-  const [isQuestionAnalysisMinimized, setIsQuestionAnalysisMinimized] = useState(false);
+  const [isQuestionAnalysisMinimized, setIsQuestionAnalysisMinimized] = useState(true);
 
   // Per-question number & difficulty filter inside Modul 04 Question Analysis
   const [analysisQuestionNumFilter, setAnalysisQuestionNumFilter] = useState<string>('ALL');
@@ -468,74 +468,104 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
         <div className="px-5 py-3 bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-slate-50 border-t border-indigo-100 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             {!isSubMenuMinimized ? (
-              <div className="flex flex-wrap items-center gap-2">
-                {/* View mode toggle */}
-                <div className="flex items-center p-1 bg-white rounded-xl border border-indigo-200 shadow-2xs">
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('cards')}
-                    className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      viewMode === 'cards'
-                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-2xs'
-                        : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50/70'
-                    }`}
-                  >
-                    <LayoutList className="w-3.5 h-3.5" />
-                    <span>04A. Daftar Siswa, Live Radar &amp; Analisis Soal</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('matrix')}
-                    className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      viewMode === 'matrix'
-                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-2xs'
-                        : 'text-slate-600 hover:text-indigo-900 hover:bg-indigo-50/70'
-                    }`}
-                  >
-                    <Table className="w-3.5 h-3.5" />
-                    <span>04B. Matriks Siswa × Soal</span>
-                  </button>
-                </div>
-
-                {viewMode === 'cards' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const anyOpen =
-                        !isClassKpiMinimized ||
-                        !isLiveRadarMinimized ||
-                        !isStudentTableMinimized ||
-                        !isQuestionAnalysisMinimized;
-                      setIsClassKpiMinimized(anyOpen);
-                      setIsLiveRadarMinimized(anyOpen);
-                      setIsStudentTableMinimized(anyOpen);
-                      setIsQuestionAnalysisMinimized(anyOpen);
-                    }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-white hover:bg-indigo-50 text-indigo-800 border border-indigo-200 cursor-pointer"
-                  >
-                    {!isClassKpiMinimized ||
-                    !isLiveRadarMinimized ||
-                    !isStudentTableMinimized ||
-                    !isQuestionAnalysisMinimized ? (
-                      <>
-                        <Minimize2 className="w-3 h-3" />
-                        <span>Minimize Semua Sub-Panel</span>
-                      </>
-                    ) : (
-                      <>
-                        <Maximize2 className="w-3 h-3" />
-                        <span>Buka Semua Sub-Panel</span>
-                      </>
-                    )}
-                  </button>
-                )}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-extrabold text-indigo-950 mr-1">
+                  Pilih Sub-Tab Monitor:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode('cards');
+                    setIsStudentTableMinimized(false);
+                    setIsLiveRadarMinimized(true);
+                    setIsQuestionAnalysisMinimized(true);
+                    setIsClassKpiMinimized(true);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
+                    viewMode === 'cards' && !isStudentTableMinimized
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>04A. Tabel Peserta &amp; Kunci Sesi ({filteredStudents.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode('cards');
+                    setIsStudentTableMinimized(true);
+                    setIsLiveRadarMinimized(false);
+                    setIsQuestionAnalysisMinimized(true);
+                    setIsClassKpiMinimized(true);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
+                    viewMode === 'cards' && !isLiveRadarMinimized
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
+                  }`}
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                  <span>04B. Live Radar Web Siswa</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode('cards');
+                    setIsStudentTableMinimized(true);
+                    setIsLiveRadarMinimized(true);
+                    setIsQuestionAnalysisMinimized(false);
+                    setIsClassKpiMinimized(true);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
+                    viewMode === 'cards' && !isQuestionAnalysisMinimized
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
+                  }`}
+                >
+                  <Award className="w-3.5 h-3.5" />
+                  <span>04C. Analisis Ketuntasan Soal</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode('matrix');
+                    setIsStudentTableMinimized(true);
+                    setIsLiveRadarMinimized(true);
+                    setIsQuestionAnalysisMinimized(true);
+                    setIsClassKpiMinimized(true);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
+                    viewMode === 'matrix'
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
+                  }`}
+                >
+                  <Table className="w-3.5 h-3.5" />
+                  <span>04D. Matriks Siswa × Soal</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode('cards');
+                    setIsStudentTableMinimized(true);
+                    setIsLiveRadarMinimized(true);
+                    setIsQuestionAnalysisMinimized(true);
+                    setIsClassKpiMinimized(false);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
+                    viewMode === 'cards' && !isClassKpiMinimized
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
+                  }`}
+                >
+                  <LayoutList className="w-3.5 h-3.5" />
+                  <span>04E. Ringkasan KPI Kelas</span>
+                </button>
               </div>
             ) : (
               <span className="text-xs font-extrabold text-indigo-950">
-                Sub-Menu Modul 04 (Diminimize):{' '}
-                {viewMode === 'cards'
-                  ? '04A. Daftar Siswa, Live Radar & Analisis Soal'
-                  : '04B. Matriks Siswa × Soal'}
+                Sub-Menu Modul 04 (Mode Tab Terpisah)
               </span>
             )}
 
@@ -847,7 +877,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       {viewMode === 'cards' && (
         <div className="space-y-6">
           {/* LIVE RADAR MONITORING AKTIVITAS WEB SISWA & ANTI-INSPECT ELEMENT */}
-          {(() => {
+          {!isLiveRadarMinimized && (() => {
             const monitoredStudents = filteredStudents.filter(
               (s) =>
                 s.status_ujian === 'Sedang Ujian' ||
@@ -1094,6 +1124,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
           })()}
 
           {/* TABEL 1: Monitoring Siswa yang Sedang Ujian & Nilai Akhir */}
+          {!isStudentTableMinimized && (
           <div className="bg-white border border-indigo-200/80 rounded-2xl overflow-hidden shadow-xs">
             <div className="bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 px-5 py-4 text-white">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1410,20 +1441,42 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                             </div>
                           </td>
                           <td className="py-3 px-4 text-center">
-                            {res ? (
-                              <span
-                                className={`inline-flex items-center justify-center px-2.5 py-1 rounded-lg font-mono text-sm font-black border ${
-                                  res.skor_angka >= 85
-                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                    : res.skor_angka >= 70
-                                    ? 'bg-blue-50 text-blue-800 border-blue-200'
-                                    : res.skor_angka >= 55
-                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                    : 'bg-rose-50 text-rose-800 border-rose-200'
-                                }`}
-                              >
-                                {res.skor_angka}
-                              </span>
+                            {rec.hasRetakeHistory &&
+                            rec.initialScore !== null &&
+                            rec.retakeScore !== null ? (
+                              <div className="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg bg-indigo-50/90 border border-indigo-200 font-mono text-[10px]">
+                                <span className="text-slate-700 font-bold">
+                                  Awal ({rec.initialTimeShort}):{' '}
+                                  <strong className="text-indigo-900">
+                                    {rec.initialScore}
+                                  </strong>
+                                </span>
+                                <span className="text-emerald-800 font-extrabold">
+                                  Ulang ({rec.retakeTimeShort}):{' '}
+                                  <strong className="text-emerald-950 text-xs">
+                                    {rec.retakeScore}
+                                  </strong>
+                                </span>
+                              </div>
+                            ) : res ? (
+                              <div className="inline-flex flex-col items-center gap-0.5">
+                                <span
+                                  className={`inline-flex items-center justify-center px-2.5 py-1 rounded-lg font-mono text-sm font-black border ${
+                                    res.skor_angka >= 85
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                      : res.skor_angka >= 70
+                                        ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                        : res.skor_angka >= 55
+                                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                          : 'bg-rose-50 text-rose-800 border-rose-200'
+                                  }`}
+                                >
+                                  {res.skor_angka}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-500">
+                                  {rec.initialTimeShort}
+                                </span>
+                              </div>
                             ) : (
                               <span className="text-slate-300">-</span>
                             )}
@@ -1436,20 +1489,20 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                     res.skor_angka >= 85
                                       ? 'text-emerald-800 bg-emerald-100/70'
                                       : res.skor_angka >= 70
-                                      ? 'text-blue-800 bg-blue-100/70'
-                                      : res.skor_angka >= 55
-                                      ? 'text-amber-800 bg-amber-100/70'
-                                      : 'text-rose-800 bg-rose-100/70'
+                                        ? 'text-blue-800 bg-blue-100/70'
+                                        : res.skor_angka >= 55
+                                          ? 'text-amber-800 bg-amber-100/70'
+                                          : 'text-rose-800 bg-rose-100/70'
                                   }`}
                                 >
                                   {res.analisis_ai?.kategori_nilai ||
                                     (res.skor_angka >= 85
                                       ? 'Sangat Baik (A)'
                                       : res.skor_angka >= 70
-                                      ? 'Baik (B)'
-                                      : res.skor_angka >= 55
-                                      ? 'Cukup (C)'
-                                      : 'Perlu Bimbingan (D)')}
+                                        ? 'Baik (B)'
+                                        : res.skor_angka >= 55
+                                          ? 'Cukup (C)'
+                                          : 'Perlu Bimbingan (D)')}
                                 </span>
                                 <span
                                   className={`text-[10px] font-semibold ${
@@ -1460,6 +1513,11 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                 >
                                   {res.skor_angka >= 70 ? 'Tuntas (≥70)' : 'Remedial (<70)'}
                                 </span>
+                                {rec.hasRetakeHistory && (
+                                  <span className="text-[9px] font-mono font-bold text-indigo-800 bg-indigo-100 px-1.5 py-0.5 rounded">
+                                    2 Nilai (Sebelum &amp; Sesudah)
+                                  </span>
+                                )}
                               </div>
                             ) : (
                               <span className="text-slate-400">-</span>
@@ -1490,14 +1548,15 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                 </button>
                               ) : null}
 
-                              {/* Reset Session Button */}
+                              {/* Reset / Reschedule Session Button */}
                               <button
                                 type="button"
                                 onClick={() => handleStatusChange(st, 'Belum Mulai')}
-                                title="Reset sesi siswa ke Belum Mulai"
-                                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                                title="Jadwalkan Ulang / Reset ke Belum Mulai (Nilai ujian pertama tetap tersimpan, nilai ujian ulang akan ditambahkan sesuai waktu ujian)"
+                                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded transition-colors cursor-pointer"
                               >
-                                <RotateCcw className="w-3.5 h-3.5" />
+                                <RotateCcw className="w-3 h-3" />
+                                <span>{isFinished ? 'Ujian Ulang' : 'Reset'}</span>
                               </button>
 
                               {/* View Live Web Activity Log Button */}
@@ -1542,8 +1601,10 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
               </>
             )}
           </div>
+          )}
 
           {/* BAGIAN 2: Hasil Analisis Setiap Soal yang Dijawab Benar / Salah */}
+          {!isQuestionAnalysisMinimized && (
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs space-y-4 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
               <div>
@@ -1906,6 +1967,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
               </>
             )}
           </div>
+          )}
         </div>
       )}
 

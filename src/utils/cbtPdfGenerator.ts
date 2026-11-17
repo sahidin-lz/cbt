@@ -53,6 +53,52 @@ export interface StudentSubjectTokenInfo {
   distribusiReason: string;
 }
 
+export interface StudentExamAttemptRecord {
+  id: number;
+  examId: number;
+  score: number;
+  predikatLabel: string;
+  createdAt: string;
+  formattedTimeShort: string;
+  formattedTimeFull: string;
+  attemptNumber: number;
+  attemptLabel: string;
+  kodePaket: string;
+  pelanggaranTab: number;
+}
+
+export function formatExamAttemptTimeShort(iso?: string | null): string {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '-';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${dd}/${mm} ${hh}:${min}`;
+  } catch {
+    return '-';
+  }
+}
+
+export function formatExamAttemptTimeFull(iso?: string | null): string {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toLocaleString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '-';
+  }
+}
+
 export interface StudentPrecisionRecord {
   student: StudentItem;
   noAbsen: number;
@@ -75,6 +121,16 @@ export interface StudentPrecisionRecord {
   predikatLabel: string;
   statusLabel: string;
   pelanggaranTab: number;
+  attemptHistory: StudentExamAttemptRecord[];
+  attemptCount: number;
+  hasRetakeHistory: boolean;
+  isRescheduledRetakePending: boolean;
+  initialScore: number | null;
+  initialCreatedAt: string | null;
+  initialTimeShort: string;
+  retakeScore: number | null;
+  retakeCreatedAt: string | null;
+  retakeTimeShort: string;
 }
 
 /**
@@ -127,27 +183,128 @@ export function resolveStudentPrecisionRecord(params: {
     }
   }
 
+  const getAttemptSortTime = (r: ResultItem): number => {
+    const parsed = r.created_at ? Date.parse(r.created_at) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : Number(r.id) || 0;
+  };
+
+  const sortAttemptsChronologically = (list: ResultItem[]): ResultItem[] => {
+    return [...list].sort((a, b) => {
+      const diff = getAttemptSortTime(a) - getAttemptSortTime(b);
+      if (diff !== 0) return diff;
+      return Number(a.id) - Number(b.id);
+    });
+  };
+
+  let relevantAttemptsChronological: ResultItem[] = [];
   let matchedResult: ResultItem | null = null;
+
   if (
     preferredExamId !== null &&
     preferredExamId !== undefined &&
     String(preferredExamId) !== '' &&
     String(preferredExamId) !== 'SEMUA'
   ) {
-    const forPreferred = studentResults.filter(
-      (r) => Number(r.exam_id) === Number(preferredExamId)
+    const forPreferred = sortAttemptsChronologically(
+      studentResults.filter((r) => Number(r.exam_id) === Number(preferredExamId))
     );
     if (forPreferred.length > 0) {
-      matchedResult = forPreferred.reduce((best, cur) =>
-        Number(cur.id) >= Number(best.id) ? cur : best
-      );
+      relevantAttemptsChronological = forPreferred;
+      matchedResult = forPreferred[forPreferred.length - 1];
+      // Jika hanya ada 1 hasil di exam_id terpilih namun siswa memiliki hasil ujian lain di mata pelajaran yang sama (dijadwalkan ulang pada paket berbeda), gabungkan secara kronologis
+      if (forPreferred.length === 1 && studentResults.length > 1) {
+        const prefExamObj = exams.find(
+          (e) => Number(e.id) === Number(preferredExamId)
+        );
+        const prefMapel = getEffectiveMataPelajaran(prefExamObj).toUpperCase();
+        const sameMapelResults = sortAttemptsChronologically(
+          studentResults.filter((r) => {
+            const rEx = exams.find((e) => Number(e.id) === Number(r.exam_id));
+            return getEffectiveMataPelajaran(rEx).toUpperCase() === prefMapel;
+          })
+        );
+        if (sameMapelResults.length > 1) {
+          relevantAttemptsChronological = sameMapelResults;
+        }
+      }
     }
   }
+
   if (!matchedResult && studentResults.length > 0) {
-    matchedResult = studentResults.reduce((best, cur) =>
-      Number(cur.id) >= Number(best.id) ? cur : best
+    const sortedAll = sortAttemptsChronologically(studentResults);
+    matchedResult = sortedAll[sortedAll.length - 1];
+    const sameExamList = sortedAll.filter(
+      (r) => Number(r.exam_id) === Number(matchedResult!.exam_id)
     );
+    if (sameExamList.length > 1) {
+      relevantAttemptsChronological = sameExamList;
+    } else if (sortedAll.length > 1) {
+      const latestExamObj = exams.find(
+        (e) => Number(e.id) === Number(matchedResult!.exam_id)
+      );
+      const latestMapel = getEffectiveMataPelajaran(latestExamObj).toUpperCase();
+      const sameMapelList = sortedAll.filter((r) => {
+        const rEx = exams.find((e) => Number(e.id) === Number(r.exam_id));
+        return getEffectiveMataPelajaran(rEx).toUpperCase() === latestMapel;
+      });
+      relevantAttemptsChronological =
+        sameMapelList.length > 1 ? sameMapelList : sortedAll;
+    } else {
+      relevantAttemptsChronological = sameExamList;
+    }
   }
+
+  const getPredikatForScore = (s: number): string => {
+    if (s >= 85) return 'Sangat Baik (A)';
+    if (s >= 70) return 'Baik (B)';
+    if (s >= 55) return 'Cukup (C)';
+    return 'Perlu Penguatan (D)';
+  };
+
+  const attemptHistory: StudentExamAttemptRecord[] =
+    relevantAttemptsChronological.map((r, idx) => {
+      const sc =
+        typeof r.skor_angka === 'number' && !Number.isNaN(r.skor_angka)
+          ? r.skor_angka
+          : 0;
+      const cAt = r.created_at || '';
+      return {
+        id: Number(r.id),
+        examId: Number(r.exam_id),
+        score: sc,
+        predikatLabel: getPredikatForScore(sc),
+        createdAt: cAt,
+        formattedTimeShort: formatExamAttemptTimeShort(cAt),
+        formattedTimeFull: formatExamAttemptTimeFull(cAt),
+        attemptNumber: idx + 1,
+        attemptLabel:
+          idx === 0
+            ? relevantAttemptsChronological.length > 1
+              ? 'Ujian Awal (Sebelum Ujian Ulang)'
+              : 'Ujian Utama'
+            : `Ujian Ulang #${idx} (Sesudah)`,
+        kodePaket: r.kode_soal || student.kode_soal || 'PAKET-A',
+        pelanggaranTab: Number(r.pelanggaran_tab) || 0,
+      };
+    });
+
+  const attemptCount = attemptHistory.length;
+  const hasRetakeHistory = attemptCount > 1;
+  const firstAttempt = attemptHistory[0] || null;
+  const latestRetakeAttempt =
+    attemptHistory.length > 1 ? attemptHistory[attemptHistory.length - 1] : null;
+
+  const initialScore = firstAttempt ? firstAttempt.score : null;
+  const initialCreatedAt = firstAttempt ? firstAttempt.createdAt : null;
+  const initialTimeShort = firstAttempt ? firstAttempt.formattedTimeShort : '-';
+
+  const retakeScore = latestRetakeAttempt ? latestRetakeAttempt.score : null;
+  const retakeCreatedAt = latestRetakeAttempt
+    ? latestRetakeAttempt.createdAt
+    : null;
+  const retakeTimeShort = latestRetakeAttempt
+    ? latestRetakeAttempt.formattedTimeShort
+    : '-';
 
   const score =
     matchedResult &&
@@ -156,21 +313,27 @@ export function resolveStudentPrecisionRecord(params: {
       ? matchedResult.skor_angka
       : null;
 
-  let predikatLabel = '-';
-  if (score !== null) {
-    if (score >= 85) predikatLabel = 'Sangat Baik (A)';
-    else if (score >= 70) predikatLabel = 'Baik (B)';
-    else if (score >= 55) predikatLabel = 'Cukup (C)';
-    else predikatLabel = 'Perlu Penguatan (D)';
-  }
+  const predikatLabel = score !== null ? getPredikatForScore(score) : '-';
+
+  const isRescheduledRetakePending =
+    student.status_ujian === 'Belum Mulai' &&
+    (score !== null ||
+      String(student.live_telemetry?.last_action || '').includes(
+        'DIJADWALKAN ULANG'
+      ) ||
+      String(student.live_telemetry?.last_action || '').includes(
+        'KUNCI DIBUKA PENGAWAS (Belum Mulai)'
+      ));
 
   let statusLabel = student.status_ujian || 'Belum Mulai';
   if (student.status_ujian === 'Diblokir') {
     statusLabel = 'Diblokir';
-  } else if (score !== null || student.status_ujian === 'Selesai') {
-    statusLabel = 'Selesai';
   } else if (student.status_ujian === 'Sedang Ujian') {
     statusLabel = 'Sedang Ujian';
+  } else if (isRescheduledRetakePending) {
+    statusLabel = 'Belum Mulai';
+  } else if (score !== null || student.status_ujian === 'Selesai') {
+    statusLabel = 'Selesai';
   } else {
     statusLabel = 'Belum Mulai';
   }
@@ -403,6 +566,16 @@ export function resolveStudentPrecisionRecord(params: {
     predikatLabel,
     statusLabel,
     pelanggaranTab: matchedResult?.pelanggaran_tab || 0,
+    attemptHistory,
+    attemptCount,
+    hasRetakeHistory,
+    isRescheduledRetakePending,
+    initialScore,
+    initialCreatedAt,
+    initialTimeShort,
+    retakeScore,
+    retakeCreatedAt,
+    retakeTimeShort,
   };
 }
 
@@ -817,7 +990,24 @@ export function downloadStudentTokenCardsPdf(
       align: 'center',
     });
 
-    if (typeof score === 'number') {
+    if (rec.hasRetakeHistory && rec.initialScore !== null && rec.retakeScore !== null) {
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(7.4);
+      doc.text(
+        `${rec.initialScore} -> ${rec.retakeScore}`,
+        box3X + singleBoxW / 2,
+        boxY + 9.4,
+        { align: 'center' }
+      );
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(4.3);
+      doc.text(
+        cleanPdfText(`Awal(${rec.initialTimeShort}) | Ulang(${rec.retakeTimeShort})`).slice(0, 26),
+        box3X + singleBoxW / 2,
+        boxY + 14.3,
+        { align: 'center' }
+      );
+    } else if (typeof score === 'number') {
       doc.setFont('courier', 'bold');
       doc.setFontSize(10.5);
       doc.text(`${score}/100`, box3X + singleBoxW / 2, boxY + 10.1, {
@@ -1177,7 +1367,20 @@ function drawSummaryTablePages(
       rx += colWidths[5];
 
       // 7. NILAI & STATUS
-      if (typeof rec.score === 'number') {
+      if (
+        rec.hasRetakeHistory &&
+        rec.initialScore !== null &&
+        rec.retakeScore !== null
+      ) {
+        doc.setFont('courier', 'bold');
+        doc.setFontSize(6.2);
+        doc.setTextColor(6, 95, 70);
+        doc.text(
+          `Awal:${rec.initialScore}->Ulang:${rec.retakeScore}`,
+          rx + 1.2,
+          startY + 5
+        );
+      } else if (typeof rec.score === 'number') {
         doc.setFont('courier', 'bold');
         doc.setFontSize(7.4);
         doc.setTextColor(6, 95, 70);

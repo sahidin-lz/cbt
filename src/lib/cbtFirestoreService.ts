@@ -660,16 +660,9 @@ export function patchLocalCbtSnapshotCache(patch: {
   let nextResults = current.results;
   if (patch.result) {
     const targetResId = Number(patch.result.id);
-    const targetStudentId = Number(patch.result.student_id);
-    const targetExamId = Number(patch.result.exam_id);
-    const filtered = nextResults.filter(
-      (r) =>
-        Number(r.id) !== targetResId &&
-        !(
-          Number(r.student_id) === targetStudentId &&
-          Number(r.exam_id) === targetExamId
-        )
-    );
+    // Hanya filter berdasarkan ID dokumen hasil (Number(r.id) !== targetResId)
+    // agar jika siswa dijadwalkan ulang (Ujian Ulang), nilai ujian pertama (Sebelum) dan nilai ujian ulang (Sesudah) keduanya tetap tersimpan utuh berdasarkan waktu ujian (created_at).
+    const filtered = nextResults.filter((r) => Number(r.id) !== targetResId);
     nextResults = [patch.result, ...filtered];
   }
 
@@ -679,6 +672,85 @@ export function patchLocalCbtSnapshotCache(patch: {
     questions: current.questions,
     results: nextResults,
   });
+}
+
+const processedDeltaTagsMemory = new Set<string>();
+
+async function buildDeltaPulsePayload(
+  headlineText: string,
+  newDeltaTag?: string,
+  extraResultAdded = false
+): Promise<CbtSyncPulseData> {
+  const nowIso = new Date().toISOString();
+  let prevPulse: CbtSyncPulseData | null = null;
+  if (db && !isFirestoreQuotaCooldownActive()) {
+    try {
+      const snap = await getDocFromServer(doc(db, 'cbt_sync', 'live_state'));
+      if (snap.exists()) {
+        prevPulse = snap.data() as CbtSyncPulseData;
+      }
+    } catch {
+      prevPulse = await fetchCbtSyncPulseOnce();
+    }
+  } else {
+    prevPulse = await fetchCbtSyncPulseOnce();
+  }
+
+  // Ambil hingga 3 tag delta terakhir dari pulse sebelumnya agar jika beberapa siswa selesai/mulai/melanggar bersamaan tidak saling menimpa
+  const prevTags: string[] = [];
+  if (prevPulse?.lastEvent) {
+    const matches = prevPulse.lastEvent.matchAll(/\[(?:RES:\d+:)?STU:\d+\]/g);
+    for (const m of matches) {
+      if (m[0] && !prevTags.includes(m[0])) {
+        prevTags.push(m[0]);
+      }
+    }
+  }
+
+  if (newDeltaTag) {
+    const targetStuMatch = newDeltaTag.match(/STU:(\d+)/);
+    const targetStuId = targetStuMatch ? targetStuMatch[1] : null;
+    const filteredPrev = targetStuId
+      ? prevTags.filter((t) => !t.includes(`STU:${targetStuId}]`))
+      : prevTags.filter((t) => t !== newDeltaTag);
+    filteredPrev.push(newDeltaTag);
+    while (filteredPrev.length > 4) {
+      filteredPrev.shift();
+    }
+    prevTags.length = 0;
+    prevTags.push(...filteredPrev);
+  }
+
+  const tagsSuffix = prevTags.length > 0 ? ` ${prevTags.join('')}` : '';
+  const cleanHeadline = headlineText
+    .replace(/\s*\[(?:RES:\d+:)?STU:\d+\]/g, '')
+    .trim();
+  const maxHeadlineLen = Math.max(20, 198 - tagsSuffix.length);
+  const finalLastEvent = `${cleanHeadline.slice(0, maxHeadlineLen)}${tagsSuffix}`.slice(
+    0,
+    200
+  );
+
+  const pulse: CbtSyncPulseData = {
+    lastSyncedAt: nowIso,
+    lastEvent: finalLastEvent || 'Sinkronisasi CBT Aktif',
+    totalExams: Math.max(prevPulse?.totalExams || 0, cachedCollectionCounts.exams),
+    totalStudents: Math.max(
+      prevPulse?.totalStudents || 0,
+      cachedCollectionCounts.students
+    ),
+    totalQuestions: Math.max(
+      prevPulse?.totalQuestions || 0,
+      cachedCollectionCounts.questions
+    ),
+    totalResults: Math.max(
+      (prevPulse?.totalResults || 0) + (extraResultAdded ? 1 : 0),
+      cachedCollectionCounts.results
+    ),
+    authorUid: 'sahidin30@gmail.com',
+  };
+  saveCachedSyncPulseLocal(pulse);
+  return pulse;
 }
 
 async function updateFirestorePulse(
@@ -691,16 +763,22 @@ async function updateFirestorePulse(
   }
 ) {
   const nowIso = new Date().toISOString();
-  const pulse: CbtSyncPulseData = {
-    lastSyncedAt: nowIso,
-    lastEvent: eventText.slice(0, 200),
-    totalExams: counts?.exams ?? cachedCollectionCounts.exams,
-    totalStudents: counts?.students ?? cachedCollectionCounts.students,
-    totalQuestions: counts?.questions ?? cachedCollectionCounts.questions,
-    totalResults: counts?.results ?? cachedCollectionCounts.results,
-    authorUid: 'sahidin30@gmail.com',
-  };
-  saveCachedSyncPulseLocal(pulse);
+  const tagMatch = eventText.match(/\[(?:RES:\d+:)?STU:\d+\]/);
+  let pulse: CbtSyncPulseData;
+  if (tagMatch && !counts) {
+    pulse = await buildDeltaPulsePayload(eventText, tagMatch[0], false);
+  } else {
+    pulse = {
+      lastSyncedAt: nowIso,
+      lastEvent: eventText.slice(0, 200),
+      totalExams: counts?.exams ?? cachedCollectionCounts.exams,
+      totalStudents: counts?.students ?? cachedCollectionCounts.students,
+      totalQuestions: counts?.questions ?? cachedCollectionCounts.questions,
+      totalResults: counts?.results ?? cachedCollectionCounts.results,
+      authorUid: 'sahidin30@gmail.com',
+    };
+    saveCachedSyncPulseLocal(pulse);
+  }
 
   if (!db || isFirestoreQuotaCooldownActive()) return pulse;
   try {
@@ -903,16 +981,49 @@ export function reconcileFinishedStudentsWithResults(params: {
   results: ResultItem[];
 }): ResultItem[] {
   const resultList = [...params.results];
-  const existingStudentIdsWithResult = new Set<number>(
+  const existingResultIds = new Set<number>(
+    resultList.map((r) => Number(r.id))
+  );
+  const existingStudentExamKeys = new Set<string>(
+    resultList.map((r) => `${Number(r.student_id)}_${Number(r.exam_id)}`)
+  );
+  const existingStudentIdsWithAnyResult = new Set<number>(
     resultList.map((r) => Number(r.student_id))
   );
 
-  for (const st of params.students) {
-    if (st.status_ujian !== 'Selesai') continue;
-    if (existingStudentIdsWithResult.has(Number(st.id))) continue;
+  const persistRecoveredResult = (rec: ResultItem, allowMultipleAttempts = false) => {
+    const recId = Number(rec.id);
+    const key = `${Number(rec.student_id)}_${Number(rec.exam_id)}`;
+    if (existingResultIds.has(recId)) return;
+    if (!allowMultipleAttempts && existingStudentExamKeys.has(key)) return;
+    resultList.push(rec);
+    existingResultIds.add(recId);
+    existingStudentExamKeys.add(key);
+    existingStudentIdsWithAnyResult.add(Number(rec.student_id));
+    if (db && !isFirestoreQuotaCooldownActive()) {
+      const nowIso = new Date().toISOString();
+      setDoc(
+        doc(db, 'results', String(rec.id)),
+        {
+          id: Number(rec.id),
+          student_id: Number(rec.student_id),
+          exam_id: Number(rec.exam_id),
+          skor_angka: Number(rec.skor_angka) || 0,
+          jawaban_siswa: rec.jawaban_siswa || {},
+          kode_soal: String(rec.kode_soal || 'PAKET-A').slice(0, 32),
+          analisis_ai: rec.analisis_ai || null,
+          pelanggaran_tab: Number(rec.pelanggaran_tab) || 0,
+          created_at: rec.created_at || nowIso,
+          authorUid: 'sahidin30@gmail.com',
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+  };
 
-    // 1. Cek apakah ada bukti hasil ujian di localStorage (`cbt_history_student_${st.id}`)
-    let recoveredResult: ResultItem | null = null;
+  for (const st of params.students) {
+    // 1. Pulihkan seluruh riwayat ujian multi-sesi (termasuk Ujian Awal & Ujian Ulang) dari localStorage (`cbt_history_student_${st.id}`) jika ada yang belum masuk ke `results`
     if (typeof window !== 'undefined' && window.localStorage) {
       try {
         const rawReceipt = window.localStorage.getItem(
@@ -920,98 +1031,100 @@ export function reconcileFinishedStudentsWithResults(params: {
         );
         if (rawReceipt) {
           const parsedReceipts = JSON.parse(rawReceipt);
-          const latestReceipt = Array.isArray(parsedReceipts)
-            ? parsedReceipts[0]
-            : null;
-          if (latestReceipt && Number(latestReceipt.studentId) === Number(st.id)) {
-            recoveredResult = {
-              id:
-                Number(latestReceipt.resultId) ||
-                Number(`9${String(latestReceipt.examId || 1).slice(-7)}${String(st.id).slice(-7)}`),
-              student_id: Number(st.id),
-              exam_id: Number(latestReceipt.examId || st.live_telemetry?.exam_id || params.exams[0]?.id || 1),
-              skor_angka: Number(latestReceipt.skor) || 0,
-              kode_soal: st.kode_soal || st.variasi_paket || 'PAKET-A',
-              jawaban_siswa: latestReceipt.jawabanSiswa || {},
-              analisis_ai: latestReceipt.analisisAi || null,
-              pelanggaran_tab: Number(latestReceipt.pelanggaranTab) || 0,
-              created_at: latestReceipt.submittedAt || new Date().toISOString(),
-            };
+          if (Array.isArray(parsedReceipts)) {
+            for (const recItem of parsedReceipts) {
+              if (!recItem || Number(recItem.studentId) !== Number(st.id)) continue;
+              const recExamId = Number(
+                recItem.examId || st.live_telemetry?.exam_id || params.exams[0]?.id || 1
+              );
+              const recResultId =
+                Number(recItem.resultId) ||
+                Number(`9${String(recExamId).slice(-7)}${String(st.id).slice(-7)}`);
+              if (!existingResultIds.has(recResultId)) {
+                persistRecoveredResult(
+                  {
+                    id: recResultId,
+                    student_id: Number(st.id),
+                    exam_id: recExamId,
+                    skor_angka: Number(recItem.skor) || 0,
+                    kode_soal: st.kode_soal || st.variasi_paket || 'PAKET-A',
+                    jawaban_siswa: recItem.jawabanSiswa || {},
+                    analisis_ai: recItem.analisisAi || null,
+                    pelanggaran_tab: Number(recItem.pelanggaranTab) || 0,
+                    created_at: recItem.submittedAt || new Date().toISOString(),
+                  },
+                  Boolean(recItem.resultId)
+                );
+              }
+            }
           }
         }
       } catch {}
     }
 
-    // 2. Jika tidak ada di receipt lokal, cek apakah skor tercatat di `live_telemetry` siswa
-    if (!recoveredResult && st.live_telemetry) {
-      const tel = st.live_telemetry;
-      const matchedExam =
-        params.exams.find((e) => Number(e.id) === Number(tel.exam_id)) ||
-        params.exams.find((e) =>
-          isExamMatchedForStudentClass(e, st.kelas, { requireActive: false })
-        ) ||
-        params.exams[0];
+    if (st.status_ujian !== 'Selesai') continue;
 
-      if (matchedExam) {
-        const scoreMatch = String(tel.last_action || '').match(
-          /(?:NILAI|SKOR)\s*:\s*(\d+(?:\.\d+)?)\s*\/\s*100/i
+    // 2. Pastikan sesi ujian terakhir yang berstatus 'Selesai' pada `live_telemetry` siswa sudah memiliki dokumen `ResultItem`
+    const tel = st.live_telemetry;
+    const targetExam =
+      (tel?.exam_id
+        ? params.exams.find((e) => Number(e.id) === Number(tel.exam_id))
+        : undefined) ||
+      params.exams.find((e) =>
+        isExamMatchedForStudentClass(e, st.kelas, { requireActive: false })
+      ) ||
+      params.exams[0];
+
+    if (!targetExam) continue;
+    const explicitResIdMatch = String(tel?.last_action || '').match(/\[RES:(\d+)\]/);
+    const explicitResId = explicitResIdMatch ? Number(explicitResIdMatch[1]) : 0;
+    const targetKey = `${Number(st.id)}_${Number(targetExam.id)}`;
+    if (
+      (explicitResId > 0 && existingResultIds.has(explicitResId)) ||
+      (explicitResId === 0 &&
+        (existingStudentExamKeys.has(targetKey) ||
+          (!tel?.exam_id && existingStudentIdsWithAnyResult.has(Number(st.id)))))
+    ) {
+      continue;
+    }
+
+    if (tel) {
+      const scoreMatch = String(tel.last_action || '').match(
+        /(?:NILAI|SKOR)\s*:\s*(\d+(?:\.\d+)?)\s*\/\s*100/i
+      );
+      let inferredScore = scoreMatch ? Math.round(Number(scoreMatch[1])) : 0;
+
+      if (!inferredScore && Number(tel.answered_count) > 0) {
+        const totalQ = Math.max(1, Number(tel.total_questions) || 40);
+        const ansCount = Math.min(totalQ, Number(tel.answered_count) || 0);
+        inferredScore = Math.min(
+          100,
+          Math.max(45, Math.round(35 + (ansCount / totalQ) * 45))
         );
-        let inferredScore = scoreMatch ? Math.round(Number(scoreMatch[1])) : 0;
+      }
 
-        if (!inferredScore && Number(tel.answered_count) > 0) {
-          const totalQ = Math.max(1, Number(tel.total_questions) || 40);
-          const ansCount = Math.min(totalQ, Number(tel.answered_count) || 0);
-          // Estimasi skor humanis proporsional dari progres jawaban yang tercatat di live_telemetry
-          inferredScore = Math.min(
-            100,
-            Math.max(45, Math.round(35 + (ansCount / totalQ) * 45))
-          );
-        }
-
-        if (inferredScore > 0) {
-          const detId =
-            Number(
-              `9${String(matchedExam.id).slice(-7)}${String(st.id).slice(-7)}`
-            ) || Date.now();
-          recoveredResult = {
+      if (inferredScore > 0) {
+        const detId =
+          explicitResId ||
+          Number(
+            `9${String(targetExam.id).slice(-7)}${String(st.id).slice(-7)}`
+          ) ||
+          Date.now();
+        persistRecoveredResult(
+          {
             id: detId,
             student_id: Number(st.id),
-            exam_id: Number(matchedExam.id),
+            exam_id: Number(targetExam.id),
             skor_angka: inferredScore,
             kode_soal:
-              tel.kode_paket || st.kode_soal || matchedExam.kode_paket || 'PAKET-A',
+              tel.kode_paket || st.kode_soal || targetExam.kode_paket || 'PAKET-A',
             jawaban_siswa: {},
             analisis_ai: null,
             pelanggaran_tab: Number(tel.tab_violations) || 0,
             created_at: tel.last_active_at || new Date().toISOString(),
-          };
-        }
-      }
-    }
-
-    if (recoveredResult) {
-      resultList.push(recoveredResult);
-      existingStudentIdsWithResult.add(Number(st.id));
-      // Sinkronkan dokumen hasil yang baru dipulihkan ke Firestore agar permanen di semua perangkat
-      if (db && !isFirestoreQuotaCooldownActive()) {
-        const nowIso = new Date().toISOString();
-        setDoc(
-          doc(db, 'results', String(recoveredResult.id)),
-          {
-            id: Number(recoveredResult.id),
-            student_id: Number(recoveredResult.student_id),
-            exam_id: Number(recoveredResult.exam_id),
-            skor_angka: Number(recoveredResult.skor_angka) || 0,
-            jawaban_siswa: recoveredResult.jawaban_siswa || {},
-            kode_soal: String(recoveredResult.kode_soal || 'PAKET-A').slice(0, 32),
-            analisis_ai: recoveredResult.analisis_ai || null,
-            pelanggaran_tab: Number(recoveredResult.pelanggaran_tab) || 0,
-            created_at: recoveredResult.created_at || nowIso,
-            authorUid: 'sahidin30@gmail.com',
-            updatedAt: nowIso,
           },
-          { merge: true }
-        ).catch(() => {});
+          explicitResId > 0
+        );
       }
     }
   }
@@ -1857,6 +1970,7 @@ export function clearLocalStudentBlockCacheCbt(
 ): void {
   if (typeof window === 'undefined') return;
   const cleanToken = (tokenUjian || '').toUpperCase().trim();
+  const isRescheduledReset = newStatus === 'Belum Mulai';
 
   // 1. Update cbt_offline_snapshot_v1 in localStorage
   try {
@@ -1873,7 +1987,18 @@ export function clearLocalStudentBlockCacheCbt(
                 tab_violations: 0,
                 inspect_attempts: 0,
                 devtools_open: false,
-                last_action: 'KUNCI DIBUKA PENGAWAS (Cache Blokir Lokal Dibersihkan)',
+                ...(isRescheduledReset
+                  ? {
+                      current_question_no: 1,
+                      answered_count: 0,
+                      remaining_seconds: 0,
+                      last_action:
+                        'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG',
+                    }
+                  : {
+                      last_action:
+                        'KUNCI DIBUKA PENGAWAS (Cache Blokir Lokal Dibersihkan)',
+                    }),
               }
             : undefined,
         };
@@ -1897,6 +2022,15 @@ export function clearLocalStudentBlockCacheCbt(
                 tab_violations: 0,
                 inspect_attempts: 0,
                 devtools_open: false,
+                ...(isRescheduledReset
+                  ? {
+                      current_question_no: 1,
+                      answered_count: 0,
+                      remaining_seconds: 0,
+                      last_action:
+                        'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG',
+                    }
+                  : {}),
               }
             : undefined,
         };
@@ -1905,31 +2039,37 @@ export function clearLocalStudentBlockCacheCbt(
     }
   } catch {}
 
-  // 3. Update cbt_active_student_session in localStorage
+  // 3. Update or clear cbt_active_student_session in localStorage
   try {
     const rawSession = localStorage.getItem('cbt_active_student_session');
     if (rawSession) {
       const parsedSession = JSON.parse(rawSession);
       if (parsedSession?.student && Number(parsedSession.student.id) === Number(studentId)) {
-        parsedSession.student = {
-          ...parsedSession.student,
-          status_ujian: newStatus,
-          live_telemetry: parsedSession.student.live_telemetry
-            ? {
-                ...parsedSession.student.live_telemetry,
-                tab_violations: 0,
-                inspect_attempts: 0,
-                devtools_open: false,
-              }
-            : undefined,
-        };
-        localStorage.setItem('cbt_active_student_session', JSON.stringify(parsedSession));
+        if (isRescheduledReset) {
+          localStorage.removeItem('cbt_active_student_session');
+        } else {
+          parsedSession.student = {
+            ...parsedSession.student,
+            status_ujian: newStatus,
+            live_telemetry: parsedSession.student.live_telemetry
+              ? {
+                  ...parsedSession.student.live_telemetry,
+                  tab_violations: 0,
+                  inspect_attempts: 0,
+                  devtools_open: false,
+                }
+              : undefined,
+          };
+          localStorage.setItem('cbt_active_student_session', JSON.stringify(parsedSession));
+        }
       }
     }
   } catch {}
 
-  // 4. Reset tabViolations & inspectAttempts to 0 in all cbt_progress_token_* and cbt_jawaban_* keys while preserving 100% of answers & remaining time
+  // 4. For 'Belum Mulai' (Reschedule / Ujian Ulang), clear old working progress keys so the retake starts with full time & blank sheet (while keeping cbt_history_student_* & results intact).
+  // For 'Sedang Ujian' (Unblock mid-exam), preserve 100% of answers & remaining time and only reset violation counters to 0.
   try {
+    const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key) continue;
@@ -1952,19 +2092,39 @@ export function clearLocalStudentBlockCacheCbt(
           key.endsWith(`_${studentId}`);
 
         if (matchesStudent) {
-          parsedVal.tabViolations = 0;
-          parsedVal.inspectAttempts = 0;
-          localStorage.setItem(key, JSON.stringify(parsedVal));
+          if (isRescheduledReset) {
+            if (!examId || Number(parsedVal.examId) === Number(examId) || !parsedVal.examId) {
+              keysToRemove.push(key);
+            }
+          } else {
+            parsedVal.tabViolations = 0;
+            parsedVal.inspectAttempts = 0;
+            localStorage.setItem(key, JSON.stringify(parsedVal));
+          }
         }
       }
     }
+    keysToRemove.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {}
+    });
   } catch {}
 }
+
+// Catat waktu terakhir siswa diblokir di sesi lokal agar pengecekan status otomatis tidak mengalami race-condition sebelum penulisan 'Diblokir' selesai di Firestore
+const lastLocalBlockTimestampByStudent = new Map<number, number>();
 
 export async function updateStudentStatusCbt(
   student: StudentItem,
   status_ujian: string
 ): Promise<StudentItem> {
+  if (status_ujian === 'Diblokir') {
+    lastLocalBlockTimestampByStudent.set(Number(student.id), Date.now());
+  } else {
+    lastLocalBlockTimestampByStudent.delete(Number(student.id));
+  }
+
   const apiRes = await safeApiJson<{ student?: StudentItem }>(
     `/api/students/${student.id}/status`,
     {
@@ -1975,18 +2135,37 @@ export async function updateStudentStatusCbt(
   );
 
   const isUnblocking = status_ujian !== 'Diblokir';
-  const updatedTelemetry: StudentLiveTelemetry | undefined = student.live_telemetry
-    ? {
-        ...student.live_telemetry,
-        tab_violations: isUnblocking ? 0 : student.live_telemetry.tab_violations,
-        inspect_attempts: isUnblocking ? 0 : student.live_telemetry.inspect_attempts,
-        devtools_open: isUnblocking ? false : student.live_telemetry.devtools_open,
-        last_action: isUnblocking
-          ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
-          : student.live_telemetry.last_action,
-        last_active_at: new Date().toISOString(),
-      }
-    : undefined;
+  const isRescheduledReset = status_ujian === 'Belum Mulai';
+  const nowIso = new Date().toISOString();
+  const baseTelemetry: StudentLiveTelemetry = student.live_telemetry || {
+    exam_id: 0,
+    judul_ujian: '',
+    kode_paket: student.kode_soal || 'PAKET-A',
+    current_question_no: 1,
+    answered_count: 0,
+    total_questions: 0,
+    remaining_seconds: 0,
+    is_fullscreen: false,
+    is_focused: true,
+    devtools_open: false,
+    tab_violations: 0,
+    inspect_attempts: 0,
+  };
+  const updatedTelemetry: StudentLiveTelemetry = {
+    ...baseTelemetry,
+    current_question_no: isRescheduledReset ? 1 : baseTelemetry.current_question_no,
+    answered_count: isRescheduledReset ? 0 : baseTelemetry.answered_count,
+    remaining_seconds: isRescheduledReset ? 0 : baseTelemetry.remaining_seconds,
+    tab_violations: isUnblocking ? 0 : Math.max(3, Number(student.live_telemetry?.tab_violations || 3)),
+    inspect_attempts: isUnblocking ? 0 : Number(student.live_telemetry?.inspect_attempts || 0),
+    devtools_open: isUnblocking ? false : Boolean(student.live_telemetry?.devtools_open),
+    last_action: isRescheduledReset
+      ? 'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG'
+      : isUnblocking
+        ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
+        : student.live_telemetry?.last_action || 'DIBLOKIR OLEH SISTEM / PENGAWAS',
+    last_active_at: nowIso,
+  };
 
   const updated: StudentItem = {
     ...student,
@@ -1995,21 +2174,36 @@ export async function updateStudentStatusCbt(
     live_telemetry: updatedTelemetry,
   };
 
-  if (db) {
-    await setDoc(
-      doc(db, 'students', String(updated.id)),
-      buildCleanStudentFirestoreDoc(updated, new Date().toISOString()),
-      { merge: true }
-    );
-    await updateFirestorePulse(
-      `Status siswa ${updated.nama} diubah menjadi: ${updated.status_ujian}`
-    );
-  }
-
   patchLocalCbtSnapshotCache({ student: updated });
   if (isUnblocking) {
     clearLocalStudentBlockCacheCbt(updated.id, updated.token_ujian, undefined, status_ujian);
   }
+
+  if (db) {
+    const pulsePayload = await buildDeltaPulsePayload(
+      `Status siswa ${updated.nama} diubah menjadi: ${updated.status_ujian}`,
+      `[STU:${updated.id}]`,
+      false
+    );
+    try {
+      const batch = writeBatch(db);
+      batch.set(
+        doc(db, 'students', String(updated.id)),
+        buildCleanStudentFirestoreDoc(updated, nowIso),
+        { merge: true }
+      );
+      batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+      await batch.commit();
+    } catch {
+      await setDoc(
+        doc(db, 'students', String(updated.id)),
+        buildCleanStudentFirestoreDoc(updated, nowIso),
+        { merge: true }
+      );
+      await setDoc(doc(db, 'cbt_sync', 'live_state'), pulsePayload).catch(() => {});
+    }
+  }
+
   return updated;
 }
 
@@ -2031,17 +2225,37 @@ export async function syncStudentLiveTelemetryCbt(
     live_telemetry: mergedTelemetry,
   };
 
+  patchLocalCbtSnapshotCache({ student: updatedStudent });
+
   if (db) {
     try {
-      await setDoc(
+      const pulsePayload = await buildDeltaPulsePayload(
+        `PERINGATAN UJIAN: ${updatedStudent.nama} (${updatedStudent.kelas}) — ${
+          mergedTelemetry.last_action || updatedStudent.status_ujian
+        }`,
+        `[STU:${updatedStudent.id}]`,
+        false
+      );
+      const batch = writeBatch(db);
+      batch.set(
         doc(db, 'students', String(updatedStudent.id)),
         buildCleanStudentFirestoreDoc(updatedStudent, nowIso),
         { merge: true }
       );
+      batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+      await batch.commit();
     } catch (err) {
       try {
-        handleFirestoreError(err, OperationType.WRITE, `students/${updatedStudent.id}`);
-      } catch {}
+        await setDoc(
+          doc(db, 'students', String(updatedStudent.id)),
+          buildCleanStudentFirestoreDoc(updatedStudent, nowIso),
+          { merge: true }
+        );
+      } catch {
+        try {
+          handleFirestoreError(err, OperationType.WRITE, `students/${updatedStudent.id}`);
+        } catch {}
+      }
     }
   }
 }
@@ -2062,6 +2276,7 @@ export async function bulkUpdateStudentStatusCbt(
   });
 
   const isUnblocking = status_ujian !== 'Diblokir';
+  const isRescheduledReset = status_ujian === 'Belum Mulai';
 
   if (db) {
     const nowIso = new Date().toISOString();
@@ -2073,12 +2288,23 @@ export async function bulkUpdateStudentStatusCbt(
         live_telemetry: st.live_telemetry
           ? {
               ...st.live_telemetry,
+              current_question_no: isRescheduledReset
+                ? 1
+                : st.live_telemetry.current_question_no,
+              answered_count: isRescheduledReset
+                ? 0
+                : st.live_telemetry.answered_count,
+              remaining_seconds: isRescheduledReset
+                ? 0
+                : st.live_telemetry.remaining_seconds,
               tab_violations: isUnblocking ? 0 : st.live_telemetry.tab_violations,
               inspect_attempts: isUnblocking ? 0 : st.live_telemetry.inspect_attempts,
               devtools_open: isUnblocking ? false : st.live_telemetry.devtools_open,
-              last_action: isUnblocking
-                ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
-                : st.live_telemetry.last_action,
+              last_action: isRescheduledReset
+                ? 'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG'
+                : isUnblocking
+                  ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
+                  : st.live_telemetry.last_action,
               last_active_at: nowIso,
             }
           : undefined,
@@ -2107,6 +2333,12 @@ export async function bulkUpdateStudentStatusCbt(
 export async function fetchSingleStudentStatusOnce(
   studentId: number
 ): Promise<string | null> {
+  // Cegah race-condition: jika siswa baru saja diblokir di perangkat ini (< 6 detik lalu), jangan biarkan pembacaan server yang belum terupdate membuka blokir sendiri
+  const recentBlockTs = lastLocalBlockTimestampByStudent.get(Number(studentId)) || 0;
+  if (recentBlockTs > 0 && Date.now() - recentBlockTs < 6000) {
+    return 'Diblokir';
+  }
+
   if (!db) return null;
   try {
     const ref = doc(db, 'students', String(studentId));
@@ -2124,7 +2356,21 @@ export async function fetchSingleStudentStatusOnce(
     if (snap && snap.exists()) {
       const data = snap.data() as any;
       if (data?.status_ujian) {
-        const freshStatus = String(data.status_ujian);
+        const rawStatus = String(data.status_ujian);
+        const serverViolations = Number(data?.live_telemetry?.tab_violations || 0);
+        const lastActionStr = String(data?.live_telemetry?.last_action || '');
+        const wasExplicitlyUnlockedByProctor = lastActionStr.includes('KUNCI DIBUKA PENGAWAS');
+
+        // Jika catatan pelanggaran di server >= 3 dan belum pernah dibuka oleh Pengawas, paksa status tetap 'Diblokir'
+        const freshStatus =
+          rawStatus === 'Diblokir' ||
+          (serverViolations >= 3 &&
+            !wasExplicitlyUnlockedByProctor &&
+            rawStatus !== 'Belum Mulai' &&
+            rawStatus !== 'Selesai')
+            ? 'Diblokir'
+            : rawStatus;
+
         const mappedStudent: StudentItem = {
           id: Number(data.id ?? studentId),
           nama: String(data.nama || ''),
@@ -2139,6 +2385,7 @@ export async function fetchSingleStudentStatusOnce(
         };
         patchLocalCbtSnapshotCache({ student: mappedStudent });
         if (freshStatus !== 'Diblokir') {
+          lastLocalBlockTimestampByStudent.delete(Number(studentId));
           clearLocalStudentBlockCacheCbt(
             Number(studentId),
             mappedStudent.token_ujian,
@@ -2653,7 +2900,7 @@ export async function loginStudentExamCbt(
     throw new Error('Tidak dapat terhubung ke database Firebase Firestore.');
   }
 
-  const matchedStudent =
+  let matchedStudent =
     snapshot.students.find((s) => {
       const nameMatch = s.nama.trim().toLowerCase() === cleanNama.toLowerCase();
       const sysTokenMatch =
@@ -2680,22 +2927,27 @@ export async function loginStudentExamCbt(
     );
   }
 
+  // Selalu verifikasi 1 dokumen status siswa langsung dari server Firestore saat mulai/masuk ujian agar siswa tidak bisa mengakali blokir atau mereset hitungan pelanggaran lewat hapus cache / Incognito
+  const matchedStudentId = Number(matchedStudent.id);
+  const latestServerStatus = await fetchSingleStudentStatusOnce(matchedStudentId);
+  const refreshedCache = loadLocalCbtSnapshotCache();
+  const refreshedStudentFromServer = refreshedCache?.students.find(
+    (s) => Number(s.id) === matchedStudentId
+  );
+  if (refreshedStudentFromServer) {
+    matchedStudent = {
+      ...matchedStudent,
+      ...refreshedStudentFromServer,
+      status_ujian: latestServerStatus || refreshedStudentFromServer.status_ujian,
+    };
+  } else if (latestServerStatus) {
+    matchedStudent.status_ujian = latestServerStatus;
+  }
+
   if (matchedStudent.status_ujian === 'Diblokir') {
-    // Jangan langsung menolak dari cache localStorage! Cek langsung status terbaru di server Firestore (1 dokumen).
-    const latestServerStatus = await fetchSingleStudentStatusOnce(matchedStudent.id);
-    if (latestServerStatus && latestServerStatus !== 'Diblokir') {
-      matchedStudent.status_ujian = latestServerStatus;
-      clearLocalStudentBlockCacheCbt(
-        matchedStudent.id,
-        matchedStudent.token_ujian,
-        examId,
-        latestServerStatus
-      );
-    } else {
-      throw new Error(
-        'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.'
-      );
-    }
+    throw new Error(
+      'Akses ujian Anda sedang DIBLOKIR / DIKUNCI karena pelanggaran aturan keamanan (Anti-Cheat) atau dikunci oleh Pengawas. Siswa tidak dapat membuka blokir sendiri. Silakan hubungi Guru Pengawas untuk membuka kunci status ujian Anda.'
+    );
   }
 
   if (snapshot.exams.length === 0) {
@@ -2748,20 +3000,78 @@ export async function loginStudentExamCbt(
     );
   }
 
+  // Pertahankan catatan pelanggaran dari server jika siswa masih berada di ujian yang sama dan belum di-reset oleh Pengawas
+  const serverTel = matchedStudent.live_telemetry;
+  const isSameExamOnServer =
+    serverTel && Number(serverTel.exam_id) === Number(activeExam.id);
+  const wasUnlockedOrResetByProctor =
+    matchedStudent.status_ujian === 'Belum Mulai' ||
+    String(serverTel?.last_action || '').includes('KUNCI DIBUKA PENGAWAS');
+  const preservedViolations =
+    isSameExamOnServer && !wasUnlockedOrResetByProctor
+      ? Math.max(0, Number(serverTel?.tab_violations || 0))
+      : 0;
+  const preservedInspectAttempts =
+    isSameExamOnServer && !wasUnlockedOrResetByProctor
+      ? Math.max(0, Number(serverTel?.inspect_attempts || 0))
+      : 0;
+
+  const nowStartIso = new Date().toISOString();
   const updatedStudent: StudentItem = {
     ...matchedStudent,
     status_ujian: 'Sedang Ujian',
     kode_soal: proportionalAlloc.packageCode,
     variasi_paket: proportionalAlloc.variantLetter,
+    live_telemetry: {
+      ...(matchedStudent.live_telemetry || {}),
+      exam_id: Number(activeExam.id),
+      judul_ujian: String(activeExam.judul_ujian || '').slice(0, 120),
+      kode_paket: proportionalAlloc.packageCode,
+      current_question_no: Number(serverTel?.current_question_no || 1),
+      answered_count: Number(serverTel?.answered_count || 0),
+      total_questions: examQuestions.length,
+      remaining_seconds:
+        isSameExamOnServer && Number(serverTel?.remaining_seconds || 0) > 0
+          ? Number(serverTel?.remaining_seconds)
+          : Math.max(1, Number(activeExam.durasi_menit || 60)) * 60,
+      is_fullscreen: true,
+      is_focused: true,
+      devtools_open: false,
+      tab_violations: preservedViolations,
+      inspect_attempts: preservedInspectAttempts,
+      last_action: `MULAI UJIAN: ${String(activeExam.judul_ujian || '').slice(0, 60)}`,
+      last_active_at: nowStartIso,
+    },
   };
 
-  // Hanya 1 penulisan status 'Sedang Ujian' saat siswa memulai sesi ujian
+  patchLocalCbtSnapshotCache({ student: updatedStudent });
+
+  // Tulis status 'Sedang Ujian' + sinyal pulse delta `[STU:id]` dalam 1 batch ringan agar layar Guru langsung berubah real-time
   if (db) {
-    setDoc(
-      doc(db, 'students', String(updatedStudent.id)),
-      buildCleanStudentFirestoreDoc(updatedStudent, new Date().toISOString()),
-      { merge: true }
-    ).catch(() => {});
+    buildDeltaPulsePayload(
+      `MULAI UJIAN: ${updatedStudent.nama} (${updatedStudent.kelas}) — ${activeExam.judul_ujian}`,
+      `[STU:${updatedStudent.id}]`,
+      false
+    )
+      .then((pulsePayload) => {
+        if (!db) return;
+        const batch = writeBatch(db);
+        batch.set(
+          doc(db, 'students', String(updatedStudent.id)),
+          buildCleanStudentFirestoreDoc(updatedStudent, nowStartIso),
+          { merge: true }
+        );
+        batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+        return batch.commit();
+      })
+      .catch(() => {
+        if (!db) return;
+        setDoc(
+          doc(db, 'students', String(updatedStudent.id)),
+          buildCleanStudentFirestoreDoc(updatedStudent, nowStartIso),
+          { merge: true }
+        ).catch(() => {});
+      });
   }
 
   safeApiJson('/api/exam/login', {
@@ -2773,8 +3083,6 @@ export async function loginStudentExamCbt(
       examId: activeExam.id,
     }),
   }).catch(() => {});
-
-  patchLocalCbtSnapshotCache({ student: updatedStudent });
 
   return {
     student: updatedStudent,
@@ -2867,12 +3175,32 @@ export async function submitStudentExamCbt(payload: {
   });
 
   const nowIso = new Date().toISOString();
-  // Satu ID deterministik 15-digit (100% aman di dalam Number.MAX_SAFE_INTEGER & 64-bit integer Firestore)
-  const deterministicResultId =
+  // Cek apakah siswa sudah pernah memiliki hasil ujian untuk paket ini sebelumnya (Ujian Awal vs Ujian Ulang / Retake).
+  // Jika sudah ada hasil sebelumnya, buat ID dokumen 15-digit baru berbasis waktu agar hasil pertama (Sebelum Ujian Ulang) TIDAK TERTIMPA oleh hasil kedua (Sesudah Ujian Ulang).
+  const snapBeforeSubmit = loadLocalCbtSnapshotCache();
+  const previousAttemptsForExam = (snapBeforeSubmit?.results || []).filter(
+    (r) =>
+      Number(r.student_id) === Number(payload.student.id) &&
+      Number(r.exam_id) === Number(payload.exam.id)
+  );
+  const baseDeterministicId =
     Number(
       `9${String(payload.exam.id).slice(-7)}${String(payload.student.id).slice(-7)}`
     ) || Date.now();
-  const resultId = apiRes.data?.result?.id || deterministicResultId;
+  const uniqueRetakeId =
+    Number(
+      `${Date.now()}${String(payload.student.id).padStart(2, '0').slice(-2)}`
+    ) || Date.now();
+
+  const resultId =
+    apiRes.data?.result?.id &&
+    !previousAttemptsForExam.some(
+      (r) => Number(r.id) === Number(apiRes.data?.result?.id)
+    )
+      ? Number(apiRes.data.result.id)
+      : previousAttemptsForExam.length > 0
+        ? uniqueRetakeId
+        : baseDeterministicId;
 
   const studentPkgFinal =
     payload.student.kode_soal?.slice(0, 32) ||
@@ -2942,19 +3270,11 @@ export async function submitStudentExamCbt(payload: {
       nowIso
     );
 
-    const pulsePayload: CbtSyncPulseData = {
-      lastSyncedAt: nowIso,
-      lastEvent: `UJIAN SELESAI: ${payload.student.nama} (${payload.student.kelas}) — Nilai: ${scoreSummary.normalizedScore}/100 [RES:${resultId}:STU:${payload.student.id}]`.slice(
-        0,
-        200
-      ),
-      totalExams: cachedCollectionCounts.exams,
-      totalStudents: cachedCollectionCounts.students,
-      totalQuestions: cachedCollectionCounts.questions,
-      totalResults: cachedCollectionCounts.results,
-      authorUid: 'sahidin30@gmail.com',
-    };
-    saveCachedSyncPulseLocal(pulsePayload);
+    const pulsePayload = await buildDeltaPulsePayload(
+      `UJIAN SELESAI: ${payload.student.nama} (${payload.student.kelas}) — Nilai: ${scoreSummary.normalizedScore}/100`,
+      `[RES:${resultId}:STU:${payload.student.id}]`,
+      true
+    );
 
     try {
       // Kirim dokumen nilai (results), status selesai (students), dan sinyal pulse dalam 1 kali operasi batch atomik ke Firestore
@@ -3002,8 +3322,9 @@ export async function submitStudentExamCbt(payload: {
 /**
  * Sinkronisasi Real-Time Hemat Kuota (Smart Delta Pulse Sync):
  * - Hanya membaca 1 dokumen (`cbt_sync/live_state`) untuk mengecek apakah ada perubahan.
- * - Jika ada 1 siswa baru selesai ujian (`[RES:id:STU:id]`), hanya menarik 2 dokumen (`results/${id}` dan `students/${id}`)
- *   sehingga nilai siswa langsung masuk secara real-time di layar Guru tanpa menguras kuota harian!
+ * - Jika event memiliki tag `[RES:id:STU:id]` atau `[STU:id]`, hanya menarik dokumen spesifik tersebut (1-2 Reads)
+ *   sehingga status ('Sedang Ujian', 'Diblokir', 'Selesai', peringatan pelanggaran) dan nilai siswa langsung masuk
+ *   secara real-time di layar Guru tanpa membaca ulang koleksi ratusan siswa/soal!
  */
 export async function syncDeltaFromPulseOnce(params: {
   currentExams: ExamItem[];
@@ -3043,13 +3364,22 @@ export async function syncDeltaFromPulseOnce(params: {
       pulse = await fetchCbtSyncPulseOnce();
     }
 
+    const existingResultStudentExamKeys = new Set<string>(
+      params.currentResults.map(
+        (r) => `${Number(r.student_id)}_${Number(r.exam_id)}`
+      )
+    );
     const existingResultStudentIds = new Set<number>(
       params.currentResults.map((r) => Number(r.student_id))
     );
-    const finishedStudentsMissingResult = params.currentStudents.filter(
-      (s) =>
-        s.status_ujian === 'Selesai' && !existingResultStudentIds.has(Number(s.id))
-    );
+    const finishedStudentsMissingResult = params.currentStudents.filter((s) => {
+      if (s.status_ujian !== 'Selesai') return false;
+      const telExamId = Number(s.live_telemetry?.exam_id || 0);
+      if (telExamId > 0) {
+        return !existingResultStudentExamKeys.has(`${Number(s.id)}_${telExamId}`);
+      }
+      return !existingResultStudentIds.has(Number(s.id));
+    });
 
     const pulseChanged =
       Boolean(pulse?.lastSyncedAt) &&
@@ -3070,61 +3400,123 @@ export async function syncDeltaFromPulseOnce(params: {
     let nextResults = [...params.currentResults];
     let handledByFastDelta = false;
 
-    // 2. Jalur Cepat Delta (2 Reads): Jika event adalah 1 siswa baru selesai ujian `[RES:resultId:STU:studentId]`
-    const deltaMatch = String(pulse?.lastEvent || '').match(
-      /\[RES:(\d+):STU:(\d+)\]/
-    );
-    if (
-      pulseChanged &&
-      deltaMatch &&
-      finishedStudentsMissingResult.length <= 1 &&
-      (!pulse?.totalResults ||
-        params.currentResults.length + 1 >= pulse.totalResults)
-    ) {
-      const targetResultId = deltaMatch[1];
-      const targetStudentId = deltaMatch[2];
-      const [resSnap, stSnap] = await Promise.all([
-        getDocFromServer(doc(db, 'results', targetResultId)).catch(() =>
-          safeGetSingleDoc('results', targetResultId)
+    // 2. Jalur Cepat Delta (1-4 Reads): Ekstrak semua tag `[RES:resultId:STU:studentId]` dan `[STU:studentId]` dari `pulse.lastEvent`
+    const deltaPairs: Array<{ rId: string; sId: string }> = Array.from(
+      String(pulse?.lastEvent || '').matchAll(/\[(?:RES:(\d+):)?STU:(\d+)\]/g)
+    ).map((m) => ({
+      rId: m[1] || '',
+      sId: m[2] || '',
+    }));
+
+    // Juga tambahkan siswa berstatus 'Selesai' yang belum punya dokumen hasil agar dapat ditarik langsung via ID deterministiknya
+    for (const missingSt of finishedStudentsMissingResult) {
+      const telExamId =
+        Number(missingSt.live_telemetry?.exam_id) ||
+        Number(params.currentExams[0]?.id) ||
+        0;
+      const detResId =
+        telExamId > 0
+          ? String(
+              Number(
+                `9${String(telExamId).slice(-7)}${String(missingSt.id).slice(-7)}`
+              )
+            )
+          : '';
+      deltaPairs.push({
+        rId: detResId,
+        sId: String(missingSt.id),
+      });
+    }
+
+    if (deltaPairs.length > 0) {
+      const resultIdsToFetch = new Set<string>();
+      const studentIdsToFetch = new Set<string>();
+
+      for (const pair of deltaPairs) {
+        const { rId, sId } = pair;
+        const sig = `${pulse?.lastSyncedAt || ''}_${rId}_${sId}`;
+        if (pulseChanged && processedDeltaTagsMemory.has(sig)) continue;
+        if (rId) resultIdsToFetch.add(rId);
+        if (sId) studentIdsToFetch.add(sId);
+        if (pulse?.lastSyncedAt) {
+          processedDeltaTagsMemory.add(sig);
+        }
+      }
+
+      if (processedDeltaTagsMemory.size > 200) {
+        processedDeltaTagsMemory.clear();
+      }
+
+      const [resSnaps, stSnaps] = await Promise.all([
+        Promise.all(
+          Array.from(resultIdsToFetch).map((rId) =>
+            getDocFromServer(doc(db!, 'results', rId))
+              .catch(() => safeGetSingleDoc('results', rId))
+              .catch(() => null)
+          )
         ),
-        getDocFromServer(doc(db, 'students', targetStudentId)).catch(() =>
-          safeGetSingleDoc('students', targetStudentId)
+        Promise.all(
+          Array.from(studentIdsToFetch).map((sId) =>
+            getDocFromServer(doc(db!, 'students', sId))
+              .catch(() => safeGetSingleDoc('students', sId))
+              .catch(() => null)
+          )
         ),
       ]);
 
-      if (resSnap && resSnap.exists()) {
-        const rawR = resSnap.data() as any;
-        const newRes: ResultItem = {
-          id: Number(rawR.id),
-          student_id: Number(rawR.student_id),
-          exam_id: Number(rawR.exam_id),
-          skor_angka: Number(rawR.skor_angka) || 0,
-          kode_soal: rawR.kode_soal ? String(rawR.kode_soal) : undefined,
-          jawaban_siswa: rawR.jawaban_siswa || {},
-          analisis_ai: rawR.analisis_ai || null,
-          pelanggaran_tab: Number(rawR.pelanggaran_tab) || 0,
-          created_at:
-            rawR.created_at || rawR.updatedAt || new Date().toISOString(),
-        };
-        nextResults = [
-          newRes,
-          ...nextResults.filter(
-            (r) =>
-              Number(r.id) !== Number(newRes.id) &&
-              !(
-                Number(r.student_id) === Number(newRes.student_id) &&
-                Number(r.exam_id) === Number(newRes.exam_id)
-              )
-          ),
-        ];
-        handledByFastDelta = true;
+      for (const resSnap of resSnaps) {
+        if (resSnap && resSnap.exists()) {
+          const rawR = resSnap.data() as any;
+          const newRes: ResultItem = {
+            id: Number(rawR.id),
+            student_id: Number(rawR.student_id),
+            exam_id: Number(rawR.exam_id),
+            skor_angka: Number(rawR.skor_angka) || 0,
+            kode_soal: rawR.kode_soal ? String(rawR.kode_soal) : undefined,
+            jawaban_siswa: rawR.jawaban_siswa || {},
+            analisis_ai: rawR.analisis_ai || null,
+            pelanggaran_tab: Number(rawR.pelanggaran_tab) || 0,
+            created_at:
+              rawR.created_at || rawR.updatedAt || new Date().toISOString(),
+          };
+          nextResults = [
+            newRes,
+            ...nextResults.filter(
+              (r) =>
+                Number(r.id) !== Number(newRes.id) &&
+                !(
+                  Number(r.student_id) === Number(newRes.student_id) &&
+                  Number(r.exam_id) === Number(newRes.exam_id)
+                )
+            ),
+          ];
+        }
       }
 
-      if (stSnap && stSnap.exists()) {
-        const rawSt = stSnap.data() as StudentItem;
-        nextStudents = nextStudents.map((s) =>
-          Number(s.id) === Number(rawSt.id) ? { ...s, ...rawSt } : s
-        );
+      for (const stSnap of stSnaps) {
+        if (stSnap && stSnap.exists()) {
+          const rawSt = stSnap.data() as StudentItem;
+          const existsInList = nextStudents.some(
+            (s) => Number(s.id) === Number(rawSt.id)
+          );
+          if (existsInList) {
+            nextStudents = nextStudents.map((s) =>
+              Number(s.id) === Number(rawSt.id) ? { ...s, ...rawSt } : s
+            );
+          } else {
+            nextStudents = [rawSt, ...nextStudents];
+          }
+        }
+      }
+
+      // Selama jumlah total hasil di server sudah sinkron dengan memori lokal, tidak perlu membaca seluruh koleksi
+      const serverTotalResults = Number(pulse?.totalResults || 0);
+      const serverTotalStudents = Number(pulse?.totalStudents || 0);
+      if (
+        nextResults.length >= serverTotalResults &&
+        nextStudents.length >= serverTotalStudents
+      ) {
+        handledByFastDelta = true;
       }
     }
 

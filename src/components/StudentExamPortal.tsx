@@ -420,21 +420,20 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const [accountDashboardMenu, setAccountDashboardMenu] =
     useState<StudentDashboardMenu>('beranda');
 
-  // Keep loggedInAccount synced when students list updates from Firestore,
-  // while preventing stale local cache 'Diblokir' from overwriting a freshly unblocked student
+  // Active Exam Session State
+  const [activeStudent, setActiveStudent] = useState<StudentItem | null>(() => {
+    return initialSession?.student || null;
+  });
+
+  // Keep loggedInAccount synced when students list updates from Firestore
   useEffect(() => {
     if (!loggedInAccount || students.length === 0) return;
     const fresh = students.find((s) => Number(s.id) === Number(loggedInAccount.id));
     if (fresh) {
-      const effectiveStatus =
-        loggedInAccount.status_ujian !== 'Diblokir' &&
-        fresh.status_ujian === 'Diblokir'
-          ? loggedInAccount.status_ujian
-          : fresh.status_ujian;
       const merged: StudentItem = {
         ...loggedInAccount,
         ...fresh,
-        status_ujian: effectiveStatus,
+        status_ujian: fresh.status_ujian,
         password_login: fresh.password_login ?? loggedInAccount.password_login,
         nisn: fresh.nisn ?? loggedInAccount.nisn,
       };
@@ -442,13 +441,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         setLoggedInAccount(merged);
         saveLoggedInStudentAccount(merged);
       }
+      if (fresh.status_ujian === 'Diblokir' && activeStudent && Number(activeStudent.id) === Number(fresh.id)) {
+        setIsStudentBlocked(true);
+        setShowCheatLockModal(true);
+      }
     }
-  }, [students, loggedInAccount]);
-
-  // Active Exam Session State
-  const [activeStudent, setActiveStudent] = useState<StudentItem | null>(() => {
-    return initialSession?.student || null;
-  });
+  }, [students, loggedInAccount, activeStudent]);
   const [activeExam, setActiveExam] = useState<ExamItem | null>(() => {
     return initialSession?.exam || null;
   });
@@ -496,6 +494,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const lastViolationTimestampRef = useRef<number>(0);
   const lastInspectAttemptRef = useRef<number>(0);
   const unlockGraceUntilRef = useRef<number>(0);
+  const isLockingToServerRef = useRef<boolean>(false);
+  const lastBlockedTimestampRef = useRef<number>(0);
   const baselineWindowGapRef = useRef<{ wGap: number; hGap: number } | null>(null);
 
   // Submission state
@@ -875,11 +875,29 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         .toUpperCase()
         .trim();
 
-      const preSavedProgress = getLocalProgress(
-        cleanSystemToken,
-        targetExam.id,
-        currentAccount.id
+      const hasPreviousCompletedAttempt = results.some(
+        (r) =>
+          Number(r.student_id) === Number(currentAccount.id) &&
+          Number(r.exam_id) === Number(targetExam.id)
       );
+      const isFreshRescheduledRetake =
+        currentAccount.status_ujian === 'Belum Mulai' &&
+        (hasPreviousCompletedAttempt ||
+          String(currentAccount.live_telemetry?.last_action || '').includes(
+            'DIJADWALKAN ULANG'
+          ));
+
+      if (isFreshRescheduledRetake) {
+        clearLocalProgress(cleanSystemToken, targetExam.id, currentAccount.id);
+      }
+
+      const preSavedProgress = isFreshRescheduledRetake
+        ? null
+        : getLocalProgress(
+            cleanSystemToken,
+            targetExam.id,
+            currentAccount.id
+          );
       const preferredExamIdToUse = preSavedProgress?.examId || targetExam.id;
 
       // Check localStorage question cache (cbt_soal_${ujianId}) first before loginStudentExamCbt
@@ -900,9 +918,10 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         saveCachedExamQuestionsLocal(session.exam.id, rawExamQuestions);
       }
 
-      const savedProgress =
-        getLocalProgress(cleanSystemToken, session.exam?.id, currentAccount.id) ||
-        preSavedProgress;
+      const savedProgress = isFreshRescheduledRetake
+        ? null
+        : getLocalProgress(cleanSystemToken, session.exam?.id, currentAccount.id) ||
+          preSavedProgress;
 
       const proportional = resolveProportionalStudentExamPackage({
         student: currentAccount,
@@ -966,19 +985,33 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           (savedProgress.remainingSeconds > 0 &&
             savedProgress.remainingSeconds < fullExamDurationSecs));
 
+      const serverViolationsCount = Math.max(
+        0,
+        Number(session.student.live_telemetry?.tab_violations || 0)
+      );
+      const serverInspectCount = Math.max(
+        0,
+        Number(session.student.live_telemetry?.inspect_attempts || 0)
+      );
+      const wasUnlockedByProctor = String(
+        session.student.live_telemetry?.last_action || ''
+      ).includes('KUNCI DIBUKA PENGAWAS');
+
       if (hasExistingSessionProgress && savedProgress) {
         const restoredAnswers = savedProgress.answers || {};
-        // Jika siswa sudah diizinkan masuk kembali (status bukan Diblokir), reset hitungan pelanggaran lama yang mencapai >= 3 di localStorage agar tidak langsung terblokir ulang!
+        // Hanya reset hitungan pelanggaran >= 3 apabila pengawas benar-benar telah membuka kunci di server (serverViolationsCount === 0 atau ada penanda KUNCI DIBUKA PENGAWAS)
         const cleanRestoredViolations =
           session.student.status_ujian !== 'Diblokir' &&
+          (wasUnlockedByProctor || serverViolationsCount === 0) &&
           (savedProgress.tabViolations || 0) >= MAX_TAB_VIOLATIONS
             ? 0
-            : savedProgress.tabViolations || 0;
+            : Math.max(savedProgress.tabViolations || 0, serverViolationsCount);
         const cleanRestoredInspect =
           session.student.status_ujian !== 'Diblokir' &&
+          (wasUnlockedByProctor || serverViolationsCount === 0) &&
           (savedProgress.tabViolations || 0) >= MAX_TAB_VIOLATIONS
             ? 0
-            : savedProgress.inspectAttempts || 0;
+            : Math.max(savedProgress.inspectAttempts || 0, serverInspectCount);
 
         setAnswers(restoredAnswers);
         setCurrentIndex(savedProgress.currentIndex || 0);
@@ -1022,9 +1055,13 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       } else {
         setAnswers({});
         setCurrentIndex(0);
-        setRemainingSeconds((session.exam?.durasi_menit || 60) * 60);
-        setTabViolations(0);
-        setInspectAttempts(0);
+        const initialRemSecs =
+          Number(session.student.live_telemetry?.remaining_seconds || 0) > 0
+            ? Number(session.student.live_telemetry?.remaining_seconds)
+            : (session.exam?.durasi_menit || 60) * 60;
+        setRemainingSeconds(initialRemSecs);
+        setTabViolations(serverViolationsCount);
+        setInspectAttempts(serverInspectCount);
         saveLocalStudentAnswers(session.exam.id, updatedStudent.id, {
           examId: session.exam.id,
           studentId: updatedStudent.id,
@@ -1033,9 +1070,9 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           token_ujian: updatedStudent.token_ujian,
           answers: {},
           currentIndex: 0,
-          remainingSeconds: (session.exam?.durasi_menit || 60) * 60,
-          tabViolations: 0,
-          inspectAttempts: 0,
+          remainingSeconds: initialRemSecs,
+          tabViolations: serverViolationsCount,
+          inspectAttempts: serverInspectCount,
           assignedPackageCode: prepared.studentPackageCode,
           questionOrderIds: prepared.questions.map((q) => Number(q.id)),
           updatedAt: new Date().toISOString(),
@@ -1182,6 +1219,20 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   const handleCheckStudentStatusManual = useCallback(async () => {
     const targetStudent = activeStudent || loggedInAccount;
     if (!targetStudent || submittedSummary) return;
+
+    // Cegah race-condition saat proses penguncian pelanggaran ke-3 masih dikirim ke server Firestore
+    if (
+      isLockingToServerRef.current ||
+      Date.now() - lastBlockedTimestampRef.current < 5000
+    ) {
+      setIsStudentBlocked(true);
+      setShowCheatLockModal(true);
+      setUnlockCheckMessage(
+        'Sesi ujian Anda baru saja dikunci otomatis karena mencapai batas maksimal 3/3 pelanggaran. Silakan lapor kepada Guru Pengawas untuk membuka kunci.'
+      );
+      return;
+    }
+
     setIsCheckingUnlockStatus(true);
     setUnlockCheckMessage(null);
     try {
@@ -1260,11 +1311,18 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
     handleCheckStudentStatusManual();
 
+    const intervalId = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        handleCheckStudentStatusManual();
+      }
+    }, 12000);
+
     const onWindowFocusWhileBlocked = () => {
       handleCheckStudentStatusManual();
     };
     window.addEventListener('focus', onWindowFocusWhileBlocked);
     return () => {
+      window.clearInterval(intervalId);
       window.removeEventListener('focus', onWindowFocusWhileBlocked);
     };
   }, [
@@ -1393,6 +1451,8 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         : 'Sedang Ujian';
 
       if (shouldLockBlock) {
+        isLockingToServerRef.current = true;
+        lastBlockedTimestampRef.current = Date.now();
         setIsStudentBlocked(true);
       }
 
@@ -1435,9 +1495,13 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       }
 
       if (shouldLockBlock) {
-        updateStudentStatusCbt(updatedStudentObj, 'Diblokir').then(() => {
-          onExamCompleted();
-        });
+        updateStudentStatusCbt(updatedStudentObj, 'Diblokir')
+          .then(() => {
+            onExamCompleted();
+          })
+          .finally(() => {
+            isLockingToServerRef.current = false;
+          });
       } else {
         syncStudentLiveTelemetryCbt(
           updatedStudentObj,
