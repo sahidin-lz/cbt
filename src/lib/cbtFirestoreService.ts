@@ -352,6 +352,8 @@ export function clearLocalStudentAnswers(
  * Simpan seluruh soal dalam 1 paket ujian sebagai 1 dokumen tunggal (`questions/bundle_${examId}`)
  * sehingga 1 siswa hanya menghabiskan 1 kuota baca (`1 read`) saat mengunduh seluruh soal ujian.
  */
+const clearedQuestionExamIdsCache = new Set<number>();
+
 function buildExamQuestionsBundleDoc(
   examId: number,
   examQuestions: QuestionItem[],
@@ -385,6 +387,7 @@ function buildExamQuestionsBundleDoc(
     tipe_soal: 'PG',
     data_opsi: {
       is_bundle: true,
+      ...(sanitizedItems.length === 0 ? { cleared: true } : {}),
       items: sanitizedItems,
       wacana: '',
       opsi: { A: '-', B: '-', C: '-', D: '-', E: '-' },
@@ -400,29 +403,35 @@ export async function syncExamQuestionsBundleToFirestore(
   examId: number,
   examQuestions: QuestionItem[]
 ): Promise<void> {
+  const numExamId = Number(examId);
   const cleanItems = examQuestions
-    .filter((q) => Number(q.exam_id) === Number(examId))
+    .filter((q) => Number(q.exam_id) === numExamId)
     .sort((a, b) => Number(a.id) - Number(b.id));
 
-  saveCachedExamQuestionsLocal(examId, cleanItems);
+  if (cleanItems.length === 0) {
+    clearedQuestionExamIdsCache.add(numExamId);
+  } else {
+    clearedQuestionExamIdsCache.delete(numExamId);
+  }
+
+  saveCachedExamQuestionsLocal(numExamId, cleanItems);
+  patchLocalCbtSnapshotCache({
+    replaceQuestionsForExam: { examId: numExamId, items: cleanItems },
+  });
 
   if (!db) return;
   const nowIso = new Date().toISOString();
   try {
-    if (cleanItems.length === 0) {
-      await deleteDoc(doc(db, 'questions', `bundle_${examId}`));
-    } else {
-      await setDoc(
-        doc(db, 'questions', `bundle_${examId}`),
-        buildExamQuestionsBundleDoc(Number(examId), cleanItems, nowIso)
-      );
-    }
+    await setDoc(
+      doc(db, 'questions', `bundle_${numExamId}`),
+      buildExamQuestionsBundleDoc(numExamId, cleanItems, nowIso)
+    );
   } catch (err) {
     try {
       handleFirestoreError(
         err,
         OperationType.WRITE,
-        `questions/bundle_${examId}`
+        `questions/bundle_${numExamId}`
       );
     } catch {}
   }
@@ -431,27 +440,37 @@ export async function syncExamQuestionsBundleToFirestore(
 /**
  * Mengambil seluruh soal ujian untuk siswa dengan prioritas:
  * 1. `localStorage` (`cbt_soal_${ujianId}`) -> 0 Read Firestore
- * 2. 1 Dokumen Bundel (`questions/bundle_${ujianId}`) -> 1 Read Firestore (`getDoc`)
+ * 2. 1 Dokumen Bundel (`questions/bundle_${ujianId}`) -> 1 Read Firestore (`getDoc` / `getDocFromServer`)
  * 3. Fallback Legacy (`where('exam_id', '==', examId)`) lalu langsung disimpan ke `cbt_soal_${ujianId}` & bundel
  */
 export async function fetchExamQuestionsBundleOnce(
-  examId: number
+  examId: number,
+  options?: { forceServer?: boolean }
 ): Promise<QuestionItem[]> {
-  // 1. Cek localStorage cbt_soal_${examId} terlebih dahulu (0 Firestore Read)
-  const localCached = getCachedExamQuestionsLocal(examId);
-  if (localCached && localCached.length > 0) {
-    return localCached;
-  }
+  const numExamId = Number(examId);
+  const forceServer = Boolean(options?.forceServer);
 
-  // 2. Cek apakah snapshot lokal sudah menyimpan soal ujian ini (0 Firestore Read)
-  const snapshotCache = loadLocalCbtSnapshotCache();
-  if (snapshotCache) {
-    const snapQuestions = snapshotCache.questions.filter(
-      (q) => Number(q.exam_id) === Number(examId)
-    );
-    if (snapQuestions.length > 0) {
-      saveCachedExamQuestionsLocal(examId, snapQuestions);
-      return snapQuestions;
+  if (!forceServer) {
+    if (clearedQuestionExamIdsCache.has(numExamId)) {
+      return [];
+    }
+
+    // 1. Cek localStorage cbt_soal_${examId} terlebih dahulu (0 Firestore Read)
+    const localCached = getCachedExamQuestionsLocal(numExamId);
+    if (localCached && localCached.length > 0) {
+      return localCached;
+    }
+
+    // 2. Cek apakah snapshot lokal sudah menyimpan soal ujian ini (0 Firestore Read)
+    const snapshotCache = loadLocalCbtSnapshotCache();
+    if (snapshotCache) {
+      const snapQuestions = snapshotCache.questions.filter(
+        (q) => Number(q.exam_id) === numExamId
+      );
+      if (snapQuestions.length > 0) {
+        saveCachedExamQuestionsLocal(numExamId, snapQuestions);
+        return snapQuestions;
+      }
     }
   }
 
@@ -459,14 +478,25 @@ export async function fetchExamQuestionsBundleOnce(
 
   // 3. Ambil 1 dokumen bundel soal (`questions/bundle_${examId}`) dalam 1 kali getDoc (1 Read)
   try {
-    const bundleSnap = await safeGetSingleDoc('questions', `bundle_${examId}`);
+    const bundleSnap = forceServer
+      ? await getDocFromServer(doc(db, 'questions', `bundle_${numExamId}`)).catch(
+          () => safeGetSingleDoc('questions', `bundle_${numExamId}`)
+        )
+      : await safeGetSingleDoc('questions', `bundle_${numExamId}`);
     if (bundleSnap.exists()) {
       const raw = bundleSnap.data() as any;
       if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
+        // Jika bundel secara eksplisit kosong / cleared, HENTIKAN fallback agar soal yang sudah dikosongkan tidak muncul lagi
+        if (raw.data_opsi.items.length === 0 || raw.data_opsi.cleared === true) {
+          clearedQuestionExamIdsCache.add(numExamId);
+          saveCachedExamQuestionsLocal(numExamId, []);
+          return [];
+        }
+
         const bundledItems: QuestionItem[] = raw.data_opsi.items
           .map((item: any) => ({
             id: Number(item.id),
-            exam_id: Number(item.exam_id || examId),
+            exam_id: Number(item.exam_id || numExamId),
             teks_soal: String(item.teks_soal || ''),
             tipe_soal: item.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
             data_opsi: item.data_opsi || {
@@ -486,7 +516,8 @@ export async function fetchExamQuestionsBundleOnce(
           .sort((a: QuestionItem, b: QuestionItem) => a.id - b.id);
 
         if (bundledItems.length > 0) {
-          saveCachedExamQuestionsLocal(examId, bundledItems);
+          clearedQuestionExamIdsCache.delete(numExamId);
+          saveCachedExamQuestionsLocal(numExamId, bundledItems);
           return bundledItems;
         }
       }
@@ -499,17 +530,22 @@ export async function fetchExamQuestionsBundleOnce(
   try {
     const qQuery = query(
       collection(db, 'questions'),
-      where('exam_id', '==', Number(examId))
+      where('exam_id', '==', numExamId)
     );
     const snap = await getDocs(qQuery);
     const legacyItems: QuestionItem[] = [];
+    let hasExplicitClearedBundle = false;
     snap.docs.forEach((d) => {
       const raw = d.data() as any;
       if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
+        if (raw.data_opsi.items.length === 0 || raw.data_opsi.cleared === true) {
+          hasExplicitClearedBundle = true;
+          return;
+        }
         raw.data_opsi.items.forEach((item: any) => {
           legacyItems.push({
             id: Number(item.id),
-            exam_id: Number(item.exam_id || examId),
+            exam_id: Number(item.exam_id || numExamId),
             teks_soal: String(item.teks_soal || ''),
             tipe_soal: item.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
             data_opsi: item.data_opsi || {
@@ -540,6 +576,12 @@ export async function fetchExamQuestionsBundleOnce(
       }
     });
 
+    if (hasExplicitClearedBundle) {
+      clearedQuestionExamIdsCache.add(numExamId);
+      saveCachedExamQuestionsLocal(numExamId, []);
+      return [];
+    }
+
     const dedupMap = new Map<number, QuestionItem>();
     legacyItems.forEach((q) => dedupMap.set(Number(q.id), q));
     const finalItems = Array.from(dedupMap.values()).sort(
@@ -547,8 +589,9 @@ export async function fetchExamQuestionsBundleOnce(
     );
 
     if (finalItems.length > 0) {
-      saveCachedExamQuestionsLocal(examId, finalItems);
-      syncExamQuestionsBundleToFirestore(examId, finalItems).catch(() => {});
+      clearedQuestionExamIdsCache.delete(numExamId);
+      saveCachedExamQuestionsLocal(numExamId, finalItems);
+      syncExamQuestionsBundleToFirestore(numExamId, finalItems).catch(() => {});
     }
     return finalItems;
   } catch {
@@ -583,15 +626,13 @@ export function saveLocalCbtSnapshotCache(snapshot: {
     results: snapshot.results?.length || 0,
   };
 
-  // Simpan juga cache soal per ujian ke `cbt_soal_${ujianId}`
+  // Sinkronkan cache soal per ujian `cbt_soal_${ujianId}` termasuk menghapus cache paket yang soalnya 0 (kosong)
   if (Array.isArray(snapshot.exams) && Array.isArray(snapshot.questions)) {
     for (const ex of snapshot.exams) {
       const exQuestions = snapshot.questions.filter(
         (q) => Number(q.exam_id) === Number(ex.id)
       );
-      if (exQuestions.length > 0) {
-        saveCachedExamQuestionsLocal(ex.id, exQuestions);
-      }
+      saveCachedExamQuestionsLocal(ex.id, exQuestions);
     }
   }
 
@@ -643,8 +684,13 @@ export function loadLocalCbtSnapshotCache(): {
 
 export function patchLocalCbtSnapshotCache(patch: {
   exam?: ExamItem;
+  exams?: ExamItem[];
+  removeExamId?: number;
   student?: StudentItem;
   students?: StudentItem[];
+  removeStudentId?: number;
+  removeClass?: string;
+  replaceQuestionsForExam?: { examId: number; items: QuestionItem[] };
   result?: ResultItem;
 }): void {
   const current = loadLocalCbtSnapshotCache();
@@ -659,6 +705,27 @@ export function patchLocalCbtSnapshotCache(patch: {
           Number(e.id) === targetExamId ? { ...e, ...patch.exam } : e
         )
       : [patch.exam, ...nextExams];
+  }
+  if (Array.isArray(patch.exams) && patch.exams.length > 0) {
+    const exMap = new Map<number, ExamItem>();
+    for (const ex of patch.exams) {
+      exMap.set(Number(ex.id), ex);
+    }
+    nextExams = nextExams.map((e) => {
+      const upd = exMap.get(Number(e.id));
+      if (upd) {
+        exMap.delete(Number(e.id));
+        return { ...e, ...upd };
+      }
+      return e;
+    });
+    if (exMap.size > 0) {
+      nextExams = [...Array.from(exMap.values()), ...nextExams];
+    }
+  }
+  if (patch.removeExamId !== undefined) {
+    const rmId = Number(patch.removeExamId);
+    nextExams = nextExams.filter((e) => Number(e.id) !== rmId);
   }
 
   let nextStudents = current.students;
@@ -688,6 +755,35 @@ export function patchLocalCbtSnapshotCache(patch: {
       nextStudents = [...Array.from(mapById.values()), ...nextStudents];
     }
   }
+  if (patch.removeStudentId !== undefined) {
+    const rmStuId = Number(patch.removeStudentId);
+    nextStudents = nextStudents.filter((s) => Number(s.id) !== rmStuId);
+  }
+  if (patch.removeClass) {
+    const rmCls = patch.removeClass.trim().toLowerCase();
+    nextStudents = nextStudents.filter(
+      (s) => s.kelas.trim().toLowerCase() !== rmCls
+    );
+  }
+
+  let nextQuestions = current.questions;
+  if (patch.replaceQuestionsForExam) {
+    const targetQExamId = Number(patch.replaceQuestionsForExam.examId);
+    const newItems = patch.replaceQuestionsForExam.items.map((q) => ({
+      ...q,
+      exam_id: targetQExamId,
+    }));
+    nextQuestions = [
+      ...nextQuestions.filter((q) => Number(q.exam_id) !== targetQExamId),
+      ...newItems,
+    ].sort((a, b) => Number(a.id) - Number(b.id));
+    saveCachedExamQuestionsLocal(targetQExamId, newItems);
+  }
+  if (patch.removeExamId !== undefined) {
+    const rmId = Number(patch.removeExamId);
+    nextQuestions = nextQuestions.filter((q) => Number(q.exam_id) !== rmId);
+    saveCachedExamQuestionsLocal(rmId, []);
+  }
 
   let nextResults = current.results;
   if (patch.result) {
@@ -697,16 +793,22 @@ export function patchLocalCbtSnapshotCache(patch: {
     const filtered = nextResults.filter((r) => Number(r.id) !== targetResId);
     nextResults = [patch.result, ...filtered];
   }
+  if (patch.removeExamId !== undefined) {
+    const rmId = Number(patch.removeExamId);
+    nextResults = nextResults.filter((r) => Number(r.exam_id) !== rmId);
+  }
 
   saveLocalCbtSnapshotCache({
     exams: nextExams,
     students: nextStudents,
-    questions: current.questions,
+    questions: nextQuestions,
     results: nextResults,
   });
 }
 
 const processedDeltaTagsMemory = new Set<string>();
+const DELTA_TAG_REGEX =
+  /\[(?:RES:\d+:)?STU:\d+\]|\[EXM:\d+\]|\[Q_EXM:\d+\]|\[BULK_(?:STU|EXM)\]/g;
 
 async function buildDeltaPulsePayload(
   headlineText: string,
@@ -717,12 +819,10 @@ async function buildDeltaPulsePayload(
   // Gunakan cache lokal agar 0 Read Firestore setiap kali siswa/pengawas mengirim sinyal perubahan!
   const prevPulse: CbtSyncPulseData | null = getCachedSyncPulseLocal();
 
-  // Ambil hingga 3 tag delta terakhir dari pulse sebelumnya agar jika beberapa siswa selesai/mulai/melanggar bersamaan tidak saling menimpa
+  // Ambil hingga 4 tag delta terakhir dari pulse sebelumnya agar jika beberapa perubahan bersamaan tidak saling menimpa
   const prevTags: string[] = [];
   if (prevPulse?.lastEvent) {
-    const matches = prevPulse.lastEvent.matchAll(
-      /\[(?:RES:\d+:)?STU:\d+\]|\[EXM:\d+\]/g
-    );
+    const matches = prevPulse.lastEvent.matchAll(DELTA_TAG_REGEX);
     for (const m of matches) {
       if (m[0] && !prevTags.includes(m[0])) {
         prevTags.push(m[0]);
@@ -732,7 +832,7 @@ async function buildDeltaPulsePayload(
 
   if (newDeltaTag) {
     const incomingMatches = Array.from(
-      newDeltaTag.matchAll(/\[(?:RES:\d+:)?STU:\d+\]|\[EXM:\d+\]/g)
+      newDeltaTag.matchAll(DELTA_TAG_REGEX)
     ).map((m) => m[0]);
     const tagsToAdd =
       incomingMatches.length > 0 ? incomingMatches : [newDeltaTag];
@@ -741,14 +841,18 @@ async function buildDeltaPulsePayload(
     for (const tag of tagsToAdd) {
       const targetStuMatch = tag.match(/STU:(\d+)/);
       const targetStuId = targetStuMatch ? targetStuMatch[1] : null;
-      const targetExmMatch = tag.match(/EXM:(\d+)/);
+      const targetExmMatch = tag.match(/^\[EXM:(\d+)\]/);
       const targetExmId = targetExmMatch ? targetExmMatch[1] : null;
+      const targetQExmMatch = tag.match(/^\[Q_EXM:(\d+)\]/);
+      const targetQExmId = targetQExmMatch ? targetQExmMatch[1] : null;
 
       filteredPrev = targetStuId
         ? filteredPrev.filter((t) => !t.includes(`STU:${targetStuId}]`))
         : targetExmId
-          ? filteredPrev.filter((t) => !t.includes(`EXM:${targetExmId}]`))
-          : filteredPrev.filter((t) => t !== tag);
+          ? filteredPrev.filter((t) => t !== `[EXM:${targetExmId}]`)
+          : targetQExmId
+            ? filteredPrev.filter((t) => t !== `[Q_EXM:${targetQExmId}]`)
+            : filteredPrev.filter((t) => t !== tag);
       filteredPrev.push(tag);
     }
     while (filteredPrev.length > 4) {
@@ -760,7 +864,10 @@ async function buildDeltaPulsePayload(
 
   const tagsSuffix = prevTags.length > 0 ? ` ${prevTags.join('')}` : '';
   const cleanHeadline = headlineText
-    .replace(/\s*(?:\[(?:RES:\d+:)?STU:\d+\]|\[EXM:\d+\])/g, '')
+    .replace(
+      /\s*(?:\[(?:RES:\d+:)?STU:\d+\]|\[EXM:\d+\]|\[Q_EXM:\d+\]|\[BULK_(?:STU|EXM)\])/g,
+      ''
+    )
     .trim();
   const maxHeadlineLen = Math.max(20, 198 - tagsSuffix.length);
   const finalLastEvent = `${cleanHeadline.slice(0, maxHeadlineLen)}${tagsSuffix}`.slice(
@@ -776,10 +883,7 @@ async function buildDeltaPulsePayload(
       prevPulse?.totalStudents || 0,
       cachedCollectionCounts.students
     ),
-    totalQuestions: Math.max(
-      prevPulse?.totalQuestions || 0,
-      cachedCollectionCounts.questions
-    ),
+    totalQuestions: cachedCollectionCounts.questions,
     totalResults: Math.max(
       (prevPulse?.totalResults || 0) + (extraResultAdded ? 1 : 0),
       cachedCollectionCounts.results
@@ -800,9 +904,9 @@ async function updateFirestorePulse(
   }
 ) {
   const nowIso = new Date().toISOString();
-  const tagMatches = Array.from(
-    eventText.matchAll(/\[(?:RES:\d+:)?STU:\d+\]|\[EXM:\d+\]/g)
-  ).map((m) => m[0]);
+  const tagMatches = Array.from(eventText.matchAll(DELTA_TAG_REGEX)).map(
+    (m) => m[0]
+  );
   let pulse: CbtSyncPulseData;
   if (tagMatches.length > 0 && !counts) {
     pulse = await buildDeltaPulsePayload(
@@ -1479,7 +1583,9 @@ export async function loadUnifiedDashboardData(options?: {
 
     const questionById = new Map<number, QuestionItem>();
     for (const apiQ of apiRes.data.questions || []) {
-      questionById.set(Number(apiQ.id), apiQ);
+      if (!clearedQuestionExamIdsCache.has(Number(apiQ.exam_id))) {
+        questionById.set(Number(apiQ.id), apiQ);
+      }
     }
     for (const fsQ of firestoreData?.questions || []) {
       questionById.set(Number(fsQ.id), fsQ);
@@ -1761,6 +1867,54 @@ export async function updateExamSessionTokenCbt(
   );
 }
 
+export async function batchUpdateExamSessionTokensCbt(
+  updates: Array<{ exam: ExamItem; token?: string }>
+): Promise<ExamItem[]> {
+  if (updates.length === 0) return [];
+  const nowIso = new Date().toISOString();
+
+  const updatedExams: ExamItem[] = updates.map(({ exam, token }) => {
+    const nextToken =
+      token && token.trim().length >= 4
+        ? token.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 12)
+        : generateExamToken();
+    return {
+      ...exam,
+      token_sesi: nextToken,
+    };
+  });
+
+  patchLocalCbtSnapshotCache({ exams: updatedExams });
+
+  if (db) {
+    const tagSuffix =
+      updatedExams.length <= 4
+        ? updatedExams.map((e) => `[EXM:${e.id}]`).join('')
+        : '[BULK_EXM]';
+    const pulsePayload = await buildDeltaPulsePayload(
+      `Token Sesi Ujian diperbarui serentak untuk ${updatedExams.length} paket ujian ${tagSuffix}`,
+      tagSuffix,
+      false
+    );
+    try {
+      const batch = writeBatch(db);
+      for (const ex of updatedExams) {
+        batch.set(
+          doc(db, 'exams', String(ex.id)),
+          buildCleanExamFirestoreDoc(ex, nowIso),
+          { merge: true }
+        );
+      }
+      batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+      await batch.commit();
+    } catch {
+      await setDoc(doc(db, 'cbt_sync', 'live_state'), pulsePayload).catch(() => {});
+    }
+  }
+
+  return updatedExams;
+}
+
 export async function batchAssignPackageVariantsCbt(
   updatedStudents: StudentItem[]
 ): Promise<void> {
@@ -1801,27 +1955,25 @@ export async function batchAssignPackageVariantsCbt(
 
 export async function deleteExamCbt(examId: number, title: string): Promise<void> {
   await safeApiJson(`/api/exams/${examId}`, { method: 'DELETE' });
+  clearedQuestionExamIdsCache.add(Number(examId));
+  patchLocalCbtSnapshotCache({ removeExamId: Number(examId) });
   if (db) {
     const [qSnap, rSnap] = await Promise.all([
-      getDocs(cbtCollectionQuery('questions')),
-      getDocs(cbtCollectionQuery('results')),
+      getDocs(query(collection(db, 'questions'), where('exam_id', '==', Number(examId)))),
+      getDocs(query(collection(db, 'results'), where('exam_id', '==', Number(examId)))),
     ]);
     const batch = writeBatch(db);
     batch.delete(doc(db, 'exams', String(examId)));
-    qSnap.docs.forEach((d) => {
-      const raw = d.data() as any;
-      if (Number(raw.exam_id) === Number(examId)) {
-        batch.delete(d.ref);
-      }
-    });
-    rSnap.docs.forEach((d) => {
-      const raw = d.data() as any;
-      if (Number(raw.exam_id) === Number(examId)) {
-        batch.delete(d.ref);
-      }
-    });
+    batch.delete(doc(db, 'questions', `bundle_${examId}`));
+    qSnap.docs.forEach((d) => batch.delete(d.ref));
+    rSnap.docs.forEach((d) => batch.delete(d.ref));
+    const pulsePayload = await buildDeltaPulsePayload(
+      `Paket ujian "${title}" beserta soal terkait dihapus [BULK_EXM]`,
+      '[BULK_EXM]',
+      false
+    );
+    batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
     await batch.commit();
-    await updateFirestorePulse(`Paket ujian "${title}" beserta soal terkait dihapus`);
   }
 }
 
@@ -1977,6 +2129,18 @@ export async function uploadStudentsCsvCbt(
     });
   }
 
+  if (replaceExisting) {
+    const currentSnap = loadLocalCbtSnapshotCache();
+    if (currentSnap) {
+      saveLocalCbtSnapshotCache({
+        ...currentSnap,
+        students: insertedStudents,
+      });
+    }
+  } else {
+    patchLocalCbtSnapshotCache({ students: insertedStudents });
+  }
+
   if (db) {
     if (replaceExisting) {
       const oldSnap = await getDocs(cbtCollectionQuery('students'));
@@ -1989,10 +2153,13 @@ export async function uploadStudentsCsvCbt(
     for (const st of insertedStudents) {
       batch.set(doc(db, 'students', String(st.id)), buildCleanStudentFirestoreDoc(st, nowIso));
     }
-    await batch.commit();
-    await updateFirestorePulse(
-      `Upload massal ${insertedStudents.length} siswa CSV ke Firebase Firestore`
+    const pulsePayload = await buildDeltaPulsePayload(
+      `Upload massal ${insertedStudents.length} siswa CSV ke Firebase Firestore [BULK_STU]`,
+      '[BULK_STU]',
+      false
     );
+    batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+    await batch.commit();
   }
 
   return {
@@ -2606,9 +2773,17 @@ export async function deleteStudentCbt(
   nama: string
 ): Promise<void> {
   await safeApiJson(`/api/students/${studentId}`, { method: 'DELETE' });
+  patchLocalCbtSnapshotCache({ removeStudentId: Number(studentId) });
   if (db) {
-    await deleteDoc(doc(db, 'students', String(studentId)));
-    await updateFirestorePulse(`Data siswa "${nama}" dihapus`);
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'students', String(studentId)));
+    const pulsePayload = await buildDeltaPulsePayload(
+      `Data siswa "${nama}" dihapus [BULK_STU]`,
+      '[BULK_STU]',
+      false
+    );
+    batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+    await batch.commit();
   }
 }
 
@@ -2627,9 +2802,13 @@ export async function renameClassCbt(
     body: JSON.stringify({ oldKelas: cleanOld, newKelas: cleanNew }),
   });
 
-  const matching = currentStudents.filter(
-    (s) => s.kelas.trim().toLowerCase() === cleanOld.toLowerCase()
-  );
+  const matching = currentStudents
+    .filter((s) => s.kelas.trim().toLowerCase() === cleanOld.toLowerCase())
+    .map((s) => ({ ...s, kelas: cleanNew }));
+
+  if (matching.length > 0) {
+    patchLocalCbtSnapshotCache({ students: matching });
+  }
 
   if (db && matching.length > 0) {
     const nowIso = new Date().toISOString();
@@ -2637,14 +2816,17 @@ export async function renameClassCbt(
     for (const st of matching) {
       batch.set(
         doc(db, 'students', String(st.id)),
-        buildCleanStudentFirestoreDoc({ ...st, kelas: cleanNew }, nowIso),
+        buildCleanStudentFirestoreDoc(st, nowIso),
         { merge: true }
       );
     }
-    await batch.commit();
-    await updateFirestorePulse(
-      `Nama kelas diubah: ${cleanOld} menjadi ${cleanNew} (${matching.length} siswa)`
+    const pulsePayload = await buildDeltaPulsePayload(
+      `Nama kelas diubah: ${cleanOld} menjadi ${cleanNew} (${matching.length} siswa) [BULK_STU]`,
+      '[BULK_STU]',
+      false
     );
+    batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+    await batch.commit();
   }
 
   return matching.length;
@@ -2667,15 +2849,20 @@ export async function deleteClassStudentsCbt(
     (s) => s.kelas.trim().toLowerCase() === cleanKelas.toLowerCase()
   );
 
+  patchLocalCbtSnapshotCache({ removeClass: cleanKelas });
+
   if (db && matching.length > 0) {
     const batch = writeBatch(db);
     for (const st of matching) {
       batch.delete(doc(db, 'students', String(st.id)));
     }
-    await batch.commit();
-    await updateFirestorePulse(
-      `Kelas ${cleanKelas} beserta ${matching.length} siswa dihapus`
+    const pulsePayload = await buildDeltaPulsePayload(
+      `Kelas ${cleanKelas} beserta ${matching.length} siswa dihapus [BULK_STU]`,
+      '[BULK_STU]',
+      false
     );
+    batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+    await batch.commit();
   }
 
   return matching.length;
@@ -2722,7 +2909,13 @@ export async function addManualQuestionCbt(payload: {
         };
 
   // Perbarui cache soal lokal `cbt_soal_${examId}` & dokumen bundel tunggal di Firestore
-  const existingCached = getCachedExamQuestionsLocal(payload.examId) || [];
+  const snapshotCache = loadLocalCbtSnapshotCache();
+  const existingCached =
+    getCachedExamQuestionsLocal(payload.examId) ||
+    snapshotCache?.questions.filter(
+      (q) => Number(q.exam_id) === Number(payload.examId)
+    ) ||
+    [];
   const nextExamQuestions = [
     ...existingCached.filter((q) => Number(q.id) !== Number(questionRecord.id)),
     questionRecord,
@@ -2731,7 +2924,7 @@ export async function addManualQuestionCbt(payload: {
   await syncExamQuestionsBundleToFirestore(payload.examId, nextExamQuestions);
   if (db) {
     await updateFirestorePulse(
-      `Butir soal baru ditambahkan ke paket ujian #${payload.examId}`
+      `Butir soal baru ditambahkan ke paket ujian #${payload.examId} [Q_EXM:${payload.examId}]`
     );
   }
 
@@ -2779,7 +2972,13 @@ export async function updateManualQuestionCbt(payload: {
         };
 
   // Perbarui cache soal lokal `cbt_soal_${examId}` & dokumen bundel tunggal di Firestore
-  const existingCached = getCachedExamQuestionsLocal(payload.examId) || [];
+  const snapshotCache = loadLocalCbtSnapshotCache();
+  const existingCached =
+    getCachedExamQuestionsLocal(payload.examId) ||
+    snapshotCache?.questions.filter(
+      (q) => Number(q.exam_id) === Number(payload.examId)
+    ) ||
+    [];
   const nextExamQuestions = [
     ...existingCached.filter((q) => Number(q.id) !== Number(questionRecord.id)),
     questionRecord,
@@ -2788,7 +2987,7 @@ export async function updateManualQuestionCbt(payload: {
   await syncExamQuestionsBundleToFirestore(payload.examId, nextExamQuestions);
   if (db) {
     await updateFirestorePulse(
-      `Butir soal #${questionRecord.id} berhasil diperbarui`
+      `Butir soal #${questionRecord.id} berhasil diperbarui [Q_EXM:${payload.examId}]`
     );
   }
 
@@ -2857,7 +3056,7 @@ export async function uploadQuestionsCsvCbt(
 
   if (db) {
     await updateFirestorePulse(
-      `Upload massal ${insertedQuestions.length} soal CSV ke bundel ujian #${examId}`
+      `Upload massal ${insertedQuestions.length} soal CSV ke bundel ujian #${examId} [Q_EXM:${examId}]`
     );
   }
 
@@ -2887,7 +3086,9 @@ export async function deleteQuestionCbt(questionId: number): Promise<void> {
 
   if (db) {
     await deleteDoc(doc(db, 'questions', String(questionId))).catch(() => {});
-    await updateFirestorePulse(`Butir soal #${questionId} dihapus`);
+    await updateFirestorePulse(
+      `Butir soal #${questionId} dihapus${targetQ ? ` [Q_EXM:${targetQ.exam_id}]` : ''}`
+    );
   }
 }
 
@@ -2895,23 +3096,60 @@ export async function clearExamQuestionsCbt(
   examId: number,
   currentQuestions: QuestionItem[]
 ): Promise<number> {
-  await safeApiJson(`/api/exams/${examId}/questions`, { method: 'DELETE' });
+  const numExamId = Number(examId);
+  await safeApiJson(`/api/exams/${numExamId}/questions`, { method: 'DELETE' });
   const toRemove = currentQuestions.filter(
-    (q) => Number(q.exam_id) === Number(examId)
+    (q) => Number(q.exam_id) === numExamId
   );
-  saveCachedExamQuestionsLocal(examId, []);
+
+  clearedQuestionExamIdsCache.add(numExamId);
+  saveCachedExamQuestionsLocal(numExamId, []);
+  patchLocalCbtSnapshotCache({
+    replaceQuestionsForExam: { examId: numExamId, items: [] },
+  });
+
   if (db) {
-    await deleteDoc(doc(db, 'questions', `bundle_${examId}`)).catch(() => {});
-    if (toRemove.length > 0) {
+    const nowIso = new Date().toISOString();
+    try {
+      // Hapus semua dokumen soal legacy individual untuk examId ini agar tidak muncul lagi
+      const legacySnap = await getDocs(
+        query(collection(db, 'questions'), where('exam_id', '==', numExamId))
+      ).catch(() => null);
       const batch = writeBatch(db);
-      toRemove.forEach((q) =>
-        batch.delete(doc(db!, 'questions', String(q.id)))
+      const seenDocIds = new Set<string>();
+      if (legacySnap) {
+        legacySnap.docs.forEach((d) => {
+          if (d.id !== `bundle_${numExamId}`) {
+            batch.delete(d.ref);
+            seenDocIds.add(d.id);
+          }
+        });
+      }
+      toRemove.forEach((q) => {
+        const qDocId = String(q.id);
+        if (qDocId !== `bundle_${numExamId}` && !seenDocIds.has(qDocId)) {
+          batch.delete(doc(db!, 'questions', qDocId));
+        }
+      });
+
+      // Tulis bundel eksplisit kosong (`cleared: true, items: []`) + pulse delta [Q_EXM:examId]
+      batch.set(
+        doc(db, 'questions', `bundle_${numExamId}`),
+        buildExamQuestionsBundleDoc(numExamId, [], nowIso)
       );
-      await batch.commit().catch(() => {});
+      const pulsePayload = await buildDeltaPulsePayload(
+        `Semua soal (${toRemove.length} butir) pada paket #${numExamId} dikosongkan [Q_EXM:${numExamId}]`,
+        `[Q_EXM:${numExamId}]`,
+        false
+      );
+      batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+      await batch.commit();
+    } catch {
+      await syncExamQuestionsBundleToFirestore(numExamId, []).catch(() => {});
+      await updateFirestorePulse(
+        `Semua soal (${toRemove.length} butir) pada bank soal ujian #${numExamId} dihapus [Q_EXM:${numExamId}]`
+      );
     }
-    await updateFirestorePulse(
-      `Semua soal (${toRemove.length} butir) pada bank soal ujian #${examId} dihapus`
-    );
   }
   return toRemove.length;
 }
@@ -2922,7 +3160,13 @@ export async function copyQuestionsToExamCbt(
 ): Promise<number> {
   if (sourceQuestions.length === 0) return 0;
   const baseId = Date.now();
-  const existingForTarget = getCachedExamQuestionsLocal(targetExamId) || [];
+  const snapshotCache = loadLocalCbtSnapshotCache();
+  const existingForTarget =
+    getCachedExamQuestionsLocal(targetExamId) ||
+    snapshotCache?.questions.filter(
+      (q) => Number(q.exam_id) === Number(targetExamId)
+    ) ||
+    [];
   const clonedQuestions: QuestionItem[] = sourceQuestions.map((q, idx) => ({
     id: baseId + idx,
     exam_id: targetExamId,
@@ -2944,6 +3188,11 @@ export async function copyQuestionsToExamCbt(
 
   const combined = [...existingForTarget, ...clonedQuestions];
   await syncExamQuestionsBundleToFirestore(targetExamId, combined);
+  if (db) {
+    await updateFirestorePulse(
+      `${clonedQuestions.length} butir soal disalin ke paket #${targetExamId} [Q_EXM:${targetExamId}]`
+    );
+  }
   return clonedQuestions.length;
 }
 
@@ -3713,11 +3962,13 @@ export async function syncDeltaFromPulseOnce(params: {
 
     let nextExams = [...params.currentExams];
     let nextStudents = [...params.currentStudents];
+    let nextQuestions = [...params.currentQuestions];
     let nextResults = [...params.currentResults];
     let handledByFastDelta = false;
 
     const lastEventStr = String(pulse?.lastEvent || '');
     const isExplicitBulk = lastEventStr.includes('[BULK_STU]');
+    const isExplicitBulkExams = lastEventStr.includes('[BULK_EXM]');
 
     // 2A. Jalur Cepat Delta Paket Ujian (`[EXM:examId]` = 1 Read):
     const examIdsToFetch = new Set<string>(
@@ -3744,7 +3995,31 @@ export async function syncDeltaFromPulseOnce(params: {
             : [rawEx, ...nextExams];
         }
       }
-      if (!isExplicitBulk) {
+      if (!isExplicitBulk && !isExplicitBulkExams) {
+        handledByFastDelta = true;
+      }
+    }
+
+    // 2A-2. Jalur Cepat Delta Bank Soal Paket (`[Q_EXM:examId]` = 1 Read bundel soal):
+    const qExamIdsToFetch = new Set<string>(
+      Array.from(lastEventStr.matchAll(/\[Q_EXM:(\d+)\]/g)).map((m) => m[1])
+    );
+    if (qExamIdsToFetch.size > 0) {
+      for (const qeId of qExamIdsToFetch) {
+        const sig = `${pulse?.lastSyncedAt || ''}_QEXM_${qeId}`;
+        if (pulseChanged && processedDeltaTagsMemory.has(sig)) continue;
+        if (pulse?.lastSyncedAt) {
+          processedDeltaTagsMemory.add(sig);
+        }
+        const freshItems = await fetchExamQuestionsBundleOnce(Number(qeId), {
+          forceServer: true,
+        });
+        nextQuestions = [
+          ...nextQuestions.filter((q) => Number(q.exam_id) !== Number(qeId)),
+          ...freshItems,
+        ].sort((a, b) => Number(a.id) - Number(b.id));
+      }
+      if (!isExplicitBulk && !isExplicitBulkExams) {
         handledByFastDelta = true;
       }
     }
@@ -3899,30 +4174,40 @@ export async function syncDeltaFromPulseOnce(params: {
 
       // Selama event memiliki delta tag spesifik ([STU:...] / [RES:...]) dan bukan operasi massal [BULK_STU],
       // JANGAN PERNAH melakukan pembacaan koleksi penuh (`safeGetCollectionDocs`) agar kuota harian sangat irit untuk ratusan siswa!
-      if (!isExplicitBulk) {
+      if (!isExplicitBulk && !isExplicitBulkExams) {
         handledByFastDelta = true;
       }
     }
 
-    // 3. Hanya jika operasi massal (`[BULK_STU]` / CSV upload / hapus ujian) tanpa tag individu, tarik koleksi yang berubah
+    // 3. Hanya jika operasi massal (`[BULK_STU]` / `[BULK_EXM]` / hapus ujian) tanpa tag individu, tarik hanya koleksi yang berubah
     if (pulseChanged && !handledByFastDelta) {
       const shouldFetchExams =
+        isExplicitBulkExams ||
         lastEventStr.includes('Paket ujian') ||
         Number(pulse?.totalExams || 0) !== nextExams.length;
+      const shouldFetchStudents = isExplicitBulk || !isExplicitBulkExams;
+      const shouldFetchResults = !isExplicitBulk && !isExplicitBulkExams;
+
       const [exSnap, stSnap, rSnap] = await Promise.all([
         shouldFetchExams
           ? safeGetCollectionDocs('exams')
           : Promise.resolve({ docs: [] as any[] }),
-        safeGetCollectionDocs('students'),
-        isExplicitBulk
-          ? Promise.resolve({ docs: [] as any[] })
-          : safeGetCollectionDocs('results'),
+        shouldFetchStudents
+          ? safeGetCollectionDocs('students')
+          : Promise.resolve({ docs: [] as any[] }),
+        shouldFetchResults
+          ? safeGetCollectionDocs('results')
+          : Promise.resolve({ docs: [] as any[] }),
       ]);
 
       if (exSnap.docs.length > 0) {
         nextExams = exSnap.docs
           .map((d) => d.data() as ExamItem)
           .sort((a, b) => Number(b.id) - Number(a.id));
+        const activeIds = new Set(nextExams.map((e) => Number(e.id)));
+        nextQuestions = nextQuestions.filter((q) =>
+          activeIds.has(Number(q.exam_id))
+        );
       }
 
       if (stSnap.docs.length > 0) {
@@ -3965,7 +4250,7 @@ export async function syncDeltaFromPulseOnce(params: {
     const reconciled = reconcileFinishedStudentsWithResults({
       students: nextStudents,
       exams: nextExams,
-      questions: params.currentQuestions,
+      questions: nextQuestions,
       results: nextResults,
     });
 
@@ -3973,13 +4258,13 @@ export async function syncDeltaFromPulseOnce(params: {
       results: reconciled,
       students: nextStudents,
       exams: nextExams,
-      questions: params.currentQuestions,
+      questions: nextQuestions,
     });
 
     const updatedBundle = {
       exams: nextExams,
       students: nextStudents,
-      questions: params.currentQuestions,
+      questions: nextQuestions,
       results: recalc.results,
     };
     saveLocalCbtSnapshotCache(updatedBundle);

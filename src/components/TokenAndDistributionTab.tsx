@@ -39,6 +39,7 @@ import {
   saveExamCbt,
   toggleExamStatusCbt,
   updateExamSessionTokenCbt,
+  batchUpdateExamSessionTokensCbt,
   batchAssignPackageVariantsCbt,
 } from '../lib/cbtFirestoreService';
 
@@ -182,6 +183,7 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
     setTokenFeedback(null);
     try {
       await updateExamSessionTokenCbt(exam, raw);
+      setCustomTokenInputs((prev) => ({ ...prev, [exam.id]: '' }));
       await onRefreshData();
       setTokenFeedback(
         `Token Sesi Ujian untuk "${exam.judul_ujian}" berhasil disimpan menjadi: ${raw}`
@@ -197,13 +199,13 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
     setIsBatchRandomizingTokens(true);
     setTokenFeedback(null);
     try {
-      for (const ex of targets) {
-        const nextTok = generateExamToken();
-        await updateExamSessionTokenCbt(ex, nextTok);
-      }
+      await batchUpdateExamSessionTokensCbt(
+        targets.map((ex) => ({ exam: ex }))
+      );
+      setCustomTokenInputs({});
       await onRefreshData();
       setTokenFeedback(
-        `Berhasil mengacak ulang Token Sesi Ujian untuk ${targets.length} paket ujian sekaligus.`
+        `Berhasil mengacak ulang Token Sesi Ujian untuk ${targets.length} paket ujian sekaligus dan langsung tersinkronisasi.`
       );
     } finally {
       setIsBatchRandomizingTokens(false);

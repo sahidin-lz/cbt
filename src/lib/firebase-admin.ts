@@ -82,24 +82,49 @@ export async function syncCbtStateToFirestore(
       );
     }
 
-    // 4. Sync Questions (/questions/{id}) including full data_opsi & kunci_jawaban
+    // 4. Bundle Questions per exam into /questions/bundle_{examId}
+    const questionsByExam = new Map<number, any[]>();
+    for (const ex of data.exams) {
+      questionsByExam.set(Number(ex.id), []);
+    }
     for (const q of data.questions) {
-      const docRef = adminDb.collection('questions').doc(String(q.id));
-      batch.set(
-        docRef,
-        {
-          id: Number(q.id),
-          exam_id: Number(q.exam_id),
-          teks_soal: String(q.teks_soal || '').slice(0, 4000),
-          tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
-          data_opsi: q.data_opsi || { wacana: '', opsi: { A: '', B: '', C: '', D: '', E: '' } },
-          kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
-          bobot: Number(q.bobot) || 2,
-          authorUid: DEFAULT_ADMIN_UID,
-          updatedAt: nowIso,
+      const exId = Number(q.exam_id);
+      const list = questionsByExam.get(exId) || [];
+      list.push({
+        id: Number(q.id),
+        exam_id: exId,
+        teks_soal: String(q.teks_soal || '').slice(0, 4000),
+        tipe_soal: q.tipe_soal === 'Kompleks' ? 'Kompleks' : 'PG',
+        data_opsi: q.data_opsi || {
+          wacana: '',
+          opsi: { A: '', B: '', C: '', D: '', E: '' },
         },
-        { merge: true }
-      );
+        kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
+        bobot: Number(q.bobot) || 2,
+      });
+      questionsByExam.set(exId, list);
+    }
+
+    for (const [exId, exItems] of questionsByExam.entries()) {
+      const sortedItems = exItems.sort((a, b) => Number(a.id) - Number(b.id));
+      const bundleRef = adminDb.collection('questions').doc(`bundle_${exId}`);
+      batch.set(bundleRef, {
+        id: Number(exId),
+        exam_id: Number(exId),
+        teks_soal: `BUNDLE_PAKET_SOAL_${exId}`,
+        tipe_soal: 'PG',
+        data_opsi: {
+          is_bundle: true,
+          ...(sortedItems.length === 0 ? { cleared: true } : {}),
+          items: sortedItems,
+          wacana: '',
+          opsi: { A: '-', B: '-', C: '-', D: '-', E: '-' },
+        },
+        kunci_jawaban: ['A'],
+        bobot: 2,
+        authorUid: DEFAULT_ADMIN_UID,
+        updatedAt: nowIso,
+      });
     }
 
     // 5. Sync Results (/results/{id}) including full jawaban_siswa & analisis_ai

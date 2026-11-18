@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Upload,
   Users,
@@ -296,6 +296,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     questionCount: number;
   } | null>(null);
   const [isDeletingBankSoal, setIsDeletingBankSoal] = useState(false);
+  const [isClearingExamQuestions, setIsClearingExamQuestions] = useState(false);
+  const bankSoalDetailRef = useRef<HTMLDivElement | null>(null);
   const [bankSoalFeedback, setBankSoalFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -1407,17 +1409,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleClearExamQuestions = async () => {
-    if (!currentExam || currentExamQuestions.length === 0) return;
+    if (!currentExam || isClearingExamQuestions) return;
+    setIsClearingExamQuestions(true);
     setUploadStatus(null);
-    const removedCount = await clearExamQuestionsCbt(
-      currentExam.id,
-      questions
-    );
-    setUploadStatus({
-      type: 'success',
-      message: `Seluruh soal (${removedCount} butir) pada paket "${currentExam.judul_ujian}" telah dikosongkan.`,
-    });
-    await onRefreshData();
+    setBankSoalFeedback(null);
+    try {
+      const removedCount = await clearExamQuestionsCbt(
+        currentExam.id,
+        questions
+      );
+      const msg = `Seluruh butir soal (${removedCount} butir) pada paket "${currentExam.judul_ujian}" berhasil dikosongkan. Paket soal tetap tersimpan dan siap diisi ulang.`;
+      setUploadStatus({
+        type: 'success',
+        message: msg,
+      });
+      setBankSoalFeedback({
+        type: 'success',
+        message: msg,
+      });
+      await onRefreshData();
+    } catch (err: any) {
+      const errMsg = err?.message || 'Gagal mengosongkan soal pada paket ini.';
+      setUploadStatus({
+        type: 'error',
+        message: errMsg,
+      });
+      setBankSoalFeedback({
+        type: 'error',
+        message: errMsg,
+      });
+    } finally {
+      setIsClearingExamQuestions(false);
+    }
   };
 
   const handleCopyQuestionsToExam = async () => {
@@ -1457,6 +1480,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsUploadingCsv(true);
     setUploadStatus(null);
+    setBankSoalFeedback(null);
 
     try {
       const targetExam = await ensureActiveExamForQuestions();
@@ -1466,19 +1490,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         replaceExistingQuestions,
         questions
       );
+      const successMsg = `${
+        sourceFileName ? `File "${sourceFileName}" langsung diupload: ` : ''
+      }Berhasil mengimpor ${outcome.insertedCount} butir soal ke paket "${
+        targetExam.judul_ujian
+      }" (${formatDistribusiLabel(
+        targetExam.target_tingkat,
+        targetExam.target_kelas
+      )}). Detail seluruh soal ditampilkan lengkap di bawah.`;
       setUploadStatus({
         type: 'success',
-        message: `${
-          sourceFileName ? `File "${sourceFileName}" langsung diupload: ` : ''
-        }Berhasil mengimpor ${outcome.insertedCount} butir soal ke ujian "${
-          targetExam.judul_ujian
-        }" (${formatDistribusiLabel(
-          targetExam.target_tingkat,
-          targetExam.target_kelas
-        )}).`,
+        message: successMsg,
+      });
+      setBankSoalFeedback({
+        type: 'success',
+        message: successMsg,
       });
       setCsvText('');
+      setSelectedExamId(targetExam.id);
+      setActiveTab('soal');
+      setIsBankSoalDetailOpen(true);
+      setShowUploadPanel(false);
+      setQuestionViewMode('lengkap');
+      setQuestionsPerPage(999);
+      setQuestionPage(1);
+      setFilterQuestionType('SEMUA');
+      setSearchQuestionQuery('');
       await onRefreshData();
+      window.setTimeout(() => {
+        bankSoalDetailRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 120);
     } catch (err: any) {
       setUploadStatus({
         type: 'error',
@@ -6045,7 +6089,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           {/* Daftar Butir Soal Terstruktur (Eksklusif Sub-Tab 02B) */}
           {!showUploadPanel && (
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all duration-200">
+          <div
+            ref={bankSoalDetailRef}
+            className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 transition-all duration-200"
+          >
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 -mx-6 -mt-6 px-6 py-4 text-white rounded-t-xl space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -6210,11 +6257,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {currentExamQuestions.length > 0 && (
                 <button
                   type="button"
+                  disabled={isClearingExamQuestions}
                   onClick={handleClearExamQuestions}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-md cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 disabled:opacity-50 rounded-md cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Kosongkan Paket Ini
+                  {isClearingExamQuestions ? 'Mengosongkan...' : 'Kosongkan Paket Ini'}
                 </button>
               )}
             </div>
@@ -6650,9 +6698,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                                 <div
                                   className={`grid gap-2 text-xs pt-1 ${
-                                    showUploadPanel
-                                      ? 'grid-cols-1 sm:grid-cols-2'
-                                      : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                                    questionViewMode === 'lengkap'
+                                      ? 'grid-cols-1 gap-2.5'
+                                      : showUploadPanel
+                                        ? 'grid-cols-1 sm:grid-cols-2'
+                                        : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
                                   }`}
                                 >
                                   {(['A', 'B', 'C', 'D', 'E'] as const).map((k) =>

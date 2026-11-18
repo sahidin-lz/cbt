@@ -126,6 +126,13 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
 
   // Modal state for entering Teacher's Exam Session Token when clicking "Mulai Ujian"
   const [tokenModalExam, setTokenModalExam] = useState<ExamItem | null>(null);
+  const liveTokenModalExam = useMemo(() => {
+    if (!tokenModalExam) return null;
+    return (
+      exams.find((e) => Number(e.id) === Number(tokenModalExam.id)) ||
+      tokenModalExam
+    );
+  }, [tokenModalExam, exams]);
   const [sessionTokenInput, setSessionTokenInput] = useState('');
   const [sessionTokenError, setSessionTokenError] = useState<string | null>(null);
   const [isStartingExam, setIsStartingExam] = useState(false);
@@ -673,7 +680,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
 
   const handleConfirmSessionTokenAndStart = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tokenModalExam) return;
+    if (!liveTokenModalExam) return;
     setSessionTokenError(null);
 
     if (student.status_ujian === 'Diblokir') {
@@ -685,7 +692,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
         clearLocalStudentBlockCacheCbt(
           student.id,
           student.token_ujian,
-          tokenModalExam.id,
+          liveTokenModalExam.id,
           latestServerStatus
         );
         onStudentUpdated({
@@ -709,7 +716,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     }
 
     const check = verifyExamSessionToken({
-      exam: tokenModalExam,
+      exam: liveTokenModalExam,
       student,
       inputToken: sessionTokenInput,
       allExams: exams,
@@ -722,7 +729,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
 
     setIsStartingExam(true);
     try {
-      await onStartExamWithSessionToken(tokenModalExam);
+      await onStartExamWithSessionToken(liveTokenModalExam);
       setTokenModalExam(null);
     } catch (err: any) {
       setSessionTokenError(
@@ -3248,7 +3255,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       {/* =================================================================== */}
       {/* MODAL VERIFIKASI TOKEN SESI UJIAN (DIBERIKAN GURU SAAT AKAN UJIAN)  */}
       {/* =================================================================== */}
-      {tokenModalExam && (
+      {liveTokenModalExam && (
         <div
           role="dialog"
           aria-modal="true"
@@ -3260,10 +3267,10 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 Verifikasi Token Sesi Ujian
               </div>
               <h3 className="text-base font-extrabold text-white mt-0.5">
-                {tokenModalExam.judul_ujian}
+                {liveTokenModalExam.judul_ujian}
               </h3>
               <p className="text-xs text-blue-200 mt-0.5">
-                Durasi {tokenModalExam.durasi_menit} Menit · Kode Paket Anda:{' '}
+                Durasi {liveTokenModalExam.durasi_menit} Menit · Kode Paket Anda:{' '}
                 <strong className="font-mono text-amber-300">
                   {assignedPackageBadge}
                 </strong>
@@ -3278,8 +3285,8 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 <div className="font-bold flex items-center gap-1.5 text-blue-900">
                   <KeyRound className="w-4 h-4 text-blue-600 shrink-0" />
                   <span>
-                    Mapel {getEffectiveMataPelajaran(tokenModalExam)} · Paket{' '}
-                    {tokenModalExam.kode_paket || assignedPackageBadge} (Absen #{absenInfo.noAbsen} {absenInfo.ganjilGenapLabel})
+                    Mapel {getEffectiveMataPelajaran(liveTokenModalExam)} · Paket{' '}
+                    {liveTokenModalExam.kode_paket || assignedPackageBadge} (Absen #{absenInfo.noAbsen} {absenInfo.ganjilGenapLabel})
                   </span>
                 </div>
                 <p className="text-blue-800 leading-relaxed">

@@ -11,6 +11,7 @@ import { ExamItem, QuestionItem, StudentItem, ResultItem } from './types/cbt';
 import {
   fetchCbtSyncPulseOnce,
   subscribeToCbtSyncPulse,
+  getCachedSyncPulseLocal,
   CbtSyncPulseData,
 } from './lib/firebase';
 import {
@@ -188,9 +189,26 @@ export default function App() {
     }
   }, [exams.length, students.length]);
 
-  // Zero-Firestore-read state sync after local student exam start/submit/profile update or in-exam browser refresh
+  // Zero-Firestore-read state sync after local mutations or in-exam browser refresh
   const syncDashboardFromLocalCache = useCallback(async () => {
     try {
+      const cached = loadLocalCbtSnapshotCache();
+      if (cached) {
+        setExams(cached.exams || []);
+        setQuestions(cached.questions || []);
+        setStudents(cached.students || []);
+        setResults(cached.results || []);
+        const localPulse = getCachedSyncPulseLocal();
+        if (localPulse?.lastSyncedAt) {
+          setSyncPulse((prev) =>
+            !prev || localPulse.lastSyncedAt >= prev.lastSyncedAt ? localPulse : prev
+          );
+          if (localPulse.lastSyncedAt > lastSeenSyncTimestamp.current) {
+            lastSeenSyncTimestamp.current = localPulse.lastSyncedAt;
+          }
+        }
+        return;
+      }
       const data = await loadUnifiedDashboardData({ preferLocalCache: true });
       setExams(data.exams || []);
       setQuestions(data.questions || []);
@@ -604,7 +622,7 @@ export default function App() {
             students={students}
             results={activeResults}
             onExamCompleted={syncDashboardFromLocalCache}
-            onRefreshData={fetchDashboardData}
+            onRefreshData={syncDashboardFromLocalCache}
             onExamStateChange={setIsStudentInExam}
           />
         ) : (
@@ -613,7 +631,7 @@ export default function App() {
             questions={activeQuestions}
             students={students}
             results={activeResults}
-            onRefreshData={fetchDashboardData}
+            onRefreshData={syncDashboardFromLocalCache}
             syncPulse={syncPulse}
             isSyncingFirebase={isSyncingFirebase}
             onManualFirebaseSync={handleManualFirebaseSync}
