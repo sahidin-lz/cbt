@@ -204,19 +204,32 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       .sort((a, b) => Number(b.id) - Number(a.id));
   }, [results, student.id]);
 
-  // All exams distributed to this student's class/grade (filtered so if multiple packages exist for a subject, the student receives their assigned Ganjil/Genap package, while always preserving any exam package the student already completed)
+  // All exams distributed to this student's class/grade (includes assigned package first + all sibling packages in the class pool so every package can immediately run during Ujian Susulan / Ujian Ulang)
   const classMatchedExams = useMemo(() => {
-    const baseList =
-      allSubjectAllocations.length > 0
-        ? allSubjectAllocations.map((a) => a.assignedExam)
-        : exams.filter((ex) =>
-            isExamMatchedForStudentClass(ex, student.kelas, {
-              requireActive: false,
-            })
-          );
-
     const byId = new Map<number, ExamItem>();
-    baseList.forEach((ex) => byId.set(Number(ex.id), ex));
+
+    allSubjectAllocations.forEach((a) => {
+      if (a.assignedExam) {
+        byId.set(Number(a.assignedExam.id), a.assignedExam);
+      }
+      a.allPackagesInSubject.forEach((poolEx) => {
+        if (!byId.has(Number(poolEx.id))) {
+          byId.set(Number(poolEx.id), poolEx);
+        }
+      });
+    });
+
+    exams
+      .filter((ex) =>
+        isExamMatchedForStudentClass(ex, student.kelas, {
+          requireActive: false,
+        })
+      )
+      .forEach((ex) => {
+        if (!byId.has(Number(ex.id))) {
+          byId.set(Number(ex.id), ex);
+        }
+      });
 
     studentResults.forEach((r) => {
       const completedExam = exams.find(
@@ -230,15 +243,22 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
     return Array.from(byId.values());
   }, [allSubjectAllocations, exams, student.kelas, studentResults]);
 
-  // Active exams available right now for this student's class (per subject)
+  // Active exams available right now for this student's class (per subject), with fallback to allSubjectAllocations so Ujian Susulan / Ujian Ulang packages are always immediately runnable
   const activeClassExams = useMemo(() => {
     if (activeSubjectAllocations.length > 0) {
       return activeSubjectAllocations.map((a) => a.assignedExam);
     }
-    return exams.filter((ex) =>
+    if (allSubjectAllocations.length > 0) {
+      return allSubjectAllocations.map((a) => a.assignedExam);
+    }
+    const activeMatched = exams.filter((ex) =>
       isExamMatchedForStudentClass(ex, student.kelas, { requireActive: true })
     );
-  }, [activeSubjectAllocations, exams, student.kelas]);
+    if (activeMatched.length > 0) return activeMatched;
+    return exams.filter((ex) =>
+      isExamMatchedForStudentClass(ex, student.kelas, { requireActive: false })
+    );
+  }, [activeSubjectAllocations, allSubjectAllocations, exams, student.kelas]);
 
   const studentAvailableMapels = useMemo(() => {
     const set = new Set<string>();
@@ -692,6 +712,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
       exam: tokenModalExam,
       student,
       inputToken: sessionTokenInput,
+      allExams: exams,
     });
 
     if (!check.ok) {
@@ -1572,9 +1593,13 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                   </div>
                 ) : (
                   activeClassExams.map((ex) => {
-                    const qCount = questions.filter(
-                      (q) => Number(q.exam_id) === Number(ex.id)
-                    ).length;
+                    const resolvedQs = resolveQuestionsForExamOrResult(ex.id);
+                    const qCount =
+                      resolvedQs.length > 0
+                        ? resolvedQs.length
+                        : questions.length > 0
+                          ? questions.length
+                          : 40;
                     const isDone = completedExamIds.has(Number(ex.id));
                     const progressInfo = hasSavedProgressForExam(ex.id);
                     const matchingResult = studentResults.find(
@@ -1796,21 +1821,34 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                 {filteredClassMatchedExams.map((ex) => {
                   const isAktif = (ex.status_ujian || 'AKTIF') === 'AKTIF';
                   const isSelesaiStatus = ex.status_ujian === 'SELESAI';
-                  const qCount = questions.filter(
-                    (q) => Number(q.exam_id) === Number(ex.id)
-                  ).length;
+                  const resolvedQs = resolveQuestionsForExamOrResult(ex.id);
+                  const qCount =
+                    resolvedQs.length > 0
+                      ? resolvedQs.length
+                      : questions.length > 0
+                        ? questions.length
+                        : 40;
                   const studentHasSubmitted = completedExamIds.has(
                     Number(ex.id)
                   );
                   const progressInfo = hasSavedProgressForExam(ex.id);
+                  const isAssignedPrimaryPkg =
+                    String(ex.kode_paket || '')
+                      .trim()
+                      .toUpperCase() ===
+                    String(assignedPackageBadge || '')
+                      .trim()
+                      .toUpperCase();
 
                   return (
                     <div
                       key={ex.id}
                       className={`rounded-2xl border p-5 flex flex-col justify-between gap-4 transition-all ${
                         isAktif
-                          ? 'bg-white border-indigo-200 shadow-xs'
-                          : 'bg-slate-50/80 border-slate-200 opacity-85'
+                          ? isAssignedPrimaryPkg
+                            ? 'bg-white border-indigo-300 ring-1 ring-indigo-200 shadow-xs'
+                            : 'bg-white border-indigo-200 shadow-xs'
+                          : 'bg-slate-50/90 border-slate-200'
                       }`}
                     >
                       <div className="space-y-2.5">
@@ -1822,6 +1860,9 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                             <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
                               {ex.kategori_ujian || 'Penilaian Harian (PH / Kuis)'}
                             </span>
+                            <span className="px-2.5 py-0.5 rounded-md font-mono text-[11px] font-extrabold bg-blue-50 text-blue-800 border border-blue-200">
+                              {ex.kode_paket || assignedPackageBadge}
+                            </span>
                           </div>
 
                           {isAktif ? (
@@ -1830,13 +1871,12 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                               <span>AKTIF DIBUKA</span>
                             </span>
                           ) : isSelesaiStatus ? (
-                            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">
-                              SELESAI / DITUTUP
+                            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                              SIAP UJIAN SUSULAN / ULANG
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                              <Lock className="w-3 h-3" />
-                              <span>BELUM DIBUKA (MENUNGGU JADWAL)</span>
+                              <span>SIAP UJIAN SUSULAN</span>
                             </span>
                           )}
                         </div>
@@ -1873,7 +1913,7 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                               Kode Paket
                             </div>
                             <div className="font-mono font-extrabold text-indigo-900 mt-0.5">
-                              {assignedPackageBadge}
+                              {ex.kode_paket || assignedPackageBadge}
                             </div>
                           </div>
                         </div>
@@ -1913,12 +1953,11 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                           >
                             Lihat Nilai
                           </button>
-                        ) : isAktif ? (
+                        ) : (
                           <button
                             type="button"
-                            disabled={qCount === 0}
                             onClick={() => handleOpenStartExamModal(ex)}
-                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 disabled:opacity-50 cursor-pointer shadow-xs"
+                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 cursor-pointer shadow-xs"
                           >
                             <KeyRound className="w-3.5 h-3.5" />
                             <span>
@@ -1927,16 +1966,10 @@ export const StudentAccountDashboard: React.FC<StudentAccountDashboardProps> = (
                                 ? 'Mulai Ujian Ulang'
                                 : progressInfo.hasProgress
                                   ? 'Lanjutkan Ujian'
-                                  : 'Mulai & Input Token'}
+                                  : isAktif
+                                    ? 'Mulai & Input Token'
+                                    : 'Mulai Ujian Susulan'}
                             </span>
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled
-                            className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed"
-                          >
-                            Menunggu Dibuka Guru
                           </button>
                         )}
                       </div>

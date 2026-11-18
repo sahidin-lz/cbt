@@ -9,6 +9,7 @@ import {
   doc,
   getDoc,
   getDocFromCache,
+  onSnapshot,
   Unsubscribe,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -239,11 +240,52 @@ export async function fetchCbtSyncPulseOnce(): Promise<CbtSyncPulseData | null> 
   return getCachedSyncPulseLocal();
 }
 
+/**
+ * Listener Real-Time Super Hemat Kuota (Hanya 1 Dokumen `cbt_sync/live_state`):
+ * - 0 Read saat tidak ada aktivitas.
+ * - Begitu ada siswa selesai ujian, melanggar tab/inspect, dibuka kuncinya, atau paket/token berubah,
+ *   sinyal langsung diterima secara instan (<0.2 detik) dengan hanya 1 Read dokumen pulse.
+ */
 export function subscribeToCbtSyncPulse(
   onUpdate: (pulse: CbtSyncPulseData) => void
 ): Unsubscribe {
-  fetchCbtSyncPulseOnce().then((pulse) => {
-    if (pulse) onUpdate(pulse);
-  });
-  return () => {};
+  if (!db || isFirestoreQuotaCooldownActive()) {
+    fetchCbtSyncPulseOnce().then((pulse) => {
+      if (pulse) onUpdate(pulse);
+    });
+    return () => {};
+  }
+
+  const pulseRef = doc(db, 'cbt_sync', 'live_state');
+  let unsubscribeSnapshot: Unsubscribe | null = null;
+
+  try {
+    unsubscribeSnapshot = onSnapshot(
+      pulseRef,
+      (snap) => {
+        if (snap.exists()) {
+          const pulse = snap.data() as CbtSyncPulseData;
+          saveCachedSyncPulseLocal(pulse);
+          onUpdate(pulse);
+        }
+      },
+      (err) => {
+        if (isQuotaExceededError(err)) {
+          markFirestoreQuotaExhausted();
+        }
+      }
+    );
+  } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExhausted();
+    }
+  }
+
+  return () => {
+    if (unsubscribeSnapshot) {
+      try {
+        unsubscribeSnapshot();
+      } catch {}
+    }
+  };
 }

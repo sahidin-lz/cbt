@@ -1726,11 +1726,19 @@ export function verifyExamSessionToken(params: {
     judul_ujian: string;
     target_tingkat?: string;
     token_sesi?: string;
+    mata_pelajaran?: string;
   };
   student?: {
     token_ujian?: string;
     password_login?: string;
   } | null;
+  allExams?: {
+    id: number | string;
+    judul_ujian?: string;
+    target_tingkat?: string;
+    token_sesi?: string;
+    mata_pelajaran?: string;
+  }[];
   inputToken: string;
 }): { ok: true; matchedType: 'session_token' | 'student_token' } | { ok: false; error: string } {
   const cleanInput = (params.inputToken || '').trim().toUpperCase();
@@ -1746,8 +1754,24 @@ export function verifyExamSessionToken(params: {
     return { ok: true, matchedType: 'session_token' };
   }
 
+  // Untuk Ujian Susulan / Ujian Ulang di mana paket soal dirotasi (mis. Paket A <-> Paket B),
+  // terima juga Token Sesi dari paket ujian lain pada mata pelajaran / daftar ujian aktif yang sama
+  if (Array.isArray(params.allExams) && params.allExams.length > 0) {
+    const matchedSiblingToken = params.allExams.some(
+      (ex) => getEffectiveExamSessionToken(ex) === cleanInput
+    );
+    if (matchedSiblingToken) {
+      return { ok: true, matchedType: 'session_token' };
+    }
+  }
+
   const studentSysToken = (params.student?.token_ujian || '').trim().toUpperCase();
   if (studentSysToken && cleanInput === studentSysToken) {
+    return { ok: true, matchedType: 'student_token' };
+  }
+
+  const studentCustomPass = (params.student?.password_login || '').trim().toUpperCase();
+  if (studentCustomPass && cleanInput === studentCustomPass) {
     return { ok: true, matchedType: 'student_token' };
   }
 
@@ -2444,7 +2468,11 @@ export function resolveStudentExamPackagesBySubject<
           );
   }
 
-  // Group by normalized Mata Pelajaran
+  // Group by normalized Mata Pelajaran (dan sertakan semua paket saudara pada mapel & kelas yang sama agar saat Ujian Susulan / rotasi paket semua paket siap jalan)
+  const allClassMatchedAnyStatus = (exams || []).filter((ex) =>
+    isExamMatchedForStudentClass(ex, studentKelas, { requireActive: false })
+  );
+
   const subjectGroups = new Map<
     string,
     { displayName: string; exams: TExam[] }
@@ -2455,9 +2483,24 @@ export function resolveStudentExamPackagesBySubject<
     const key = mapelName.toUpperCase().trim();
     const existing = subjectGroups.get(key);
     if (existing) {
-      existing.exams.push(ex);
+      if (!existing.exams.some((e) => Number(e.id) === Number(ex.id))) {
+        existing.exams.push(ex);
+      }
     } else {
       subjectGroups.set(key, { displayName: mapelName, exams: [ex] });
+    }
+  }
+
+  // Pastikan jika suatu mapel sudah aktif untuk kelas ini, semua variasi paket soal (Paket A, B, C, dst.) pada mapel & kelas tersebut ikut tersedia untuk Ujian Susulan / Ujian Ulang
+  for (const [key, group] of subjectGroups.entries()) {
+    for (const candidateEx of allClassMatchedAnyStatus) {
+      const candidateKey = getEffectiveMataPelajaran(candidateEx).toUpperCase().trim();
+      if (
+        candidateKey === key &&
+        !group.exams.some((e) => Number(e.id) === Number(candidateEx.id))
+      ) {
+        group.exams.push(candidateEx);
+      }
     }
   }
 
@@ -2491,7 +2534,31 @@ export function resolveStudentExamPackagesBySubject<
         ex.target_siswa_ids.some((id) => Number(id) === Number(student.id))
     );
 
-    // 2. Check if any package in this subject is explicitly set to KHUSUS_GANJIL or KHUSUS_GENAP
+    // 2. Check if student has an explicit rotated/assigned package code (e.g. from Ujian Ulang / Ujian Susulan / Tukar Silang Paket)
+    // Cek pada seluruh `pool` terlebih dahulu agar siswa yang ditukar silang paketnya (misal Absen Ganjil ditukar ke PAKET-B) tidak terhalang filter KHUSUS_GANJIL/KHUSUS_GENAP!
+    const rawStudentKodeUpper = (student?.kode_soal || '').trim().toUpperCase();
+    const rawStudentVarUpper = (student?.variasi_paket || '').trim().toUpperCase();
+    const normalizedStudentLetter =
+      rawStudentKodeUpper.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z0-9]/gi, '') ||
+      rawStudentVarUpper.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z0-9]/gi, '');
+
+    let explicitStudentKodePoolIdx = -1;
+    if ((rawStudentKodeUpper || normalizedStudentLetter) && pool.length > 1) {
+      explicitStudentKodePoolIdx = pool.findIndex((ex, idx) => {
+        const exKode = (ex.kode_paket || '').trim().toUpperCase();
+        const exLetter =
+          exKode.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z0-9]/gi, '') ||
+          String.fromCharCode(65 + (idx % 26));
+        return (
+          (rawStudentKodeUpper && exKode === rawStudentKodeUpper) ||
+          (rawStudentKodeUpper &&
+            `PAKET-${String.fromCharCode(65 + (idx % 26))}` === rawStudentKodeUpper) ||
+          (normalizedStudentLetter && exLetter === normalizedStudentLetter)
+        );
+      });
+    }
+
+    // 3. Check if any package in this subject is explicitly set to KHUSUS_GANJIL or KHUSUS_GENAP
     const explicitParityMatch = pool.find((ex) => {
       const mode = (ex.distribusi_paket_mode || '').toUpperCase().trim();
       if (mode === 'KHUSUS_GANJIL' && absenInfo.isGanjil) return true;
@@ -2499,7 +2566,7 @@ export function resolveStudentExamPackagesBySubject<
       return false;
     });
 
-    // Filter out packages that are exclusively locked to OTHER students (e.g. MANUAL_SISWA not containing this student, or opposite parity)
+    // Filter out packages that are exclusively locked to OTHER students (unless overridden by explicitStudentKodePoolIdx)
     const eligibleAutoPool = pool.filter((ex) => {
       const mode = (ex.distribusi_paket_mode || '').toUpperCase().trim();
       if (
@@ -2518,39 +2585,28 @@ export function resolveStudentExamPackagesBySubject<
     let chosenIdx = 0;
     let distributionReason = '';
 
-    // Check if student has an explicit rotated/assigned package code (e.g. from Ujian Ulang / Tukar Silang Paket)
-    const rawStudentKodeUpper = (student?.kode_soal || '').trim().toUpperCase();
-    const rawStudentVarUpper = (student?.variasi_paket || '').trim().toUpperCase();
     const activePool = eligibleAutoPool.length > 0 ? eligibleAutoPool : pool;
-
-    let explicitStudentKodePoolIdx = -1;
-    if (rawStudentKodeUpper && activePool.length > 1) {
-      explicitStudentKodePoolIdx = activePool.findIndex(
-        (ex, idx) =>
-          (ex.kode_paket || '').trim().toUpperCase() === rawStudentKodeUpper ||
-          `PAKET-${String.fromCharCode(65 + (idx % 26))}` === rawStudentKodeUpper
-      );
-    }
 
     if (explicitManualMatch) {
       chosenExam = explicitManualMatch;
       chosenIdx = Math.max(0, pool.findIndex((e) => e.id === explicitManualMatch.id));
       distributionReason = `Distribusi Khusus Siswa Terpilih (No. Absen ${absenInfo.noAbsen})`;
+    } else if (explicitStudentKodePoolIdx >= 0) {
+      chosenIdx = explicitStudentKodePoolIdx;
+      chosenExam = pool[chosenIdx];
+      const defaultIdx = absenInfo.rankIndex % pool.length;
+      distributionReason =
+        chosenIdx !== defaultIdx
+          ? `Rotasi / Acak Paket Ujian Susulan & Ulang (Absen #${absenInfo.noAbsen} → ${rawStudentKodeUpper || `PAKET-${normalizedStudentLetter}`})`
+          : `Otomatis Ganjil-Genap Kelas (Absen #${absenInfo.noAbsen} ${absenInfo.ganjilGenapLabel} → Paket ${chosenIdx + 1})`;
     } else if (explicitParityMatch) {
       chosenExam = explicitParityMatch;
       chosenIdx = Math.max(0, pool.findIndex((e) => e.id === explicitParityMatch.id));
       distributionReason = `Distribusi Khusus Absen ${absenInfo.ganjilGenapLabel} (No. Urut ${absenInfo.noAbsen})`;
-    } else if (explicitStudentKodePoolIdx >= 0) {
-      chosenIdx = explicitStudentKodePoolIdx;
-      chosenExam = activePool[chosenIdx];
-      const defaultIdx = absenInfo.rankIndex % activePool.length;
-      distributionReason =
-        chosenIdx !== defaultIdx
-          ? `Rotasi / Acak Paket Ujian Ulang (Absen #${absenInfo.noAbsen} → ${rawStudentKodeUpper})`
-          : `Otomatis Ganjil-Genap Kelas (Absen #${absenInfo.noAbsen} ${absenInfo.ganjilGenapLabel} → Paket ${chosenIdx + 1})`;
     } else {
-      chosenIdx = absenInfo.rankIndex % activePool.length;
-      chosenExam = activePool[chosenIdx];
+      const targetAutoExam = activePool[absenInfo.rankIndex % activePool.length];
+      chosenExam = targetAutoExam;
+      chosenIdx = Math.max(0, pool.findIndex((e) => e.id === targetAutoExam.id));
       if (activePool.length === 2) {
         distributionReason = `Otomatis Ganjil-Genap Kelas (Absen #${absenInfo.noAbsen} ${absenInfo.ganjilGenapLabel} → Paket ${chosenIdx + 1})`;
       } else if (activePool.length > 2) {

@@ -28,6 +28,7 @@ import {
   Minimize2,
 } from 'lucide-react';
 import { ExamItem, QuestionItem, StudentItem, ResultItem, AnalisisAI } from '../types/cbt';
+import { subscribeToCbtSyncPulse } from '../lib/firebase';
 import {
   loginStudentExamCbt,
   submitStudentExamCbt,
@@ -1300,7 +1301,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     onExamCompleted,
   ]);
 
-  // Automatically verify with Firestore server on mount/reload (F5) or window focus ONLY when localStorage says student is 'Diblokir'
+  // Automatically verify with Firestore server on mount/reload (F5), window focus, or instant 1-doc pulse notification ONLY when localStorage says student is 'Diblokir'
   useEffect(() => {
     const targetId = activeStudent?.id || loggedInAccount?.id;
     const isLocallyBlocked =
@@ -1311,18 +1312,25 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
     handleCheckStudentStatusManual();
 
-    const intervalId = window.setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+    // Listen to 1-doc `cbt_sync/live_state` so as soon as Pengawas clicks [Buka Kunci] or [Ujian Ulang],
+    // the blocked student screen unlocks in real-time (<300ms) without polling collection reads
+    const unsubscribePulse = subscribeToCbtSyncPulse((pulseData) => {
+      const eventStr = String(pulseData?.lastEvent || '');
+      if (
+        eventStr.includes(`[STU:${targetId}]`) ||
+        eventStr.includes('[BULK_STU]') ||
+        eventStr.includes('Status')
+      ) {
         handleCheckStudentStatusManual();
       }
-    }, 12000);
+    });
 
     const onWindowFocusWhileBlocked = () => {
       handleCheckStudentStatusManual();
     };
     window.addEventListener('focus', onWindowFocusWhileBlocked);
     return () => {
-      window.clearInterval(intervalId);
+      unsubscribePulse();
       window.removeEventListener('focus', onWindowFocusWhileBlocked);
     };
   }, [

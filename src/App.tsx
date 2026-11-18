@@ -10,6 +10,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from './types/cbt';
 import {
   fetchCbtSyncPulseOnce,
+  subscribeToCbtSyncPulse,
   CbtSyncPulseData,
 } from './lib/firebase';
 import {
@@ -265,37 +266,52 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ultra-low-quota real-time delta sync for Teacher Console & finished students:
-  // Checks ONLY 1 doc (`cbt_sync/live_state` = 1 Read) every 15s when teacher tab is visible.
-  // When a student finishes an exam (`[RES:id:STU:id]`), fetches ONLY those 2 docs (2 Reads total)
-  // so status 'Selesai' + skor_angka appear immediately in real-time without draining daily quota.
+  // Keep latest state in a ref so the 1-doc real-time listener never re-subscribes when state changes
+  const latestStateRef = useRef({
+    exams,
+    students,
+    questions,
+    results,
+  });
+  useEffect(() => {
+    latestStateRef.current = {
+      exams,
+      students,
+      questions,
+      results,
+    };
+  }, [exams, students, questions, results]);
+
+  // Ultra-low-quota instant real-time delta sync for Teacher Console & Student Dashboard:
+  // Listens ONLY to 1 single document (`cbt_sync/live_state` = 0 reads when idle, 1 read per event).
+  // Whenever a student starts, commits a violation, finishes, or a teacher unlocks/reschedules/activates a package,
+  // `syncDeltaFromPulseOnce` fetches ONLY the 1–2 affected docs (`[RES:id:STU:id]`, `[STU:id]`, `[EXM:id]`) in <300ms.
   useEffect(() => {
     if (isStudentInExam) return;
 
-    const hasFinishedStudentMissingResult = students.some(
-      (st) =>
-        st.status_ujian === 'Selesai' &&
-        !results.some((r) => Number(r.student_id) === Number(st.id))
-    );
-
-    if (portalView !== 'teacher' && !hasFinishedStudentMissingResult) return;
-
     let isCancelled = false;
     let isChecking = false;
+    let pendingPulse: CbtSyncPulseData | null = null;
+    let debounceTimer: number | null = null;
 
-    const checkDeltaPulse = async () => {
-      if (isCancelled || isChecking) return;
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+    const runDeltaSync = async (incomingPulse?: CbtSyncPulseData | null) => {
+      if (isCancelled) return;
+      if (isChecking) {
+        if (incomingPulse) {
+          pendingPulse = incomingPulse;
+        }
         return;
       }
       isChecking = true;
       try {
+        const current = latestStateRef.current;
         const delta = await syncDeltaFromPulseOnce({
-          currentExams: exams,
-          currentStudents: students,
-          currentQuestions: questions,
-          currentResults: results,
+          currentExams: current.exams,
+          currentStudents: current.students,
+          currentQuestions: current.questions,
+          currentResults: current.results,
           lastSeenPulseAt: lastSeenSyncTimestamp.current,
+          preloadedPulse: incomingPulse || null,
         });
         if (!isCancelled && delta.changed) {
           setExams(delta.exams);
@@ -308,30 +324,76 @@ export default function App() {
               lastSeenSyncTimestamp.current = delta.pulse.lastSyncedAt;
             }
           }
+        } else if (!isCancelled && incomingPulse) {
+          setSyncPulse(incomingPulse);
+          if (incomingPulse.lastSyncedAt) {
+            lastSeenSyncTimestamp.current = incomingPulse.lastSyncedAt;
+          }
         }
       } catch {
         // Ignore transient network errors
       } finally {
         isChecking = false;
+        if (!isCancelled && pendingPulse) {
+          const nextPulse = pendingPulse;
+          pendingPulse = null;
+          runDeltaSync(nextPulse);
+        }
       }
     };
 
-    if (hasFinishedStudentMissingResult) {
-      checkDeltaPulse();
-    }
+    const scheduleDeltaSync = (incomingPulse?: CbtSyncPulseData | null) => {
+      if (isCancelled) return;
+      if (incomingPulse) {
+        pendingPulse = incomingPulse;
+      }
+      if (debounceTimer !== null) {
+        window.clearTimeout(debounceTimer);
+      }
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null;
+        const pulseToProcess = pendingPulse;
+        pendingPulse = null;
+        runDeltaSync(pulseToProcess);
+      }, 250);
+    };
 
-    const intervalId = window.setInterval(checkDeltaPulse, 15000);
+    // Subscribe to 1 single document `cbt_sync/live_state` for instant (<300ms) real-time response
+    const unsubscribePulse = subscribeToCbtSyncPulse((pulseData) => {
+      if (isCancelled) return;
+      const hasFinishedMissingResult = latestStateRef.current.students.some(
+        (st) =>
+          st.status_ujian === 'Selesai' &&
+          !latestStateRef.current.results.some(
+            (r) => Number(r.student_id) === Number(st.id)
+          )
+      );
+      if (
+        pulseData.lastSyncedAt !== lastSeenSyncTimestamp.current ||
+        hasFinishedMissingResult
+      ) {
+        scheduleDeltaSync(pulseData);
+      } else {
+        setSyncPulse(pulseData);
+      }
+    });
+
     const handleWindowFocus = () => {
-      checkDeltaPulse();
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        runDeltaSync(null);
+      }
     };
     window.addEventListener('focus', handleWindowFocus);
 
     return () => {
       isCancelled = true;
-      window.clearInterval(intervalId);
+      if (debounceTimer !== null) {
+        window.clearTimeout(debounceTimer);
+      }
+      unsubscribePulse();
       window.removeEventListener('focus', handleWindowFocus);
     };
-  }, [portalView, isStudentInExam, exams, students, questions, results]);
+  }, [isStudentInExam]);
 
   // Ensure only questions and results belonging to active exams & students are counted,
   // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula
