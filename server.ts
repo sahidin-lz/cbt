@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import * as dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
@@ -35,10 +36,13 @@ import {
   generateExamToken,
   calculateExamScore,
   normalizeAnswerKeys,
+  mapStudentAnswersToCanonicalKeys,
+  buildHumaneAnalysisForResult,
 } from './src/utils/cbtLogic.ts';
 import { AnalisisAI } from './src/db/schema.ts';
 import {
   adminAuth,
+  adminDb,
   syncCbtStateToFirestore,
   removeDeletedDocFromFirestore,
   getFirestoreSyncStatus,
@@ -52,7 +56,214 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '10mb' }));
+
+const VAULT_FILE_PATH = path.join(__dirname, '.cbt-question-vault.json');
+
+// Server-side Question Vault (menyimpan kunci_jawaban aman di server untuk evaluasi mutlak)
+const serverQuestionVault = new Map<number, any[]>();
+// Server-side Live Session Singleton cache
+const serverLiveSessions = new Map<number, any>();
+// Server-side Archive Vault (30-day archive fallback + metadata)
+const serverArchiveVault = new Map<string, any>();
+
+function loadVaultFromDisk() {
+  try {
+    if (fs.existsSync(VAULT_FILE_PATH)) {
+      const raw = fs.readFileSync(VAULT_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.exams === 'object') {
+        for (const [k, v] of Object.entries(parsed.exams)) {
+          if (Array.isArray(v)) {
+            serverQuestionVault.set(Number(k), v);
+          }
+        }
+      }
+      if (parsed && typeof parsed.archives === 'object') {
+        for (const [k, v] of Object.entries(parsed.archives)) {
+          if (v && typeof v === 'object') {
+            serverArchiveVault.set(k, v);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Question vault load skipped:', err);
+  }
+}
+
+function persistVaultToDisk() {
+  try {
+    const examsObj: Record<string, any[]> = {};
+    for (const [k, v] of serverQuestionVault.entries()) {
+      examsObj[String(k)] = v;
+    }
+    const archivesObj: Record<string, any> = {};
+    for (const [k, v] of serverArchiveVault.entries()) {
+      archivesObj[k] = v;
+    }
+    fs.writeFileSync(
+      VAULT_FILE_PATH,
+      JSON.stringify({ exams: examsObj, archives: archivesObj }),
+      'utf-8'
+    );
+  } catch {
+    // Abaikan jika filesystem read-only
+  }
+}
+
+loadVaultFromDisk();
+
+/**
+ * Menghapus `kunci_jawaban` sebelum payload soal dikirim ke klien siswa yang sedang ujian.
+ */
+function stripQuestionKeysForClient(questions: any[]): any[] {
+  return (questions || [])
+    .filter((q) => !q?.is_archived_version)
+    .map((q) => ({
+      ...q,
+      kunci_jawaban: [],
+    }));
+}
+
+async function resolveAuthoritativeQuestions(examId: number): Promise<any[]> {
+  const numExamId = Number(examId);
+  const byId = new Map<number, any>();
+
+  // 1. Cek PostgreSQL repository
+  try {
+    const dash = await getDashboardData();
+    const pgQuestions = (dash.questions || []).filter(
+      (q: any) => Number(q.exam_id) === numExamId
+    );
+    for (const q of pgQuestions) {
+      byId.set(Number(q.id), q);
+    }
+  } catch {
+    // PostgreSQL mungkin belum terisi / tidak tersedia
+  }
+
+  // 2. Cek Server Vault (di-sync dari Admin Bank Soal)
+  const vaultQuestions = serverQuestionVault.get(numExamId) || [];
+  for (const q of vaultQuestions) {
+    byId.set(Number(q.id), q);
+  }
+
+  // 3. Fallback Firebase Admin SDK (`questions/bundle_${examId}`)
+  if (byId.size === 0) {
+    try {
+      const bundleSnap = await adminDb
+        .collection('questions')
+        .doc(`bundle_${numExamId}`)
+        .get();
+      if (bundleSnap.exists) {
+        const raw = bundleSnap.data() as any;
+        if (raw?.data_opsi?.is_bundle && Array.isArray(raw.data_opsi.items)) {
+          for (const item of raw.data_opsi.items) {
+            byId.set(Number(item.id), {
+              ...item,
+              exam_id: Number(item.exam_id || numExamId),
+            });
+          }
+          if (byId.size > 0) {
+            serverQuestionVault.set(numExamId, Array.from(byId.values()));
+            persistVaultToDisk();
+          }
+        }
+      }
+    } catch {
+      // Admin SDK permission / network fallback gracefully ignored
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => Number(a.id) - Number(b.id));
+}
+
+function recomputeLiveSessionSummary(session: any) {
+  const participants: Record<string, any> = session.participants || {};
+  const list = Object.values(participants);
+  let activeCount = 0;
+  let finishedCount = 0;
+  let blockedCount = 0;
+  let notStartedCount = 0;
+  let totalViolations = 0;
+
+  for (const p of list) {
+    const status = String(p?.status_ujian || 'Belum Mulai');
+    if (status === 'Sedang Ujian') activeCount++;
+    else if (status === 'Selesai') finishedCount++;
+    else if (status === 'Diblokir') blockedCount++;
+    else notStartedCount++;
+    totalViolations +=
+      Number(p?.tab_violations || 0) + Number(p?.inspect_attempts || 0);
+  }
+
+  return {
+    ...session,
+    updatedAt: new Date().toISOString(),
+    activeCount,
+    finishedCount,
+    blockedCount,
+    notStartedCount,
+    totalViolations,
+    participants,
+    authorUid: 'sahidin30@gmail.com',
+  };
+}
+
+async function upsertLiveSessionParticipantServer(
+  examId: number,
+  judulUjian: string,
+  participant: any
+) {
+  const numExamId = Number(examId);
+  if (!numExamId || !participant?.student_id) return null;
+
+  let current = serverLiveSessions.get(numExamId);
+  if (!current) {
+    try {
+      const snap = await adminDb
+        .collection('live_sessions')
+        .doc(`ujian_${numExamId}`)
+        .get();
+      if (snap.exists) {
+        current = snap.data();
+      }
+    } catch {
+      // Ignore read fallback
+    }
+  }
+
+  const baseSession = current || {
+    exam_id: numExamId,
+    judul_ujian: judulUjian || `Ujian #${numExamId}`,
+    participants: {},
+  };
+
+  const nextParticipants = {
+    ...(baseSession.participants || {}),
+    [String(participant.student_id)]: participant,
+  };
+
+  const nextSession = recomputeLiveSessionSummary({
+    ...baseSession,
+    judul_ujian: judulUjian || baseSession.judul_ujian || `Ujian #${numExamId}`,
+    participants: nextParticipants,
+  });
+
+  serverLiveSessions.set(numExamId, nextSession);
+
+  try {
+    await adminDb
+      .collection('live_sessions')
+      .doc(`ujian_${numExamId}`)
+      .set(nextSession, { merge: true });
+  } catch {
+    // Tetap aman meski Starter Tier / client Firestore handles persistence
+  }
+
+  return nextSession;
+}
 
 const getGenAiClient = () => {
   return new GoogleGenAI({
@@ -140,6 +351,44 @@ app.get('/api/dashboard', async (_req, res) => {
   }
 });
 
+// POST /api/questions/vault-sync - Sinkronkan kunci soal ke brankas server-side untuk evaluasi mutlak
+app.post('/api/questions/vault-sync', async (req, res) => {
+  try {
+    const { examId, questions: incomingQuestions } = req.body || {};
+    if (examId && Array.isArray(incomingQuestions)) {
+      const numExamId = Number(examId);
+      const existing = serverQuestionVault.get(numExamId) || [];
+      const archivedExisting = existing.filter((q) => q?.is_archived_version);
+      const mergedMap = new Map<number, any>();
+      archivedExisting.forEach((q) => mergedMap.set(Number(q.id), q));
+      incomingQuestions.forEach((q: any) =>
+        mergedMap.set(Number(q.id), { ...q, exam_id: Number(q.exam_id || numExamId) })
+      );
+      serverQuestionVault.set(numExamId, Array.from(mergedMap.values()));
+      persistVaultToDisk();
+      return res.json({ ok: true, examId: numExamId, count: mergedMap.size });
+    }
+    if (Array.isArray(incomingQuestions)) {
+      const grouped = new Map<number, any[]>();
+      for (const q of incomingQuestions) {
+        const eId = Number(q.exam_id);
+        if (!eId) continue;
+        const list = grouped.get(eId) || [];
+        list.push(q);
+        grouped.set(eId, list);
+      }
+      for (const [eId, list] of grouped.entries()) {
+        serverQuestionVault.set(eId, list);
+      }
+      persistVaultToDisk();
+      return res.json({ ok: true, examCount: grouped.size });
+    }
+    res.status(400).json({ error: 'Payload soal tidak valid.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal sinkronisasi vault soal.' });
+  }
+});
+
 // POST /api/exams - Create a new exam package with grade/class distribution
 app.post('/api/exams', async (req, res) => {
   try {
@@ -180,12 +429,221 @@ app.put('/api/exams/:id', async (req, res) => {
   }
 });
 
+// Async deep delete chunk helper for Firestore Admin SDK (<= 400 ops per batch)
+async function asyncDeepDeleteExamDocs(examId: number) {
+  try {
+    const [qSnap, rSnap] = await Promise.all([
+      adminDb.collection('questions').where('exam_id', '==', examId).get(),
+      adminDb.collection('results').where('exam_id', '==', examId).get(),
+    ]);
+    const refsToDelete: FirebaseFirestore.DocumentReference[] = [
+      adminDb.collection('exams').doc(String(examId)),
+      adminDb.collection('questions').doc(`bundle_${examId}`),
+      adminDb.collection('live_sessions').doc(`ujian_${examId}`),
+      ...qSnap.docs.map((d) => d.ref),
+      ...rSnap.docs.map((d) => d.ref),
+    ];
+
+    const CHUNK_SIZE = 400;
+    for (let i = 0; i < refsToDelete.length; i += CHUNK_SIZE) {
+      const slice = refsToDelete.slice(i, i + CHUNK_SIZE);
+      const batch = adminDb.batch();
+      slice.forEach((r) => batch.delete(r));
+      await batch.commit();
+    }
+  } catch (err) {
+    console.warn('Async Admin SDK deep delete skipped (fallback to client batch):', err);
+  }
+}
+
+// POST /api/exams/:id/soft-delete - Soft-delete exam to 30-day archive & run async recursive cleanup
+app.post('/api/exams/:id/soft-delete', async (req, res) => {
+  try {
+    const examId = Number(req.params.id);
+    const { exam, questions: archivedQuestions = [], results: archivedResults = [] } =
+      req.body || {};
+
+    const now = new Date();
+    const deletedAt = now.toISOString();
+    const purgeDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const purgeAt = purgeDate.toISOString();
+    const archiveId = `arch_${examId}_${now.getTime()}`;
+
+    const archivePayload = {
+      id: archiveId,
+      exam_id: examId,
+      judul_ujian: String(exam?.judul_ujian || `Paket Ujian #${examId}`).slice(0, 200),
+      exam_data: {
+        ...(exam || { id: examId, judul_ujian: `Paket Ujian #${examId}`, durasi_menit: 60, target_tingkat: 'SEMUA', target_kelas: 'SEMUA' }),
+        isDeleted: true,
+        deletedAt,
+        purgeAt,
+      },
+      questions_data: Array.isArray(archivedQuestions) ? archivedQuestions : [],
+      results_data: Array.isArray(archivedResults) ? archivedResults : [],
+      deletedBy: 'sahidin30@gmail.com',
+      deletedAt,
+      purgeAt,
+      expireAt: purgeAt,
+      updatedAt: deletedAt,
+    };
+
+    serverArchiveVault.set(archiveId, archivePayload);
+    serverQuestionVault.delete(examId);
+    serverLiveSessions.delete(examId);
+    persistVaultToDisk();
+
+    try {
+      await deleteExamRecord(examId);
+    } catch {
+      // PG may not have this exam
+    }
+
+    try {
+      await adminDb.collection('exams_archive').doc(archiveId).set(archivePayload);
+      await adminDb
+        .collection('exams')
+        .doc(String(examId))
+        .set({ isDeleted: true, deletedAt, purgeAt, updatedAt: deletedAt }, { merge: true });
+    } catch {
+      // Admin SDK optional if handled by client
+    }
+
+    // Eksekusi penghapusan rekursif secara asinkron di belakang layar tanpa memblokir UI admin
+    setImmediate(() => {
+      asyncDeepDeleteExamDocs(examId).catch(() => {});
+    });
+
+    res.json({ success: true, archive: archivePayload });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal mengarsipkan ujian.' });
+  }
+});
+
+// GET /api/exams/archive - Fetch 30-day archived exams
+app.get('/api/exams/archive', async (_req, res) => {
+  try {
+    const byId = new Map<string, any>();
+    for (const [k, v] of serverArchiveVault.entries()) {
+      if (!v?.restoredAt) {
+        byId.set(k, v);
+      }
+    }
+    try {
+      const snap = await adminDb.collection('exams_archive').get();
+      snap.docs.forEach((d) => {
+        const data = d.data();
+        if (!data?.restoredAt) {
+          byId.set(d.id, { ...data, id: d.id });
+        }
+      });
+    } catch {
+      // Fallback to serverArchiveVault
+    }
+    const archives = Array.from(byId.values()).sort(
+      (a, b) =>
+        new Date(b.deletedAt || 0).getTime() - new Date(a.deletedAt || 0).getTime()
+    );
+    res.json({ archives });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal memuat arsip ujian.' });
+  }
+});
+
+// POST /api/exams/:archiveId/restore - Restore an exam from 30-day archive
+app.post('/api/exams/:archiveId/restore', async (req, res) => {
+  try {
+    const archiveId = String(req.params.archiveId);
+    let archiveDoc: any = serverArchiveVault.get(archiveId) || req.body?.archive;
+
+    if (!archiveDoc) {
+      try {
+        const snap = await adminDb.collection('exams_archive').doc(archiveId).get();
+        if (snap.exists) {
+          archiveDoc = snap.data();
+        }
+      } catch {}
+    }
+
+    if (!archiveDoc) {
+      return res.status(404).json({ error: 'Arsip ujian tidak ditemukan atau sudah kedaluwarsa.' });
+    }
+
+    const restoredExam = {
+      ...archiveDoc.exam_data,
+      id: Number(archiveDoc.exam_id),
+      isDeleted: false,
+      deletedAt: '',
+      purgeAt: '',
+      updatedAt: new Date().toISOString(),
+    };
+    const restoredQuestions = Array.isArray(archiveDoc.questions_data)
+      ? archiveDoc.questions_data
+      : [];
+    const restoredResults = Array.isArray(archiveDoc.results_data)
+      ? archiveDoc.results_data
+      : [];
+
+    if (restoredQuestions.length > 0) {
+      serverQuestionVault.set(Number(archiveDoc.exam_id), restoredQuestions);
+    }
+    serverArchiveVault.delete(archiveId);
+    persistVaultToDisk();
+
+    try {
+      const nowIso = new Date().toISOString();
+      const batch = adminDb.batch();
+      batch.set(adminDb.collection('exams').doc(String(archiveDoc.exam_id)), {
+        ...restoredExam,
+        authorUid: 'sahidin30@gmail.com',
+        updatedAt: nowIso,
+      });
+      batch.set(
+        adminDb.collection('questions').doc(`bundle_${archiveDoc.exam_id}`),
+        {
+          id: Number(archiveDoc.exam_id),
+          exam_id: Number(archiveDoc.exam_id),
+          teks_soal: `BUNDLE_PAKET_SOAL_${archiveDoc.exam_id}`,
+          tipe_soal: 'PG',
+          data_opsi: {
+            is_bundle: true,
+            ...(restoredQuestions.length === 0 ? { cleared: true } : {}),
+            items: restoredQuestions,
+            wacana: '',
+            opsi: { A: '-', B: '-', C: '-', D: '-', E: '-' },
+          },
+          kunci_jawaban: ['A'],
+          bobot: 2,
+          authorUid: 'sahidin30@gmail.com',
+          updatedAt: nowIso,
+        }
+      );
+      batch.delete(adminDb.collection('exams_archive').doc(archiveId));
+      await batch.commit();
+    } catch {
+      // Client handles Firestore restoration fallback
+    }
+
+    res.json({
+      success: true,
+      exam: restoredExam,
+      questions: restoredQuestions,
+      results: restoredResults,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal memulihkan arsip ujian.' });
+  }
+});
+
 // DELETE /api/exams/:id - Delete an exam package
 app.delete('/api/exams/:id', async (req, res) => {
   try {
     const examId = Number(req.params.id);
     await deleteExamRecord(examId);
     await removeDeletedDocFromFirestore('exams', examId);
+    serverQuestionVault.delete(examId);
+    serverLiveSessions.delete(examId);
+    persistVaultToDisk();
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menghapus ujian.' });
@@ -212,6 +670,13 @@ app.post('/api/questions/manual', async (req, res) => {
       normalizedKeys,
       Number(bobot) || (tipe_soal === 'Kompleks' ? 3 : 2)
     );
+    const numExamId = Number(examId);
+    const prevList = serverQuestionVault.get(numExamId) || [];
+    serverQuestionVault.set(numExamId, [
+      ...prevList.filter((q) => Number(q.id) !== Number(created.id)),
+      created,
+    ]);
+    persistVaultToDisk();
     res.json({ question: created });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menambahkan soal.' });
@@ -240,6 +705,13 @@ app.put('/api/questions/:id', async (req, res) => {
       normalizedKeys,
       Number(bobot) || (tipe_soal === 'Kompleks' ? 3 : 2)
     );
+    const numExamId = Number(examId);
+    const prevList = serverQuestionVault.get(numExamId) || [];
+    serverQuestionVault.set(numExamId, [
+      ...prevList.filter((q) => Number(q.id) !== Number(updated.id)),
+      updated,
+    ]);
+    persistVaultToDisk();
     res.json({ question: updated });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal memperbarui soal.' });
@@ -252,6 +724,13 @@ app.delete('/api/questions/:id', async (req, res) => {
     const qId = Number(req.params.id);
     await deleteQuestionRecord(qId);
     await removeDeletedDocFromFirestore('questions', qId);
+    for (const [eId, list] of serverQuestionVault.entries()) {
+      const next = list.filter((q) => Number(q.id) !== qId);
+      if (next.length !== list.length) {
+        serverQuestionVault.set(eId, next);
+      }
+    }
+    persistVaultToDisk();
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal menghapus soal.' });
@@ -263,6 +742,8 @@ app.delete('/api/exams/:id/questions', async (req, res) => {
   try {
     const examId = Number(req.params.id);
     await clearQuestionsByExamRecord(examId);
+    serverQuestionVault.set(examId, []);
+    persistVaultToDisk();
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal mengosongkan soal.' });
@@ -290,6 +771,10 @@ app.post('/api/questions/upload-csv', async (req, res) => {
       parsed.rows,
       Boolean(replaceExisting)
     );
+    const numExamId = Number(examId);
+    const prevList = replaceExisting ? [] : serverQuestionVault.get(numExamId) || [];
+    serverQuestionVault.set(numExamId, [...prevList, ...inserted]);
+    persistVaultToDisk();
 
     res.json({
       insertedCount: inserted.length,
@@ -461,7 +946,7 @@ app.delete('/api/students/:id', async (req, res) => {
   }
 });
 
-// POST /api/exam/login - Student Login with Nama & 6-Char Token
+// POST /api/exam/login - Student Login with Nama & 6-Char Token (NEVER return kunci_jawaban)
 app.post('/api/exam/login', async (req, res) => {
   try {
     const { nama, token_ujian, examId } = req.body;
@@ -476,44 +961,232 @@ app.post('/api/exam/login', async (req, res) => {
     if ('error' in session) {
       return res.status(400).json({ error: session.error });
     }
-    res.json(session);
+    // Simpan soal lengkap ke server vault sebelum membersihkan kunci_jawaban dari payload klien
+    if (session.exam?.id && Array.isArray(session.questions) && session.questions.length > 0) {
+      serverQuestionVault.set(Number(session.exam.id), session.questions);
+      persistVaultToDisk();
+    }
+    res.json({
+      ...session,
+      questions: stripQuestionKeysForClient(session.questions || []),
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal masuk ke sesi ujian.' });
   }
 });
 
-// POST /api/exam/heartbeat - Real-time anti-cheat & live progress broadcast via Firebase
-app.post('/api/exam/heartbeat', async (_req, res) => {
+// GET /api/live-sessions/:examId - Singleton Live Session Aggregate
+app.get('/api/live-sessions/:examId', async (req, res) => {
   try {
+    const examId = Number(req.params.examId);
+    let session = serverLiveSessions.get(examId);
+    if (!session) {
+      try {
+        const snap = await adminDb
+          .collection('live_sessions')
+          .doc(`ujian_${examId}`)
+          .get();
+        if (snap.exists) {
+          session = snap.data();
+          serverLiveSessions.set(examId, session);
+        }
+      } catch {}
+    }
+    res.json({ session: session || null });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal memuat sesi live.' });
+  }
+});
+
+// POST /api/live-sessions/:examId/ping - Upsert participant into Singleton Live Session
+app.post('/api/live-sessions/:examId/ping', async (req, res) => {
+  try {
+    const examId = Number(req.params.examId);
+    const { judul_ujian, participant } = req.body || {};
+    if (!examId || !participant?.student_id) {
+      return res.status(400).json({ error: 'Data participant sesi live tidak lengkap.' });
+    }
+    const updated = await upsertLiveSessionParticipantServer(
+      examId,
+      String(judul_ujian || ''),
+      participant
+    );
+    res.json({ synced: true, session: updated });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Gagal memperbarui singleton live session.' });
+  }
+});
+
+// POST /api/exam/heartbeat - Real-time anti-cheat & live progress broadcast via Singleton & Firebase
+app.post('/api/exam/heartbeat', async (req, res) => {
+  try {
+    const { examId, judul_ujian, participant } = req.body || {};
+    if (examId && participant?.student_id) {
+      const updated = await upsertLiveSessionParticipantServer(
+        Number(examId),
+        String(judul_ujian || ''),
+        participant
+      );
+      return res.json({ synced: true, session: updated });
+    }
     res.json({ synced: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal sinkronisasi heartbeat.' });
   }
 });
 
-// POST /api/exam/submit - Submit student exam answers
+// POST /api/exam/submit - Evaluasi Server-Side Mutlak saat siswa menyelesaikan ujian
 app.post('/api/exam/submit', async (req, res) => {
   try {
-    const { studentId, examId, jawabanSiswa, pelanggaranTab = 0 } = req.body;
+    const {
+      studentId,
+      examId,
+      jawabanSiswa,
+      pelanggaranTab = 0,
+      forceByTimeout = false,
+      clientQuestionsMeta = [],
+      studentName = '',
+      studentKelas = '',
+      kodePaket = 'PAKET-A',
+      judulUjian = '',
+    } = req.body || {};
+
     if (!studentId || !examId || !jawabanSiswa) {
       return res.status(400).json({ error: 'Data jawaban ujian tidak lengkap.' });
     }
     const answeredKeys = Object.keys(jawabanSiswa || {}).filter(
       (k) => Array.isArray(jawabanSiswa[k]) && jawabanSiswa[k].length > 0
     );
-    if (answeredKeys.length === 0) {
+    if (answeredKeys.length === 0 && !forceByTimeout) {
       return res.status(400).json({
         error:
           'Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!',
       });
     }
-    const outcome = await submitStudentExamResult(
-      Number(studentId),
-      Number(examId),
-      jawabanSiswa,
-      Number(pelanggaranTab) || 0
-    );
-    res.json(outcome);
+
+    const numStudentId = Number(studentId);
+    const numExamId = Number(examId);
+
+    // 1. Cari pertanyaan otoritatif (lengkap dengan kunci_jawaban) di server
+    const authoritativeQuestions = await resolveAuthoritativeQuestions(numExamId);
+
+    // Bangun map `opsi_original_map` dari clientQuestionsMeta agar jawaban teracak tetap bisa dipetakan ke kunci kanonik server
+    const metaOptionMap = new Map<string, Record<string, string>>();
+    if (Array.isArray(clientQuestionsMeta)) {
+      for (const m of clientQuestionsMeta) {
+        if (m?.id && m?.opsi_original_map) {
+          metaOptionMap.set(String(m.id), m.opsi_original_map);
+        }
+      }
+    }
+
+    let finalOutcome: any = null;
+
+    if (authoritativeQuestions.length > 0) {
+      const mergedQuestionsForStudent = authoritativeQuestions.map((q) => {
+        const clientMap = metaOptionMap.get(String(q.id));
+        if (!clientMap) return q;
+        return {
+          ...q,
+          data_opsi: {
+            ...(q.data_opsi || {}),
+            opsi_original_map: clientMap,
+          },
+        };
+      });
+
+      // Filter hanya soal aktif atau yang dijawab siswa (jika soal di-versioning saat ujian berlangsung, versi lama tetap valid)
+      const submittedIds = new Set(Object.keys(jawabanSiswa || {}));
+      const gradingQuestions = mergedQuestionsForStudent.filter(
+        (q) => !q.is_archived_version || submittedIds.has(String(q.id))
+      );
+
+      const canonicalAnswers = mapStudentAnswersToCanonicalKeys(
+        gradingQuestions,
+        jawabanSiswa
+      );
+      const scoreSummary = calculateExamScore(gradingQuestions, canonicalAnswers);
+      const aiAnalysis = buildHumaneAnalysisForResult({
+        studentName: String(studentName || `Siswa #${numStudentId}`),
+        questions: gradingQuestions,
+        canonicalAnswers,
+        scoreSummary,
+        finalScore: scoreSummary.normalizedScore,
+        finalKategori: scoreSummary.kategoriNilai,
+        existingAi: null,
+      });
+
+      // Coba simpan ke PostgreSQL jika tersedia
+      let pgResult: any = null;
+      try {
+        const pgSaved = await submitStudentExamResult(
+          numStudentId,
+          numExamId,
+          canonicalAnswers,
+          Number(pelanggaranTab) || 0
+        );
+        pgResult = pgSaved?.result || null;
+      } catch {
+        // Firestore remains primary
+      }
+
+      const resultId = pgResult?.id || Number(`${Date.now()}${String(numStudentId).slice(-2)}`);
+
+      // Perbarui Singleton Live Session di server (`live_sessions/ujian_${examId}`)
+      await upsertLiveSessionParticipantServer(
+        numExamId,
+        String(judulUjian || ''),
+        {
+          student_id: numStudentId,
+          nama: String(studentName || `Siswa #${numStudentId}`),
+          kelas: String(studentKelas || '-'),
+          kode_paket: String(kodePaket || 'PAKET-A'),
+          status_ujian: 'Selesai',
+          current_question_no: gradingQuestions.length,
+          answered_count: answeredKeys.length,
+          total_questions: gradingQuestions.length,
+          remaining_seconds: 0,
+          is_fullscreen: false,
+          is_focused: true,
+          devtools_open: false,
+          tab_violations: Number(pelanggaranTab) || 0,
+          inspect_attempts: 0,
+          last_action: `SELESAI UJIAN (Server Graded) · NILAI: ${scoreSummary.normalizedScore}/100 [RES:${resultId}]`,
+          last_active_at: new Date().toISOString(),
+        }
+      );
+
+      finalOutcome = {
+        authoritativeServerGraded: true,
+        result: pgResult || {
+          id: resultId,
+          student_id: numStudentId,
+          exam_id: numExamId,
+          skor_angka: scoreSummary.normalizedScore,
+          jawaban_siswa: canonicalAnswers,
+          analisis_ai: aiAnalysis,
+          pelanggaran_tab: Number(pelanggaranTab) || 0,
+          created_at: new Date().toISOString(),
+        },
+        scoreSummary,
+        canonicalAnswers,
+        aiAnalysis,
+      };
+    } else {
+      // Fallback jika PG & Vault kosong
+      const outcome = await submitStudentExamResult(
+        numStudentId,
+        numExamId,
+        jawabanSiswa,
+        Number(pelanggaranTab) || 0
+      );
+      finalOutcome = {
+        ...outcome,
+        authoritativeServerGraded: false,
+      };
+    }
+
+    res.json(finalOutcome);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Gagal mengirim jawaban ujian.' });
   }

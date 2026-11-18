@@ -21,7 +21,7 @@ service cloud.firestore {
 
     function isValidExam(data) {
       return data.keys().hasAll(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'kategori_ujian', 'status_ujian', 'target_rombel', 'jadwal_mulai', 'jadwal_selesai', 'acak_soal', 'acak_opsi', 'kode_paket', 'mode_multi_paket', 'jumlah_paket', 'token_sesi', 'tampilkan_nilai', 'pengumuman', 'mata_pelajaran', 'distribusi_paket_mode', 'target_siswa_ids', 'authorUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'judul_ujian', 'durasi_menit', 'target_tingkat', 'target_kelas', 'kategori_ujian', 'status_ujian', 'target_rombel', 'jadwal_mulai', 'jadwal_selesai', 'acak_soal', 'acak_opsi', 'kode_paket', 'mode_multi_paket', 'jumlah_paket', 'token_sesi', 'tampilkan_nilai', 'pengumuman', 'mata_pelajaran', 'distribusi_paket_mode', 'target_siswa_ids', 'isDeleted', 'deletedAt', 'purgeAt', 'authorUid', 'updatedAt']) &&
         data.id is number && data.id >= 1 &&
         data.judul_ujian is string && data.judul_ujian.size() >= 1 && data.judul_ujian.size() <= 200 &&
         data.durasi_menit is number && data.durasi_menit >= 1 && data.durasi_menit <= 300 &&
@@ -44,6 +44,9 @@ service cloud.firestore {
         (!('mata_pelajaran' in data) || (data.mata_pelajaran is string && data.mata_pelajaran.size() <= 80)) &&
         (!('distribusi_paket_mode' in data) || (data.distribusi_paket_mode is string && data.distribusi_paket_mode.size() <= 40)) &&
         (!('target_siswa_ids' in data) || (data.target_siswa_ids is list && data.target_siswa_ids.size() <= 1000)) &&
+        (!('isDeleted' in data) || data.isDeleted is bool) &&
+        (!('deletedAt' in data) || (data.deletedAt is string && data.deletedAt.size() <= 64)) &&
+        (!('purgeAt' in data) || (data.purgeAt is string && data.purgeAt.size() <= 64)) &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 
@@ -66,13 +69,18 @@ service cloud.firestore {
 
     function isValidQuestion(data) {
       return data.keys().hasAll(['id', 'exam_id', 'teks_soal', 'tipe_soal', 'bobot', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'exam_id', 'teks_soal', 'tipe_soal', 'data_opsi', 'kunci_jawaban', 'bobot', 'authorUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'exam_id', 'teks_soal', 'tipe_soal', 'data_opsi', 'kunci_jawaban', 'bobot', 'version', 'parent_question_id', 'is_archived_version', 'archived_at', 'version_label', 'authorUid', 'updatedAt']) &&
         data.id is number && data.id >= 1 &&
         data.exam_id is number && data.exam_id >= 1 &&
         data.teks_soal is string && data.teks_soal.size() >= 1 && data.teks_soal.size() <= 4000 &&
         data.tipe_soal is string && data.tipe_soal.size() >= 2 && data.tipe_soal.size() <= 20 &&
         (data.tipe_soal == 'PG' || data.tipe_soal == 'Kompleks') &&
         data.bobot is number && data.bobot >= 1 && data.bobot <= 100 &&
+        (!('version' in data) || (data.version is number && data.version >= 1)) &&
+        (!('parent_question_id' in data) || (data.parent_question_id is number && data.parent_question_id >= 1)) &&
+        (!('is_archived_version' in data) || data.is_archived_version is bool) &&
+        (!('archived_at' in data) || (data.archived_at is string && data.archived_at.size() <= 64)) &&
+        (!('version_label' in data) || (data.version_label is string && data.version_label.size() <= 32)) &&
         data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 
@@ -99,6 +107,33 @@ service cloud.firestore {
         data.totalResults is number && data.totalResults >= 0;
     }
 
+    function isValidLiveSession(data) {
+      return data.keys().hasAll(['exam_id', 'updatedAt']) &&
+        data.keys().hasOnly(['exam_id', 'judul_ujian', 'updatedAt', 'activeCount', 'finishedCount', 'blockedCount', 'notStartedCount', 'totalViolations', 'participants', 'authorUid']) &&
+        data.exam_id is number && data.exam_id >= 0 &&
+        data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64 &&
+        (!('judul_ujian' in data) || (data.judul_ujian is string && data.judul_ujian.size() <= 200)) &&
+        (!('activeCount' in data) || (data.activeCount is number && data.activeCount >= 0)) &&
+        (!('finishedCount' in data) || (data.finishedCount is number && data.finishedCount >= 0)) &&
+        (!('blockedCount' in data) || (data.blockedCount is number && data.blockedCount >= 0)) &&
+        (!('notStartedCount' in data) || (data.notStartedCount is number && data.notStartedCount >= 0)) &&
+        (!('totalViolations' in data) || (data.totalViolations is number && data.totalViolations >= 0)) &&
+        (!('participants' in data) || data.participants is map);
+    }
+
+    function isValidExamArchive(data) {
+      return data.keys().hasAll(['id', 'exam_id', 'judul_ujian', 'deletedAt', 'purgeAt', 'expireAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'exam_id', 'judul_ujian', 'exam_data', 'questions_data', 'results_data', 'deletedBy', 'deletedAt', 'purgeAt', 'expireAt', 'restoredAt', 'authorUid', 'updatedAt']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 &&
+        data.exam_id is number && data.exam_id >= 1 &&
+        data.judul_ujian is string && data.judul_ujian.size() >= 1 && data.judul_ujian.size() <= 200 &&
+        (!('deletedBy' in data) || (data.deletedBy is string && data.deletedBy.size() <= 120)) &&
+        data.deletedAt is string && data.deletedAt.size() >= 1 && data.deletedAt.size() <= 64 &&
+        data.purgeAt is string && data.purgeAt.size() >= 1 && data.purgeAt.size() <= 64 &&
+        (!('restoredAt' in data) || (data.restoredAt is string && data.restoredAt.size() <= 64)) &&
+        data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
     match /test/{docId} {
       allow get: if isValidId(docId) && docId == 'connection';
       allow list, create, update, delete: if false;
@@ -110,6 +145,22 @@ service cloud.firestore {
       allow create: if isValidId(syncId) && isValidCbtSyncPulse(incoming());
       allow update: if isValidId(syncId) && isValidCbtSyncPulse(incoming());
       allow delete: if isValidId(syncId);
+    }
+
+    match /live_sessions/{sessionId} {
+      allow get: if isValidId(sessionId);
+      allow list: if resource.data.exam_id >= 0;
+      allow create: if isValidId(sessionId) && isValidLiveSession(incoming());
+      allow update: if isValidId(sessionId) && isValidLiveSession(incoming());
+      allow delete: if isValidId(sessionId);
+    }
+
+    match /exams_archive/{archiveId} {
+      allow get: if isValidId(archiveId);
+      allow list: if resource.data.exam_id >= 1;
+      allow create: if isValidId(archiveId) && isValidExamArchive(incoming());
+      allow update: if isValidId(archiveId) && isValidExamArchive(incoming()) && incoming().exam_id == existing().exam_id;
+      allow delete: if isValidId(archiveId);
     }
 
     match /exams/{examId} {

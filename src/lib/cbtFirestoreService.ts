@@ -11,6 +11,7 @@ import {
   writeBatch,
   query,
   where,
+  onSnapshot,
   Unsubscribe,
 } from 'firebase/firestore';
 import {
@@ -72,10 +73,14 @@ async function safeGetSingleDoc(collectionName: string, docId: string) {
 import {
   ExamItem,
   QuestionItem,
+  StudentQuestionItem,
   StudentItem,
   StudentLiveTelemetry,
   ResultItem,
   AnalisisAI,
+  ArchivedExamRecord,
+  LiveSessionParticipant,
+  LiveSessionSingleton,
 } from '../types/cbt';
 import {
   parseQuestionsCsv,
@@ -132,6 +137,9 @@ function buildCleanExamFirestoreDoc(ex: ExamItem, nowIso: string): Record<string
       .filter((id) => !isNaN(id) && id > 0)
       .slice(0, 1000);
   }
+  if (ex.isDeleted !== undefined) docObj.isDeleted = Boolean(ex.isDeleted);
+  if (ex.deletedAt) docObj.deletedAt = String(ex.deletedAt).slice(0, 64);
+  if (ex.purgeAt) docObj.purgeAt = String(ex.purgeAt).slice(0, 64);
   return docObj;
 }
 
@@ -270,17 +278,60 @@ export function getCachedExamQuestionsLocal(
         wacana: '',
         opsi: { A: '', B: '', C: '', D: '', E: '' },
       },
-      kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : ['A'],
+      kunci_jawaban: Array.isArray(q.kunci_jawaban) ? q.kunci_jawaban : [],
       bobot:
         Number(q.bobot) > 0
           ? Number(q.bobot)
           : q.tipe_soal === 'Kompleks'
           ? 3
           : 2,
+      ...(q.version !== undefined ? { version: Number(q.version) } : {}),
+      ...(q.parent_question_id !== undefined
+        ? { parent_question_id: Number(q.parent_question_id) }
+        : {}),
+      ...(q.is_archived_version !== undefined
+        ? { is_archived_version: Boolean(q.is_archived_version) }
+        : {}),
+      ...(q.archived_at ? { archived_at: String(q.archived_at) } : {}),
+      ...(q.version_label ? { version_label: String(q.version_label) } : {}),
     }));
   } catch {
     return null;
   }
+}
+
+/**
+ * Menghilangkan `kunci_jawaban` dan versi arsip sebelum dikirim/disimpan pada sesi siswa.
+ */
+export function stripQuestionKeysForStudent(
+  questions: QuestionItem[]
+): QuestionItem[] {
+  return (questions || [])
+    .filter((q) => !q.is_archived_version)
+    .map((q) => ({
+      ...q,
+      kunci_jawaban: [],
+    }));
+}
+
+/**
+ * Menyinkronkan soal beserta kunci jawaban ke Question Vault backend
+ * agar koreksi nilai siswa di endpoint /api/exam/submit berjalan mutlak di server-side.
+ */
+export async function syncQuestionVaultToServer(
+  questions: QuestionItem[],
+  examId?: number
+): Promise<void> {
+  if (!Array.isArray(questions) || questions.length === 0) return;
+  const hasRealKeys = questions.some(
+    (q) => Array.isArray(q.kunci_jawaban) && q.kunci_jawaban.length > 0
+  );
+  if (!hasRealKeys) return;
+  await safeApiJson('/api/questions/vault-sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ examId, questions }),
+  });
 }
 
 export function saveCachedExamQuestionsLocal(
@@ -378,6 +429,15 @@ function buildExamQuestionsBundleDoc(
           : q.tipe_soal === 'Kompleks'
           ? 3
           : 2,
+      ...(q.version !== undefined ? { version: Number(q.version) } : {}),
+      ...(q.parent_question_id !== undefined
+        ? { parent_question_id: Number(q.parent_question_id) }
+        : {}),
+      ...(q.is_archived_version !== undefined
+        ? { is_archived_version: Boolean(q.is_archived_version) }
+        : {}),
+      ...(q.archived_at ? { archived_at: String(q.archived_at) } : {}),
+      ...(q.version_label ? { version_label: String(q.version_label) } : {}),
     }));
 
   return {
@@ -512,6 +572,17 @@ export async function fetchExamQuestionsBundleOnce(
                 : item.tipe_soal === 'Kompleks'
                 ? 3
                 : 2,
+            ...(item.version !== undefined ? { version: Number(item.version) } : {}),
+            ...(item.parent_question_id !== undefined
+              ? { parent_question_id: Number(item.parent_question_id) }
+              : {}),
+            ...(item.is_archived_version !== undefined
+              ? { is_archived_version: Boolean(item.is_archived_version) }
+              : {}),
+            ...(item.archived_at ? { archived_at: String(item.archived_at) } : {}),
+            ...(item.version_label
+              ? { version_label: String(item.version_label) }
+              : {}),
           }))
           .sort((a: QuestionItem, b: QuestionItem) => a.id - b.id);
 
@@ -968,6 +1039,7 @@ export async function fetchAllFromFirestore(): Promise<{
 
     const exams: ExamItem[] = exSnap.docs
       .map((d) => d.data() as ExamItem)
+      .filter((e) => !e.isDeleted)
       .sort((a, b) => b.id - a.id);
 
     const students: StudentItem[] = stSnap.docs
@@ -1555,9 +1627,9 @@ export async function loadUnifiedDashboardData(options?: {
           getEffectiveExamSessionToken(fsEx),
       });
     }
-    const mergedExams = Array.from(examById.values()).sort(
-      (a, b) => Number(b.id) - Number(a.id)
-    );
+    const mergedExams = Array.from(examById.values())
+      .filter((e) => !e.isDeleted)
+      .sort((a, b) => Number(b.id) - Number(a.id));
 
     const studentById = new Map<number, StudentItem>();
     for (const apiSt of apiRes.data.students || []) {
@@ -1953,6 +2025,228 @@ export async function batchAssignPackageVariantsCbt(
   }
 }
 
+export async function softDeleteExamCbt(params: {
+  exam: ExamItem;
+  questions: QuestionItem[];
+  results: ResultItem[];
+}): Promise<ArchivedExamRecord> {
+  const { exam, questions, results } = params;
+  const examId = Number(exam.id);
+  const now = new Date();
+  const deletedAt = now.toISOString();
+  const purgeAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const archiveId = `arch_${examId}_${now.getTime()}`;
+
+  const examQuestions = questions.filter((q) => Number(q.exam_id) === examId);
+  const examResults = results.filter((r) => Number(r.exam_id) === examId);
+
+  const archiveRecord: ArchivedExamRecord = {
+    id: archiveId,
+    exam_id: examId,
+    judul_ujian: String(exam.judul_ujian || `Paket #${examId}`).slice(0, 200),
+    exam_data: {
+      ...exam,
+      isDeleted: true,
+      deletedAt,
+      purgeAt,
+    },
+    questions_data: examQuestions,
+    results_data: examResults,
+    deletedBy: 'sahidin30@gmail.com',
+    deletedAt,
+    purgeAt,
+    expireAt: purgeAt,
+    updatedAt: deletedAt,
+  };
+
+  // Segera sembunyikan dari UI & cache lokal tanpa delay
+  clearedQuestionExamIdsCache.add(examId);
+  patchLocalCbtSnapshotCache({ removeExamId: examId });
+
+  await safeApiJson(`/api/exams/${examId}/soft-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      exam,
+      questions: examQuestions,
+      results: examResults,
+    }),
+  });
+
+  if (db && !isFirestoreQuotaCooldownActive()) {
+    try {
+      // 1. Simpan snapshot arsip 30 hari ke koleksi /exams_archive/{archiveId}
+      await setDoc(doc(db, 'exams_archive', archiveId), {
+        id: archiveId,
+        exam_id: examId,
+        judul_ujian: archiveRecord.judul_ujian,
+        exam_data: archiveRecord.exam_data,
+        questions_data: examQuestions.slice(0, 250),
+        results_data: examResults.slice(0, 400),
+        deletedBy: 'sahidin30@gmail.com',
+        deletedAt,
+        purgeAt,
+        expireAt: purgeAt,
+        updatedAt: deletedAt,
+      });
+
+      // 2. Tandai isDeleted: true terlebih dahulu sebelum deep-delete rekursif
+      await setDoc(
+        doc(db, 'exams', String(examId)),
+        buildCleanExamFirestoreDoc(
+          { ...exam, isDeleted: true, deletedAt, purgeAt },
+          deletedAt
+        ),
+        { merge: true }
+      );
+
+      // 3. Jalankan penghapusan kaskade bertahap (maks 400 ops/batch) secara asinkron
+      const [qSnap, rSnap] = await Promise.all([
+        getDocs(query(collection(db, 'questions'), where('exam_id', '==', examId))),
+        getDocs(query(collection(db, 'results'), where('exam_id', '==', examId))),
+      ]);
+      const refsToDelete = [
+        doc(db, 'exams', String(examId)),
+        doc(db, 'questions', `bundle_${examId}`),
+        doc(db, 'live_sessions', `ujian_${examId}`),
+        ...qSnap.docs.map((d) => d.ref),
+        ...rSnap.docs.map((d) => d.ref),
+      ];
+      for (let i = 0; i < refsToDelete.length; i += 390) {
+        const chunk = refsToDelete.slice(i, i + 390);
+        const batch = writeBatch(db);
+        chunk.forEach((r) => batch.delete(r));
+        if (i + 390 >= refsToDelete.length) {
+          const pulsePayload = await buildDeltaPulsePayload(
+            `Paket ujian "${exam.judul_ujian}" diarsipkan 30 hari & dibersihkan [BULK_EXM]`,
+            '[BULK_EXM]',
+            false
+          );
+          batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+        }
+        await batch.commit();
+      }
+    } catch {
+      await updateFirestorePulse(
+        `Paket ujian "${exam.judul_ujian}" diarsipkan [BULK_EXM]`
+      ).catch(() => {});
+    }
+  }
+
+  return archiveRecord;
+}
+
+export async function fetchArchivedExamsCbt(): Promise<ArchivedExamRecord[]> {
+  const byId = new Map<string, ArchivedExamRecord>();
+  const apiRes = await safeApiJson<{ archives?: ArchivedExamRecord[] }>(
+    '/api/exams/archive'
+  );
+  if (apiRes.ok && Array.isArray(apiRes.data?.archives)) {
+    apiRes.data!.archives.forEach((a) => byId.set(String(a.id), a));
+  }
+  if (db && !isFirestoreQuotaCooldownActive()) {
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'exams_archive'), where('exam_id', '>=', 1))
+      );
+      snap.docs.forEach((d) => {
+        const data = d.data() as ArchivedExamRecord;
+        if (!data?.restoredAt) {
+          byId.set(d.id, { ...data, id: d.id });
+        }
+      });
+    } catch {
+      // Ignore permission/offline fallback
+    }
+  }
+  return Array.from(byId.values()).sort(
+    (a, b) =>
+      new Date(b.deletedAt || 0).getTime() - new Date(a.deletedAt || 0).getTime()
+  );
+}
+
+export async function restoreArchivedExamCbt(
+  archive: ArchivedExamRecord
+): Promise<{
+  exam: ExamItem;
+  questions: QuestionItem[];
+  results: ResultItem[];
+}> {
+  const nowIso = new Date().toISOString();
+  const examId = Number(archive.exam_id);
+  const restoredExam: ExamItem = {
+    ...archive.exam_data,
+    id: examId,
+    isDeleted: false,
+    deletedAt: '',
+    purgeAt: '',
+    updatedAt: nowIso,
+  };
+  const restoredQuestions = Array.isArray(archive.questions_data)
+    ? archive.questions_data
+    : [];
+  const restoredResults = Array.isArray(archive.results_data)
+    ? archive.results_data
+    : [];
+
+  clearedQuestionExamIdsCache.delete(examId);
+
+  await safeApiJson(`/api/exams/${encodeURIComponent(archive.id)}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archive }),
+  });
+
+  if (restoredQuestions.length > 0) {
+    await syncQuestionVaultToServer(restoredQuestions, examId);
+  }
+
+  patchLocalCbtSnapshotCache({
+    exam: restoredExam,
+    replaceQuestionsForExam: { examId, items: restoredQuestions },
+  });
+  for (const r of restoredResults) {
+    patchLocalCbtSnapshotCache({ result: r });
+  }
+
+  if (db && !isFirestoreQuotaCooldownActive()) {
+    try {
+      const batch = writeBatch(db);
+      batch.set(
+        doc(db, 'exams', String(examId)),
+        buildCleanExamFirestoreDoc(restoredExam, nowIso)
+      );
+      batch.set(
+        doc(db, 'questions', `bundle_${examId}`),
+        buildExamQuestionsBundleDoc(examId, restoredQuestions, nowIso)
+      );
+      restoredResults.slice(0, 350).forEach((r) => {
+        batch.set(doc(db!, 'results', String(r.id)), {
+          ...r,
+          authorUid: 'sahidin30@gmail.com',
+          updatedAt: nowIso,
+        });
+      });
+      batch.delete(doc(db, 'exams_archive', archive.id));
+      const pulsePayload = await buildDeltaPulsePayload(
+        `Paket ujian "${restoredExam.judul_ujian}" dipulihkan dari Arsip 30 Hari [BULK_EXM]`,
+        '[BULK_EXM]',
+        false
+      );
+      batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+      await batch.commit();
+    } catch {
+      // Fallback gracefully
+    }
+  }
+
+  return {
+    exam: restoredExam,
+    questions: restoredQuestions,
+    results: restoredResults,
+  };
+}
+
 export async function deleteExamCbt(examId: number, title: string): Promise<void> {
   await safeApiJson(`/api/exams/${examId}`, { method: 'DELETE' });
   clearedQuestionExamIdsCache.add(Number(examId));
@@ -1962,18 +2256,27 @@ export async function deleteExamCbt(examId: number, title: string): Promise<void
       getDocs(query(collection(db, 'questions'), where('exam_id', '==', Number(examId)))),
       getDocs(query(collection(db, 'results'), where('exam_id', '==', Number(examId)))),
     ]);
-    const batch = writeBatch(db);
-    batch.delete(doc(db, 'exams', String(examId)));
-    batch.delete(doc(db, 'questions', `bundle_${examId}`));
-    qSnap.docs.forEach((d) => batch.delete(d.ref));
-    rSnap.docs.forEach((d) => batch.delete(d.ref));
-    const pulsePayload = await buildDeltaPulsePayload(
-      `Paket ujian "${title}" beserta soal terkait dihapus [BULK_EXM]`,
-      '[BULK_EXM]',
-      false
-    );
-    batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
-    await batch.commit();
+    const refs = [
+      doc(db, 'exams', String(examId)),
+      doc(db, 'questions', `bundle_${examId}`),
+      doc(db, 'live_sessions', `ujian_${examId}`),
+      ...qSnap.docs.map((d) => d.ref),
+      ...rSnap.docs.map((d) => d.ref),
+    ];
+    for (let i = 0; i < refs.length; i += 390) {
+      const slice = refs.slice(i, i + 390);
+      const batch = writeBatch(db);
+      slice.forEach((ref) => batch.delete(ref));
+      if (i + 390 >= refs.length) {
+        const pulsePayload = await buildDeltaPulsePayload(
+          `Paket ujian "${title}" beserta soal terkait dihapus [BULK_EXM]`,
+          '[BULK_EXM]',
+          false
+        );
+        batch.set(doc(db, 'cbt_sync', 'live_state'), pulsePayload);
+      }
+      await batch.commit();
+    }
   }
 }
 
@@ -2472,6 +2775,15 @@ export async function updateStudentStatusCbt(
     }
   }
 
+  if (Number(updated.live_telemetry?.exam_id || 0) > 0) {
+    const exId = Number(updated.live_telemetry!.exam_id);
+    upsertExamLiveSessionParticipantCbt({
+      examId: exId,
+      judulUjian: String(updated.live_telemetry?.judul_ujian || ''),
+      participant: buildLiveSessionParticipantFromStudent(updated, exId),
+    }).catch(() => {});
+  }
+
   return updated;
 }
 
@@ -2494,6 +2806,15 @@ export async function syncStudentLiveTelemetryCbt(
   };
 
   patchLocalCbtSnapshotCache({ student: updatedStudent });
+
+  if (Number(mergedTelemetry.exam_id || 0) > 0) {
+    const exId = Number(mergedTelemetry.exam_id);
+    upsertExamLiveSessionParticipantCbt({
+      examId: exId,
+      judulUjian: String(mergedTelemetry.judul_ujian || ''),
+      participant: buildLiveSessionParticipantFromStudent(updatedStudent, exId),
+    }).catch(() => {});
+  }
 
   if (db) {
     try {
@@ -2922,6 +3243,7 @@ export async function addManualQuestionCbt(payload: {
   ].sort((a, b) => Number(a.id) - Number(b.id));
 
   await syncExamQuestionsBundleToFirestore(payload.examId, nextExamQuestions);
+  await syncQuestionVaultToServer(nextExamQuestions, payload.examId);
   if (db) {
     await updateFirestorePulse(
       `Butir soal baru ditambahkan ke paket ujian #${payload.examId} [Q_EXM:${payload.examId}]`
@@ -2940,10 +3262,97 @@ export async function updateManualQuestionCbt(payload: {
   opsi: { A: string; B: string; C: string; D: string; E: string };
   kunci_jawaban: string[];
   bobot: number;
+  createNewVersionIfDistributed?: boolean;
 }): Promise<QuestionItem> {
   const normalizedKeys = normalizeAnswerKeys(payload.kunci_jawaban);
   if (normalizedKeys.length === 0) {
     throw new Error('Pilih minimal satu kunci jawaban yang benar (A-E).');
+  }
+
+  const snapshotCache = loadLocalCbtSnapshotCache();
+  const existingCached =
+    getCachedExamQuestionsLocal(payload.examId) ||
+    snapshotCache?.questions.filter(
+      (q) => Number(q.exam_id) === Number(payload.examId)
+    ) ||
+    [];
+  const existingTarget = existingCached.find(
+    (q) => Number(q.id) === Number(payload.questionId)
+  );
+  const parentExam = snapshotCache?.exams.find(
+    (e) => Number(e.id) === Number(payload.examId)
+  );
+  const hasDistributedResults = Boolean(
+    snapshotCache?.results.some((r) => Number(r.exam_id) === Number(payload.examId))
+  );
+  const shouldCreateNewVersion =
+    payload.createNewVersionIfDistributed !== false &&
+    Boolean(existingTarget) &&
+    (parentExam?.status_ujian === 'AKTIF' || hasDistributedResults);
+
+  const nowIso = new Date().toISOString();
+
+  if (shouldCreateNewVersion && existingTarget) {
+    const prevVersion = Number(existingTarget.version) || 1;
+    const nextVersion = prevVersion + 1;
+    const newVersionId = Date.now();
+    const versionLabel = `soal_v${nextVersion}`;
+
+    const archivedOldQuestion: QuestionItem = {
+      ...existingTarget,
+      version: prevVersion,
+      is_archived_version: true,
+      archived_at: nowIso,
+      version_label: existingTarget.version_label || `soal_v${prevVersion}`,
+    };
+
+    const apiRes = await safeApiJson<{ question?: QuestionItem; error?: string }>(
+      '/api/questions/manual',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, kunci_jawaban: normalizedKeys }),
+      }
+    );
+
+    const newVersionRecord: QuestionItem = {
+      ...(apiRes.ok && apiRes.data?.question ? apiRes.data.question : {}),
+      id: newVersionId,
+      exam_id: payload.examId,
+      teks_soal: payload.teks_soal.trim(),
+      tipe_soal: payload.tipe_soal,
+      data_opsi: {
+        ...(existingTarget.data_opsi || {}),
+        wacana: payload.wacana.trim(),
+        opsi: payload.opsi,
+      },
+      kunci_jawaban: normalizedKeys,
+      bobot: payload.bobot,
+      version: nextVersion,
+      parent_question_id: Number(
+        existingTarget.parent_question_id || existingTarget.id
+      ),
+      is_archived_version: false,
+      version_label: versionLabel,
+    };
+
+    const nextExamQuestions = [
+      ...existingCached.filter(
+        (q) => Number(q.id) !== Number(payload.questionId)
+      ),
+      archivedOldQuestion,
+      newVersionRecord,
+    ].sort((a, b) => Number(a.id) - Number(b.id));
+
+    await syncExamQuestionsBundleToFirestore(payload.examId, nextExamQuestions);
+    await syncQuestionVaultToServer(nextExamQuestions, payload.examId);
+    if (db) {
+      await updateFirestorePulse(
+        `Versi baru soal (${versionLabel}) dibuat untuk paket #${payload.examId} [Q_EXM:${payload.examId}]`
+      );
+    }
+
+    return newVersionRecord;
   }
 
   const apiRes = await safeApiJson<{ question?: QuestionItem; error?: string }>(
@@ -2955,36 +3364,29 @@ export async function updateManualQuestionCbt(payload: {
     }
   );
 
-  const questionRecord: QuestionItem =
-    apiRes.ok && apiRes.data?.question
-      ? apiRes.data.question
-      : {
-          id: payload.questionId,
-          exam_id: payload.examId,
-          teks_soal: payload.teks_soal.trim(),
-          tipe_soal: payload.tipe_soal,
-          data_opsi: {
-            wacana: payload.wacana.trim(),
-            opsi: payload.opsi,
-          },
-          kunci_jawaban: normalizedKeys,
-          bobot: payload.bobot,
-        };
+  const questionRecord: QuestionItem = {
+    ...(existingTarget || {}),
+    ...(apiRes.ok && apiRes.data?.question ? apiRes.data.question : {}),
+    id: payload.questionId,
+    exam_id: payload.examId,
+    teks_soal: payload.teks_soal.trim(),
+    tipe_soal: payload.tipe_soal,
+    data_opsi: {
+      ...(existingTarget?.data_opsi || {}),
+      wacana: payload.wacana.trim(),
+      opsi: payload.opsi,
+    },
+    kunci_jawaban: normalizedKeys,
+    bobot: payload.bobot,
+  };
 
-  // Perbarui cache soal lokal `cbt_soal_${examId}` & dokumen bundel tunggal di Firestore
-  const snapshotCache = loadLocalCbtSnapshotCache();
-  const existingCached =
-    getCachedExamQuestionsLocal(payload.examId) ||
-    snapshotCache?.questions.filter(
-      (q) => Number(q.exam_id) === Number(payload.examId)
-    ) ||
-    [];
   const nextExamQuestions = [
     ...existingCached.filter((q) => Number(q.id) !== Number(questionRecord.id)),
     questionRecord,
   ].sort((a, b) => Number(a.id) - Number(b.id));
 
   await syncExamQuestionsBundleToFirestore(payload.examId, nextExamQuestions);
+  await syncQuestionVaultToServer(nextExamQuestions, payload.examId);
   if (db) {
     await updateFirestorePulse(
       `Butir soal #${questionRecord.id} berhasil diperbarui [Q_EXM:${payload.examId}]`
@@ -3053,6 +3455,7 @@ export async function uploadQuestionsCsvCbt(
 
   // Simpan seluruh soal ujian ini sebagai 1 dokumen bundel tunggal (`questions/bundle_${examId}`) + cache lokal `cbt_soal_${examId}`
   await syncExamQuestionsBundleToFirestore(examId, combinedForExam);
+  await syncQuestionVaultToServer(combinedForExam, examId);
 
   if (db) {
     await updateFirestorePulse(
@@ -3188,12 +3591,152 @@ export async function copyQuestionsToExamCbt(
 
   const combined = [...existingForTarget, ...clonedQuestions];
   await syncExamQuestionsBundleToFirestore(targetExamId, combined);
+  await syncQuestionVaultToServer(combined, targetExamId);
   if (db) {
     await updateFirestorePulse(
       `${clonedQuestions.length} butir soal disalin ke paket #${targetExamId} [Q_EXM:${targetExamId}]`
     );
   }
   return clonedQuestions.length;
+}
+
+/**
+ * Agregasi Status Ujian (Singleton Document `/live_sessions/ujian_${examId}`):
+ * Guru hanya me-listen 1 dokumen tunggal untuk ratusan siswa (1 Read per perubahan).
+ */
+export function buildLiveSessionParticipantFromStudent(
+  st: StudentItem,
+  examId: number,
+  override?: Partial<LiveSessionParticipant>
+): LiveSessionParticipant {
+  const tel = st.live_telemetry || {};
+  return {
+    student_id: Number(st.id),
+    nama: String(st.nama || '').slice(0, 120),
+    kelas: String(st.kelas || '').slice(0, 64),
+    kode_paket: String(
+      override?.kode_paket || st.kode_soal || tel.kode_paket || 'PAKET-A'
+    ).slice(0, 32),
+    status_ujian: String(
+      override?.status_ujian || st.status_ujian || 'Belum Mulai'
+    ).slice(0, 32),
+    current_question_no: Number(
+      override?.current_question_no ?? tel.current_question_no ?? 1
+    ),
+    answered_count: Number(override?.answered_count ?? tel.answered_count ?? 0),
+    total_questions: Number(
+      override?.total_questions ?? tel.total_questions ?? 0
+    ),
+    remaining_seconds: Number(
+      override?.remaining_seconds ?? tel.remaining_seconds ?? 0
+    ),
+    is_fullscreen: override?.is_fullscreen ?? Boolean(tel.is_fullscreen),
+    is_focused: override?.is_focused ?? tel.is_focused !== false,
+    devtools_open: override?.devtools_open ?? Boolean(tel.devtools_open),
+    tab_violations: Number(override?.tab_violations ?? tel.tab_violations ?? 0),
+    inspect_attempts: Number(
+      override?.inspect_attempts ?? tel.inspect_attempts ?? 0
+    ),
+    last_action: String(
+      override?.last_action ?? tel.last_action ?? ''
+    ).slice(0, 200),
+    last_active_at: String(
+      override?.last_active_at ??
+        tel.last_active_at ??
+        new Date().toISOString()
+    ).slice(0, 64),
+  };
+}
+
+export async function upsertExamLiveSessionParticipantCbt(params: {
+  examId: number;
+  judulUjian: string;
+  participant: LiveSessionParticipant;
+}): Promise<void> {
+  const numExamId = Number(params.examId);
+  if (!numExamId || !params.participant?.student_id) return;
+  const nowIso = new Date().toISOString();
+
+  safeApiJson(`/api/live-sessions/${numExamId}/ping`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      judul_ujian: params.judulUjian,
+      participant: params.participant,
+    }),
+  }).catch(() => {});
+
+  if (db && !isFirestoreQuotaCooldownActive()) {
+    try {
+      await setDoc(
+        doc(db, 'live_sessions', `ujian_${numExamId}`),
+        {
+          exam_id: numExamId,
+          judul_ujian: String(params.judulUjian || `Ujian #${numExamId}`).slice(0, 200),
+          updatedAt: nowIso,
+          activeCount: 0,
+          finishedCount: 0,
+          blockedCount: 0,
+          notStartedCount: 0,
+          totalViolations: 0,
+          participants: {
+            [String(params.participant.student_id)]: params.participant,
+          },
+          authorUid: 'sahidin30@gmail.com',
+        },
+        { merge: true }
+      );
+    } catch {
+      // Non-fatal fallback
+    }
+  }
+}
+
+export function subscribeToExamLiveSessionSingleton(
+  examId: number | null | undefined,
+  onUpdate: (session: LiveSessionSingleton) => void
+): Unsubscribe {
+  const numExamId = Number(examId);
+  if (!numExamId) return () => {};
+
+  safeApiJson<{ session?: LiveSessionSingleton | null }>(
+    `/api/live-sessions/${numExamId}`
+  ).then((res) => {
+    if (res.ok && res.data?.session) {
+      onUpdate(res.data.session);
+    }
+  });
+
+  if (!db || isFirestoreQuotaCooldownActive()) {
+    return () => {};
+  }
+
+  let unsub: Unsubscribe | null = null;
+  try {
+    unsub = onSnapshot(
+      doc(db, 'live_sessions', `ujian_${numExamId}`),
+      (snap) => {
+        if (snap.exists()) {
+          onUpdate(snap.data() as LiveSessionSingleton);
+        }
+      },
+      (err) => {
+        if (isQuotaExceededError(err)) {
+          markFirestoreQuotaExhausted();
+        }
+      }
+    );
+  } catch {
+    return () => {};
+  }
+
+  return () => {
+    if (unsub) {
+      try {
+        unsub();
+      } catch {}
+    }
+  };
 }
 
 export async function loginStudentExamCbt(
@@ -3481,6 +4024,15 @@ export async function loginStudentExamCbt(
     );
   }
 
+  // Sinkronkan kunci soal ke Question Vault Server sebelum membersihkan payload siswa (agar server-side grading otoritatif siap)
+  await syncQuestionVaultToServer(examQuestions, Number(activeExam.id));
+
+  // Keamanan Sesi Ujian: Strip `kunci_jawaban` dan versi arsip sebelum dikirim ke portal siswa
+  const clientSafeQuestions = stripQuestionKeysForStudent(
+    examQuestions
+  ) as unknown as QuestionItem[];
+  saveCachedExamQuestionsLocal(activeExam.id, clientSafeQuestions);
+
   // Pertahankan catatan pelanggaran dari server jika siswa masih berada di ujian yang sama dan belum di-reset oleh Pengawas
   const serverTel = matchedStudent.live_telemetry;
   const isSameExamOnServer =
@@ -3510,7 +4062,7 @@ export async function loginStudentExamCbt(
       kode_paket: proportionalAlloc.packageCode,
       current_question_no: Number(serverTel?.current_question_no || 1),
       answered_count: Number(serverTel?.answered_count || 0),
-      total_questions: examQuestions.length,
+      total_questions: clientSafeQuestions.length,
       remaining_seconds:
         isSameExamOnServer && Number(serverTel?.remaining_seconds || 0) > 0
           ? Number(serverTel?.remaining_seconds)
@@ -3526,6 +4078,16 @@ export async function loginStudentExamCbt(
   };
 
   patchLocalCbtSnapshotCache({ student: updatedStudent });
+
+  // Perbarui Singleton Live Session (/live_sessions/ujian_${examId}) agar 1 Read di layar Pengawas langsung terbaca
+  upsertExamLiveSessionParticipantCbt({
+    examId: Number(activeExam.id),
+    judulUjian: String(activeExam.judul_ujian || ''),
+    participant: buildLiveSessionParticipantFromStudent(
+      updatedStudent,
+      Number(activeExam.id)
+    ),
+  }).catch(() => {});
 
   // Tulis status 'Sedang Ujian' + sinyal pulse delta `[STU:id]` dalam 1 batch ringan agar layar Guru langsung berubah real-time
   if (db) {
@@ -3568,7 +4130,7 @@ export async function loginStudentExamCbt(
   return {
     student: updatedStudent,
     exam: activeExam,
-    questions: examQuestions,
+    questions: clientSafeQuestions,
   };
 }
 
@@ -3619,32 +4181,30 @@ export async function submitStudentExamCbt(payload: {
         : 2),
   }));
 
-  // 1. Hitung skor deterministik terhadap soal yang dikerjakan siswa
-  const scoreSummary = calculateExamScore(
-    syncedQuestions,
-    payload.jawabanSiswa
-  );
-
-  // 2. Petakan jawaban siswa ke kunci opsi kanonik Bank Soal (A-E) dalam satu objek map `{ [id_soal]: ["A"] }`
+  // Petakan jawaban siswa ke kunci opsi kanonik A-E menggunakan opsi_original_map (tanpa membutuhkan kunci_jawaban di klien!)
   const canonicalAnswers = mapStudentAnswersToCanonicalKeys(
     syncedQuestions,
     payload.jawabanSiswa
   );
 
-  // 3. Susun Analisis Kompetensi Humanis (LOTS & HOTS) secara instan (0ms, 0 kuota API/Firestore)
-  const instantHumaneAi = buildHumaneAnalysisForResult({
-    studentName: payload.student.nama,
-    questions: syncedQuestions,
-    canonicalAnswers,
-    scoreSummary,
-    finalScore: scoreSummary.normalizedScore,
-    finalKategori: scoreSummary.kategoriNilai,
-    existingAi: null,
-  });
+  const clientQuestionsMeta = syncedQuestions.map((q) => ({
+    id: Number(q.id),
+    opsi_original_map: q.data_opsi?.opsi_original_map || undefined,
+  }));
 
+  const studentPkgFinal =
+    payload.student.kode_soal?.slice(0, 32) ||
+    payload.exam.kode_paket?.slice(0, 32) ||
+    payload.student.variasi_paket?.slice(0, 32) ||
+    'PAKET-A';
+
+  // Evaluasi Server-Side Mutlak via POST /api/exam/submit
   const apiRes = await safeApiJson<{
+    authoritativeServerGraded?: boolean;
     result?: ResultItem;
-    scoreSummary?: typeof scoreSummary;
+    scoreSummary?: ExamScoreSummary;
+    canonicalAnswers?: Record<string, string[]>;
+    aiAnalysis?: AnalisisAI;
   }>('/api/exam/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -3653,8 +4213,69 @@ export async function submitStudentExamCbt(payload: {
       examId: payload.exam.id,
       jawabanSiswa: canonicalAnswers,
       pelanggaranTab: payload.pelanggaranTab,
+      forceByTimeout: Boolean(payload.forceByTimeout),
+      clientQuestionsMeta,
+      studentName: payload.student.nama,
+      studentKelas: payload.student.kelas,
+      kodePaket: studentPkgFinal,
+      judulUjian: payload.exam.judul_ujian,
     }),
   });
+
+  // Jika server mengembalikan skor otoritatif, gunakan hasil server 100%; jika static SPA tanpa server & kunci klien belum tersedia, ambil bundel sekali hanya saat submit!
+  let scoreSummary: ExamScoreSummary;
+  let finalCanonicalAnswers = canonicalAnswers;
+  let instantHumaneAi: AnalisisAI;
+
+  if (
+    apiRes.ok &&
+    apiRes.data?.authoritativeServerGraded &&
+    apiRes.data?.scoreSummary
+  ) {
+    scoreSummary = apiRes.data.scoreSummary;
+    finalCanonicalAnswers = apiRes.data.canonicalAnswers || canonicalAnswers;
+    instantHumaneAi =
+      apiRes.data.aiAnalysis ||
+      buildHumaneAnalysisForResult({
+        studentName: payload.student.nama,
+        questions: syncedQuestions,
+        canonicalAnswers: finalCanonicalAnswers,
+        scoreSummary,
+        finalScore: scoreSummary.normalizedScore,
+        finalKategori: scoreSummary.kategoriNilai,
+        existingAi: null,
+      });
+  } else {
+    const clientHasKeys = syncedQuestions.some(
+      (q) => Array.isArray(q.kunci_jawaban) && q.kunci_jawaban.length > 0
+    );
+    let gradingQuestions = syncedQuestions;
+    if (!clientHasKeys) {
+      const serverBundle = await fetchExamQuestionsBundleOnce(
+        Number(payload.exam.id),
+        { forceServer: true }
+      ).catch(() => [] as QuestionItem[]);
+      if (serverBundle.length > 0) {
+        const keyMap = new Map(
+          serverBundle.map((bq) => [Number(bq.id), bq.kunci_jawaban])
+        );
+        gradingQuestions = syncedQuestions.map((sq) => ({
+          ...sq,
+          kunci_jawaban: keyMap.get(Number(sq.id)) || sq.kunci_jawaban || ['A'],
+        }));
+      }
+    }
+    scoreSummary = calculateExamScore(gradingQuestions, finalCanonicalAnswers);
+    instantHumaneAi = buildHumaneAnalysisForResult({
+      studentName: payload.student.nama,
+      questions: gradingQuestions,
+      canonicalAnswers: finalCanonicalAnswers,
+      scoreSummary,
+      finalScore: scoreSummary.normalizedScore,
+      finalKategori: scoreSummary.kategoriNilai,
+      existingAi: null,
+    });
+  }
 
   const nowIso = new Date().toISOString();
   // Cek apakah siswa sudah pernah memiliki hasil ujian untuk paket ini sebelumnya (Ujian Awal vs Ujian Ulang / Retake).
@@ -3683,12 +4304,6 @@ export async function submitStudentExamCbt(payload: {
       : previousAttemptsForExam.length > 0
         ? uniqueRetakeId
         : baseDeterministicId;
-
-  const studentPkgFinal =
-    payload.student.kode_soal?.slice(0, 32) ||
-    payload.exam.kode_paket?.slice(0, 32) ||
-    payload.student.variasi_paket?.slice(0, 32) ||
-    'PAKET-A';
 
   const finishedStudent: StudentItem = {
     ...payload.student,
@@ -3720,7 +4335,7 @@ export async function submitStudentExamCbt(payload: {
     exam_id: Number(payload.exam.id),
     skor_angka: scoreSummary.normalizedScore,
     kode_soal: studentPkgFinal,
-    jawaban_siswa: canonicalAnswers,
+    jawaban_siswa: finalCanonicalAnswers,
     analisis_ai: instantHumaneAi,
     pelanggaran_tab: Number(payload.pelanggaranTab) || 0,
     created_at: nowIso,
@@ -3732,13 +4347,23 @@ export async function submitStudentExamCbt(payload: {
     result: finishedResultObj,
   });
 
+  // Update singleton live session (1 doc)
+  upsertExamLiveSessionParticipantCbt({
+    examId: Number(payload.exam.id),
+    judulUjian: String(payload.exam.judul_ujian || ''),
+    participant: buildLiveSessionParticipantFromStudent(
+      finishedStudent,
+      Number(payload.exam.id)
+    ),
+  }).catch(() => {});
+
   if (db) {
     const resultDocPayload = {
       id: Number(resultId),
       student_id: Number(payload.student.id),
       exam_id: Number(payload.exam.id),
       skor_angka: scoreSummary.normalizedScore,
-      jawaban_siswa: canonicalAnswers,
+      jawaban_siswa: finalCanonicalAnswers,
       kode_soal: studentPkgFinal,
       analisis_ai: instantHumaneAi,
       pelanggaran_tab: Number(payload.pelanggaranTab) || 0,
@@ -3796,7 +4421,7 @@ export async function submitStudentExamCbt(payload: {
     kategori: scoreSummary.kategoriNilai,
     rawEarned: scoreSummary.rawEarned,
     rawMax: scoreSummary.rawMax,
-    canonicalAnswers,
+    canonicalAnswers: finalCanonicalAnswers,
     aiAnalysis: instantHumaneAi,
   };
 }

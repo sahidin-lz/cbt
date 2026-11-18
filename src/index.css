@@ -14,3 +14,12 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+.cbt-exam-locked,
+.cbt-exam-locked * {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -webkit-touch-callout: none;
+}
+

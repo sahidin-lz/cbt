@@ -1,651 +1,366 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Lock } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { GraduationCap, UserCheck, ShieldAlert, Loader2 } from 'lucide-react';
 import { StudentExamPortal } from './components/StudentExamPortal';
-import { AdminDashboard } from './components/AdminDashboard';
 import { ExamItem, QuestionItem, StudentItem, ResultItem } from './types/cbt';
+import { subscribeToCbtSyncPulse, CbtSyncPulseData } from './lib/firebase';
 import {
-  fetchCbtSyncPulseOnce,
-  subscribeToCbtSyncPulse,
-  getCachedSyncPulseLocal,
-  CbtSyncPulseData,
-} from './lib/firebase';
-import {
-  loadUnifiedDashboardData,
   loadLocalCbtSnapshotCache,
-  pushSnapshotToFirestoreClient,
   saveLocalCbtSnapshotCache,
+  loadUnifiedDashboardData,
   reconcileFinishedStudentsWithResults,
   syncDeltaFromPulseOnce,
-  safeApiJson,
+  stripQuestionKeysForStudent,
 } from './lib/cbtFirestoreService';
-import {
-  recalculateHistoricalResults,
-  isExamMatchedForStudentClass,
-} from './utils/cbtLogic';
+import { CBT_DASHBOARD_QUERY_KEY } from './lib/queryClient';
 
-type PortalView = 'student' | 'teacher';
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
+);
 
-export default function App() {
-  // Persist portalView across browser reloads so teacher/student stay on their last page
-  const [portalView, setPortalView] = useState<PortalView>(() => {
-    try {
-      const activeStudentSession = localStorage.getItem('cbt_active_student_session');
-      if (activeStudentSession) {
-        return 'student';
-      }
-      const saved = localStorage.getItem('cbt_active_portal');
-      if (saved === 'teacher' || saved === 'student') return saved;
-      if (localStorage.getItem('cbt_teacher_auth') === 'true') return 'teacher';
-    } catch {}
-    return 'student';
+interface CbtSnapshotData {
+  exams: ExamItem[];
+  questions: QuestionItem[];
+  students: StudentItem[];
+  results: ResultItem[];
+}
+
+function getInitialDashboardSnapshot(): CbtSnapshotData {
+  const initialCache = loadLocalCbtSnapshotCache();
+  return {
+    exams: initialCache?.exams || [],
+    questions: initialCache?.questions || [],
+    students: initialCache?.students || [],
+    results: initialCache?.results || [],
+  };
+}
+
+export function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const portalView: 'student' | 'teacher' = location.pathname.startsWith('/admin')
+    ? 'teacher'
+    : 'student';
+
+  const [isStudentInExam, setIsStudentInExam] = useState<boolean>(false);
+
+  const { data: dashboardData } = useQuery<CbtSnapshotData>({
+    queryKey: CBT_DASHBOARD_QUERY_KEY,
+    initialData: getInitialDashboardSnapshot,
+    staleTime: 60_000,
+    gcTime: 1000 * 60 * 30,
   });
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('cbt_active_portal', portalView);
-    } catch {}
-  }, [portalView]);
+  const exams = dashboardData?.exams || [];
+  const questions = dashboardData?.questions || [];
+  const students = dashboardData?.students || [];
+  const results = dashboardData?.results || [];
 
-  const [antiInspectBanner, setAntiInspectBanner] = useState<string | null>(null);
-
-  // Global Anti-Inspect Element & Right-Click Guard on Student Portal
-  useEffect(() => {
-    if (portalView !== 'student') {
-      setAntiInspectBanner(null);
-      return;
-    }
-
-    const showInspectWarning = (msg: string) => {
-      setAntiInspectBanner(msg);
-      window.setTimeout(() => {
-        setAntiInspectBanner((prev) => (prev === msg ? null : prev));
-      }, 3500);
-    };
-
-    const handleGlobalContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-      showInspectWarning(
-        'Keamanan CBT Aktif: Klik kanan dan Inspect Element dinonaktifkan pada Ruang Ujian Siswa.'
-      );
-    };
-
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      const key = (e.key || '').toUpperCase();
-      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-      const isMacAltCmd = e.metaKey && e.altKey;
-
-      const isInspectCombo =
-        e.key === 'F12' ||
-        (isCtrlOrCmd && e.shiftKey && ['I', 'J', 'C', 'K', 'M'].includes(key)) ||
-        (isMacAltCmd && ['I', 'J', 'C', 'K', 'U'].includes(key)) ||
-        (isCtrlOrCmd && key === 'U');
-
-      if (isInspectCombo) {
-        e.preventDefault();
-        e.stopPropagation();
-        showInspectWarning(
-          'Keamanan CBT Aktif: Pintasan Inspect Element / Developer Tools (F12 / Ctrl+Shift+I) dilarang dan tercatat oleh sistem!'
-        );
-      }
-    };
-
-    document.addEventListener('contextmenu', handleGlobalContextMenu);
-    window.addEventListener('keydown', handleGlobalKeyDown, true);
-
-    return () => {
-      document.removeEventListener('contextmenu', handleGlobalContextMenu);
-      window.removeEventListener('keydown', handleGlobalKeyDown, true);
-    };
-  }, [portalView]);
-
-  const [isStudentInExam, setIsStudentInExam] = useState(false);
-
-  // Instant 0ms initial hydration from local snapshot cache so UI renders immediately without waiting
-  const initialCachedSnapshot = useMemo(() => loadLocalCbtSnapshotCache(), []);
-  const [exams, setExams] = useState<ExamItem[]>(
-    () => initialCachedSnapshot?.exams || []
-  );
-  const [questions, setQuestions] = useState<QuestionItem[]>(
-    () => initialCachedSnapshot?.questions || []
-  );
-  const [students, setStudents] = useState<StudentItem[]>(
-    () => initialCachedSnapshot?.students || []
-  );
-  const [results, setResults] = useState<ResultItem[]>(
-    () => initialCachedSnapshot?.results || []
-  );
-  const [isLoading, setIsLoading] = useState<boolean>(
-    () =>
-      !initialCachedSnapshot ||
-      (initialCachedSnapshot.exams.length === 0 &&
-        initialCachedSnapshot.students.length === 0)
-  );
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [syncPulse, setSyncPulse] = useState<CbtSyncPulseData | null>(null);
-  const [isSyncingFirebase, setIsSyncingFirebase] = useState(false);
-  const lastSeenSyncTimestamp = useRef<string>('');
-
-  // Manual / explicit refresh (forces fresh pull from Firestore)
-  const fetchDashboardData = useCallback(async () => {
-    try {
-      setLoadError(null);
-      const data = await loadUnifiedDashboardData({
-        preferLocalCache: false,
-        checkPulseFirst: false,
-      });
-      setExams(data.exams || []);
-      setQuestions(data.questions || []);
-      setStudents(data.students || []);
-      setResults(data.results || []);
-      const pulse = await fetchCbtSyncPulseOnce();
-      if (pulse) {
-        setSyncPulse(pulse);
-        if (pulse.lastSyncedAt) {
-          lastSeenSyncTimestamp.current = pulse.lastSyncedAt;
-          try {
-            localStorage.setItem('cbt_last_synced_pulse_at', pulse.lastSyncedAt);
-          } catch {}
-        }
-      }
-    } catch (err: any) {
-      console.error('Error fetching dashboard data:', err);
-      setLoadError(err.message || 'Gagal memuat data CBT.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  // Fast pulse-checked initial load on mount (1 Read if unchanged, full pull only if changed)
-  const fetchInitialDashboardDataFast = useCallback(async () => {
-    try {
-      setLoadError(null);
-      const data = await loadUnifiedDashboardData({
-        preferLocalCache: false,
-        checkPulseFirst: true,
-      });
-      setExams(data.exams || []);
-      setQuestions(data.questions || []);
-      setStudents(data.students || []);
-      setResults(data.results || []);
-      const pulse = await fetchCbtSyncPulseOnce();
-      if (pulse) {
-        setSyncPulse(pulse);
-        if (pulse.lastSyncedAt) {
-          lastSeenSyncTimestamp.current = pulse.lastSyncedAt;
-        }
-      }
-    } catch (err: any) {
-      console.error('Error fetching initial dashboard data:', err);
-      if (exams.length === 0 && students.length === 0) {
-        setLoadError(err.message || 'Gagal memuat data CBT.');
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [exams.length, students.length]);
-
-  // Zero-Firestore-read state sync after local mutations or in-exam browser refresh
-  const syncDashboardFromLocalCache = useCallback(async () => {
-    try {
-      const cached = loadLocalCbtSnapshotCache();
-      if (cached) {
-        setExams(cached.exams || []);
-        setQuestions(cached.questions || []);
-        setStudents(cached.students || []);
-        setResults(cached.results || []);
-        const localPulse = getCachedSyncPulseLocal();
-        if (localPulse?.lastSyncedAt) {
-          setSyncPulse((prev) =>
-            !prev || localPulse.lastSyncedAt >= prev.lastSyncedAt ? localPulse : prev
-          );
-          if (localPulse.lastSyncedAt > lastSeenSyncTimestamp.current) {
-            lastSeenSyncTimestamp.current = localPulse.lastSyncedAt;
-          }
-        }
-        return;
-      }
-      const data = await loadUnifiedDashboardData({ preferLocalCache: true });
-      setExams(data.exams || []);
-      setQuestions(data.questions || []);
-      setStudents(data.students || []);
-      setResults(data.results || []);
-    } catch (err) {
-      console.error('Error syncing local cache data:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const handleManualFirebaseSync = useCallback(async () => {
-    setIsSyncingFirebase(true);
-    try {
-      const apiRes = await safeApiJson<{
-        pulse?: CbtSyncPulseData;
-        data?: {
-          exams: ExamItem[];
-          questions: QuestionItem[];
-          students: StudentItem[];
-          results: ResultItem[];
-        };
-      }>('/api/firebase/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reason: 'Sinkronisasi penuh manual dari Dashboard Guru',
-        }),
-      });
-
-      if (apiRes.ok && apiRes.data) {
-        if (apiRes.data.pulse) {
-          setSyncPulse(apiRes.data.pulse);
-          lastSeenSyncTimestamp.current = apiRes.data.pulse.lastSyncedAt;
-        }
-        if (apiRes.data.data) {
-          setExams(apiRes.data.data.exams || []);
-          setQuestions(apiRes.data.data.questions || []);
-          setStudents(apiRes.data.data.students || []);
-          setResults(apiRes.data.data.results || []);
-        }
-      } else {
-        const clientPulse = await pushSnapshotToFirestoreClient(
-          { exams, students, questions, results },
-          'Sinkronisasi penuh manual dari Dashboard Guru'
-        );
-        if (clientPulse) {
-          setSyncPulse(clientPulse);
-          lastSeenSyncTimestamp.current = clientPulse.lastSyncedAt;
-        }
-        await fetchDashboardData();
-      }
-    } catch (error) {
-      console.error('Manual Firebase sync error:', error);
-    } finally {
-      setIsSyncingFirebase(false);
-    }
-  }, [exams, students, questions, results, fetchDashboardData]);
-
-  // One-time load on mount (uses 0-read local cache if student refreshes mid-exam, or fast pulse-checked load otherwise)
-  useEffect(() => {
-    try {
-      const activeStudentSession = localStorage.getItem(
-        'cbt_active_student_session'
-      );
-      if (activeStudentSession) {
-        syncDashboardFromLocalCache();
-        return;
-      }
-    } catch {}
-    fetchInitialDashboardDataFast();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Keep latest state in a ref so the 1-doc real-time listener never re-subscribes when state changes
-  const latestStateRef = useRef({
+  const snapshotRef = useRef<CbtSnapshotData>({
     exams,
-    students,
     questions,
+    students,
     results,
   });
+  snapshotRef.current = { exams, questions, students, results };
+
+  const setDashboardSnapshot = useCallback(
+    (updater: CbtSnapshotData | ((prev: CbtSnapshotData) => CbtSnapshotData)) => {
+      queryClient.setQueryData<CbtSnapshotData>(CBT_DASHBOARD_QUERY_KEY, (prev) => {
+        const current = prev || getInitialDashboardSnapshot();
+        return typeof updater === 'function' ? updater(current) : updater;
+      });
+    },
+    [queryClient]
+  );
+
+  // One-time Firebase sync state & light pulse
+  const [isSyncingFirebase, setIsSyncingFirebase] = useState<boolean>(false);
+  const [syncPulse, setSyncPulse] = useState<CbtSyncPulseData | null>(null);
+  const lastSeenPulseAtRef = useRef<string>('');
+
+  // Persist last admin sub-tab path when navigating around admin console
   useEffect(() => {
-    latestStateRef.current = {
-      exams,
-      students,
-      questions,
-      results,
-    };
-  }, [exams, students, questions, results]);
-
-  // Ultra-low-quota instant real-time delta sync for Teacher Console & Student Dashboard:
-  // Listens ONLY to 1 single document (`cbt_sync/live_state` = 0 reads when idle, 1 read per event).
-  // Whenever a student starts, commits a violation, finishes, or a teacher unlocks/reschedules/activates a package,
-  // `syncDeltaFromPulseOnce` fetches ONLY the 1–2 affected docs (`[RES:id:STU:id]`, `[STU:id]`, `[EXM:id]`) in <300ms.
-  useEffect(() => {
-    if (isStudentInExam) return;
-
-    let isCancelled = false;
-    let isChecking = false;
-    let pendingPulse: CbtSyncPulseData | null = null;
-    let debounceTimer: number | null = null;
-
-    const runDeltaSync = async (incomingPulse?: CbtSyncPulseData | null) => {
-      if (isCancelled) return;
-      if (isChecking) {
-        if (incomingPulse) {
-          pendingPulse = incomingPulse;
-        }
-        return;
-      }
-      isChecking = true;
-      try {
-        const current = latestStateRef.current;
-        const delta = await syncDeltaFromPulseOnce({
-          currentExams: current.exams,
-          currentStudents: current.students,
-          currentQuestions: current.questions,
-          currentResults: current.results,
-          lastSeenPulseAt: lastSeenSyncTimestamp.current,
-          preloadedPulse: incomingPulse || null,
-        });
-        if (!isCancelled && delta.changed) {
-          setExams(delta.exams);
-          setQuestions(delta.questions);
-          setStudents(delta.students);
-          setResults(delta.results);
-          if (delta.pulse) {
-            setSyncPulse(delta.pulse);
-            if (delta.pulse.lastSyncedAt) {
-              lastSeenSyncTimestamp.current = delta.pulse.lastSyncedAt;
-            }
-          }
-        } else if (!isCancelled && incomingPulse) {
-          setSyncPulse(incomingPulse);
-          if (incomingPulse.lastSyncedAt) {
-            lastSeenSyncTimestamp.current = incomingPulse.lastSyncedAt;
-          }
-        }
-      } catch {
-        // Ignore transient network errors
-      } finally {
-        isChecking = false;
-        if (!isCancelled && pendingPulse) {
-          const nextPulse = pendingPulse;
-          pendingPulse = null;
-          runDeltaSync(nextPulse);
-        }
-      }
-    };
-
-    const scheduleDeltaSync = (incomingPulse?: CbtSyncPulseData | null) => {
-      if (isCancelled) return;
-      if (incomingPulse) {
-        pendingPulse = incomingPulse;
-      }
-      if (debounceTimer !== null) {
-        window.clearTimeout(debounceTimer);
-      }
-      debounceTimer = window.setTimeout(() => {
-        debounceTimer = null;
-        const pulseToProcess = pendingPulse;
-        pendingPulse = null;
-        runDeltaSync(pulseToProcess);
-      }, 250);
-    };
-
-    // Subscribe to 1 single document `cbt_sync/live_state` for instant (<300ms) real-time response
-    const unsubscribePulse = subscribeToCbtSyncPulse((pulseData) => {
-      if (isCancelled) return;
-      const hasFinishedMissingResult = latestStateRef.current.students.some(
-        (st) =>
-          st.status_ujian === 'Selesai' &&
-          !latestStateRef.current.results.some(
-            (r) => Number(r.student_id) === Number(st.id)
-          )
-      );
-      if (
-        pulseData.lastSyncedAt !== lastSeenSyncTimestamp.current ||
-        hasFinishedMissingResult
-      ) {
-        scheduleDeltaSync(pulseData);
+    try {
+      if (location.pathname.startsWith('/admin')) {
+        localStorage.setItem('cbt_active_portal', 'teacher');
+        localStorage.setItem('cbt_admin_last_path', location.pathname);
       } else {
-        setSyncPulse(pulseData);
+        localStorage.setItem('cbt_active_portal', 'student');
+      }
+    } catch {}
+  }, [location.pathname]);
+
+  // Restore last admin route if returning on teacher session without an active student exam
+  useEffect(() => {
+    try {
+      const activeStudentRaw = localStorage.getItem('cbt_active_student_session');
+      if (activeStudentRaw) {
+        const parsed = JSON.parse(activeStudentRaw);
+        if (parsed?.student && parsed?.exam) {
+          if (location.pathname.startsWith('/admin')) {
+            navigate('/', { replace: true });
+          }
+          return;
+        }
+      }
+      if (
+        location.pathname === '/' &&
+        localStorage.getItem('cbt_active_portal') === 'teacher' &&
+        localStorage.getItem('cbt_teacher_auth') === 'true'
+      ) {
+        const savedPath = localStorage.getItem('cbt_admin_last_path') || '/admin/ujian';
+        navigate(savedPath, { replace: true });
+      }
+    } catch {}
+  }, []);
+
+  // Reconcile any finished students missing result records using local answer backup
+  const applyData = useCallback(
+    (data: CbtSnapshotData) => {
+      const safeExams = data.exams || [];
+      const safeQuestions = data.questions || [];
+      const safeStudents = data.students || [];
+      const reconciledResults = reconcileFinishedStudentsWithResults({
+        students: safeStudents,
+        exams: safeExams,
+        questions: safeQuestions,
+        results: data.results || [],
+      });
+      const next: CbtSnapshotData = {
+        exams: safeExams,
+        questions: safeQuestions,
+        students: safeStudents,
+        results: reconciledResults,
+      };
+      setDashboardSnapshot(next);
+      saveLocalCbtSnapshotCache(next);
+    },
+    [setDashboardSnapshot]
+  );
+
+  // Synchronous Instant Hydration from Local Cache (0 Firestore reads on instant UI mutations)
+  const syncDashboardFromLocalCache = useCallback(() => {
+    const cached = loadLocalCbtSnapshotCache();
+    if (cached) {
+      applyData(cached);
+    }
+  }, [applyData]);
+
+  // Full background pull (only used at initial login/load or explicit Manual Sync button)
+  const loadDataFromFirestore = useCallback(
+    async (silent: boolean = false) => {
+      if (!silent) {
+        setIsSyncingFirebase(true);
+      }
+      try {
+        const remote = await loadUnifiedDashboardData({
+          checkPulseFirst: silent,
+        });
+        applyData(remote);
+      } catch (err) {
+        console.error('Failed to sync CBT data from Firestore:', err);
+      } finally {
+        if (!silent) {
+          setIsSyncingFirebase(false);
+        }
+      }
+    },
+    [applyData]
+  );
+
+  // Initial startup load: display cached data immediately & silently reconcile delta
+  useEffect(() => {
+    const hasLocal =
+      exams.length > 0 || students.length > 0 || questions.length > 0;
+    loadDataFromFirestore(hasLocal);
+  }, []);
+
+  // Ultra-lightweight 1-document real-time pulse listener with DELTA-ONLY sync:
+  // Saves 90-99% daily Firestore reads for hundreds of concurrent students!
+  useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeToCbtSyncPulse((pulse) => {
+      setSyncPulse(pulse);
+      if (pulse.lastSyncedAt && pulse.lastSyncedAt !== lastSeenPulseAtRef.current) {
+        const prevSeenAt = lastSeenPulseAtRef.current;
+        lastSeenPulseAtRef.current = pulse.lastSyncedAt;
+
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          if (!prevSeenAt) return;
+          const snap = snapshotRef.current;
+          syncDeltaFromPulseOnce({
+            currentExams: snap.exams,
+            currentStudents: snap.students,
+            currentQuestions: snap.questions,
+            currentResults: snap.results,
+            lastSeenPulseAt: prevSeenAt,
+            preloadedPulse: pulse,
+          })
+            .then((deltaResult) => {
+              if (!deltaResult.changed) return;
+              applyData({
+                exams: deltaResult.exams,
+                questions: deltaResult.questions,
+                students: deltaResult.students,
+                results: deltaResult.results,
+              });
+            })
+            .catch(() => {
+              syncDashboardFromLocalCache();
+            });
+        }, 450);
       }
     });
-
-    const handleWindowFocus = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        runDeltaSync(null);
-      }
-    };
-    window.addEventListener('focus', handleWindowFocus);
 
     return () => {
-      isCancelled = true;
-      if (debounceTimer !== null) {
-        window.clearTimeout(debounceTimer);
-      }
-      unsubscribePulse();
-      window.removeEventListener('focus', handleWindowFocus);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubscribe();
     };
-  }, [isStudentInExam]);
+  }, [applyData, syncDashboardFromLocalCache]);
 
-  // Ensure only questions and results belonging to active exams & students are counted,
-  // and retroactively recalculate all historical results using the Humane & Anti-Guessing formula
-  const activeQuestions = useMemo(() => {
-    const activeExamIds = new Set(exams.map((e) => Number(e.id)));
-    return questions.filter((q) => activeExamIds.has(Number(q.exam_id)));
-  }, [exams, questions]);
+  const handlePortalSwitch = (target: 'student' | 'teacher') => {
+    if (isStudentInExam && target === 'teacher') {
+      return;
+    }
+    if (target === 'teacher') {
+      let targetPath = '/admin/ujian';
+      try {
+        targetPath = localStorage.getItem('cbt_admin_last_path') || '/admin/ujian';
+      } catch {}
+      navigate(targetPath);
+    } else {
+      navigate('/');
+    }
+  };
 
-  const recalculatedBundle = useMemo(() => {
-    const reconciledResults = reconcileFinishedStudentsWithResults({
-      students,
-      results,
-      exams,
-      questions: activeQuestions,
-    });
-
-    const activeExamIds = new Set(exams.map((e) => Number(e.id)));
-    const studentById = new Map<number, StudentItem>();
-    students.forEach((s) => studentById.set(Number(s.id), s));
-
-    const rawValidResults = reconciledResults
-      .filter((r) => studentById.has(Number(r.student_id)))
-      .map((r) => {
-        if (activeExamIds.has(Number(r.exam_id))) return r;
-        const st = studentById.get(Number(r.student_id));
-        if (st) {
-          const fallbackExam = exams.find((ex) =>
-            isExamMatchedForStudentClass(ex, st.kelas, { requireActive: false })
-          );
-          if (fallbackExam) {
-            return { ...r, exam_id: fallbackExam.id };
-          }
-        }
-        return r;
-      })
-      .filter((r) => activeExamIds.has(Number(r.exam_id)));
-
-    return recalculateHistoricalResults({
-      results: rawValidResults,
-      students,
-      exams,
-      questions: activeQuestions,
-    });
-  }, [results, students, exams, activeQuestions]);
-
-  const activeResults = recalculatedBundle.results;
-
-  // Keep a local browser backup cache of non-empty CBT data so data remains visible even if Firestore quota is temporarily reached
-  useEffect(() => {
-    saveLocalCbtSnapshotCache({
-      exams,
-      students,
-      questions: activeQuestions,
-      results: activeResults,
-    });
-  }, [exams, students, activeQuestions, activeResults]);
+  // Expose ONLY active (non-archived) questions for new student exams; keep full `questions` for Admin reports & historical review
+  const activeQuestions = questions.filter((q) => !q.is_archived_version);
+  // Strict Server-Side Security: never expose `kunci_jawaban` to client React tree during active student exam
+  const studentPortalQuestions = isStudentInExam
+    ? stripQuestionKeysForStudent(activeQuestions)
+    : activeQuestions;
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-100/70 text-slate-900">
-      {/* Vibrant Educational Multi-Color Top Strip */}
-      <div className="h-1.5 w-full bg-gradient-to-r from-amber-400 via-emerald-400 via-cyan-400 to-blue-500" />
-
-      {/* Top Bar Contract: Zone 1 Brand Wordmark — Zone 2 Separated Student/Teacher Portal Links — Zone 3 Primary Portal Switch */}
-      <header className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 text-white border-b border-indigo-800/70 shadow-sm sticky top-0 z-30">
-        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
-          {/* Zone 1: Institutional Identity */}
-          <a
-            href="#top"
-            onClick={(e) => {
-              if (isStudentInExam) {
-                e.preventDefault();
-                return;
-              }
-              e.preventDefault();
-              setPortalView('student');
-            }}
-            className={`flex items-center gap-3 tracking-tight text-white whitespace-nowrap shrink-0 ${
-              isStudentInExam ? 'cursor-default pointer-events-none' : ''
-            }`}
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
+      {/* Persistent Top Portal Navigation Bar */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+          <button
+            type="button"
+            onClick={() => !isStudentInExam && handlePortalSwitch('student')}
+            className="flex items-center gap-3 text-left cursor-pointer"
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 via-indigo-500 to-emerald-400 text-white flex items-center justify-center font-extrabold text-xs font-mono tracking-wider shadow-xs border border-white/25">
-              CBT
+            <div className="w-9 h-9 rounded-lg bg-blue-700 text-white flex items-center justify-center shrink-0">
+              <GraduationCap className="w-5 h-5" />
             </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <span className="text-sm sm:text-base font-extrabold tracking-tight text-white leading-none">
-                  Pusat Kendali Asesmen CBT
-                </span>
-                <span className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/30 text-[10px] font-mono font-bold text-emerald-300 uppercase tracking-wider">
-                  SMA / MA
-                </span>
-              </div>
-              <span className="hidden md:inline-block text-[11px] font-medium text-blue-200/85 mt-0.5">
-                Sistem Ujian Multi-Mapel, Progres Kemampuan Siswa &amp; Analisis Butir
+            <div>
+              <span className="text-sm sm:text-base font-bold text-slate-900 tracking-tight block">
+                CBT Sosiologi &amp; Analisis Kognitif HOTS
+              </span>
+              <span className="text-[11px] text-slate-500 hidden sm:block">
+                Portal Evaluasi Pembelajaran Berbasis Komputer (LOTS &amp; HOTS)
               </span>
             </div>
-          </a>
+          </button>
 
-          {/* Zone 2: Primary Portal Navigation (Clean Segmented Switcher or Exam Lock Status) */}
+          {/* Dual Role Navigation Switcher — Locked while student is taking exam */}
           {isStudentInExam ? (
-            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500/20 border border-amber-400/40 text-xs font-semibold text-amber-200">
-              <Lock className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-              <span className="whitespace-nowrap">Sesi Ujian Berlangsung — Navigasi Terkunci</span>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs font-semibold">
+              <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
+              <span>Mode Ujian Aktif (Navigasi Portal Dikunci)</span>
             </div>
           ) : (
             <nav
-              aria-label="Navigasi Portal Utama"
-              className="flex items-center p-1 bg-slate-900/70 border border-white/15 rounded-xl backdrop-blur-xs gap-1"
+              aria-label="Pilih Portal Pengguna"
+              className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200"
             >
               <button
                 type="button"
-                onClick={() => setPortalView('student')}
-                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
+                onClick={() => handlePortalSwitch('student')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                   portalView === 'student'
-                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-xs ring-1 ring-cyan-300/40'
-                    : 'text-blue-100/90 hover:text-white hover:bg-white/10'
+                    ? 'bg-white text-blue-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    portalView === 'student' ? 'bg-amber-300' : 'bg-blue-400/50'
-                  }`}
-                />
+                <GraduationCap className="w-3.5 h-3.5" />
                 <span>Portal Siswa &amp; Laporan</span>
               </button>
               <button
                 type="button"
-                onClick={() => setPortalView('teacher')}
-                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-2 ${
+                onClick={() => handlePortalSwitch('teacher')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                   portalView === 'teacher'
-                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xs ring-1 ring-emerald-300/40'
-                    : 'text-blue-100/90 hover:text-white hover:bg-white/10'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    portalView === 'teacher' ? 'bg-amber-300' : 'bg-emerald-400/50'
-                  }`}
-                />
+                <UserCheck className="w-3.5 h-3.5" />
                 <span>Konsol Guru &amp; Pengawas</span>
               </button>
             </nav>
           )}
-
-          {/* Zone 3: Contextual Action */}
-          <div className="hidden sm:flex items-center gap-3 shrink-0">
-            {isStudentInExam ? (
-              <button
-                type="button"
-                disabled
-                className="px-3.5 py-2 text-xs font-semibold text-slate-300 bg-white/10 border border-white/15 rounded-xl cursor-not-allowed flex items-center gap-1.5 whitespace-nowrap shrink-0"
-                title="Dilarang beralih ke Portal Guru selama sesi ujian aktif berlangsung"
-              >
-                <Lock className="w-3.5 h-3.5 text-amber-300" />
-                <span>Mode Ujian Terkunci</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() =>
-                  setPortalView(portalView === 'student' ? 'teacher' : 'student')
-                }
-                className="px-3.5 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
-              >
-                {portalView === 'student'
-                  ? 'Buka Konsol Guru →'
-                  : '← Buka Portal Siswa'}
-              </button>
-            )}
-          </div>
         </div>
       </header>
 
-      {antiInspectBanner && portalView === 'student' && (
-        <div className="bg-rose-600 text-white px-4 py-2 text-xs font-bold text-center shadow-sm flex items-center justify-center gap-2">
-          <Lock className="w-3.5 h-3.5 shrink-0 text-amber-300" />
-          <span>{antiInspectBanner}</span>
-        </div>
-      )}
-
-      {/* Main Content Area */}
+      {/* Main View Content via React Router */}
       <main className="flex-1">
-        {isLoading ? (
-          <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 space-y-4">
-            <div className="h-24 bg-white border border-slate-200 rounded-xl animate-pulse p-6" />
-            <div className="h-96 bg-white border border-slate-200 rounded-xl animate-pulse p-6" />
-          </div>
-        ) : loadError ? (
-          <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6">
-            <div className="bg-white border border-red-200 rounded-xl p-6 space-y-3">
-              <h2 className="text-base font-bold text-red-700">
-                Gagal Memuat Sistem Ujian
-              </h2>
-              <p className="text-xs text-slate-600">{loadError}</p>
-              <button
-                type="button"
-                onClick={fetchDashboardData}
-                className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg cursor-pointer"
+        <Routes>
+          <Route
+            path="/admin/*"
+            element={
+              <Suspense
+                fallback={
+                  <div className="max-w-7xl mx-auto px-4 sm:px-6 py-16 flex flex-col items-center justify-center gap-3 text-slate-600">
+                    <Loader2 className="w-7 h-7 text-indigo-600 animate-spin" />
+                    <span className="text-xs font-bold">
+                      Membuka Konsol Guru &amp; Pengawas CBT...
+                    </span>
+                  </div>
+                }
               >
-                Coba Lagi
-              </button>
-            </div>
-          </div>
-        ) : portalView === 'student' ? (
-          <StudentExamPortal
-            exams={exams}
-            questions={activeQuestions}
-            students={students}
-            results={activeResults}
-            onExamCompleted={syncDashboardFromLocalCache}
-            onRefreshData={syncDashboardFromLocalCache}
-            onExamStateChange={setIsStudentInExam}
+                <AdminDashboard
+                  exams={exams}
+                  questions={questions}
+                  students={students}
+                  results={results}
+                  onRefreshData={async () => {
+                    syncDashboardFromLocalCache();
+                  }}
+                  syncPulse={syncPulse}
+                  isSyncingFirebase={isSyncingFirebase}
+                  onManualFirebaseSync={() => loadDataFromFirestore(false)}
+                />
+              </Suspense>
+            }
           />
-        ) : (
-          <AdminDashboard
-            exams={exams}
-            questions={activeQuestions}
-            students={students}
-            results={activeResults}
-            onRefreshData={syncDashboardFromLocalCache}
-            syncPulse={syncPulse}
-            isSyncingFirebase={isSyncingFirebase}
-            onManualFirebaseSync={handleManualFirebaseSync}
+          <Route
+            path="*"
+            element={
+              <StudentExamPortal
+                exams={exams}
+                questions={studentPortalQuestions}
+                students={students}
+                results={results}
+                onExamCompleted={() => {
+                  syncDashboardFromLocalCache();
+                }}
+                onRefreshData={() => {
+                  syncDashboardFromLocalCache();
+                }}
+                onExamStateChange={setIsStudentInExam}
+              />
+            }
           />
-        )}
+        </Routes>
       </main>
-
-      {/* Quiet Footer */}
-      <footer className="bg-white border-t border-slate-200">
-        <div className="max-w-7xl mx-auto w-full py-4 px-4 sm:px-6 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-4">
-          <span>CBT Sosiologi — Sistem Asesmen &amp; Ujian Berbasis Komputer Sosiologi SMA</span>
-          <span>Sinkronisasi Database Real-Time Aktif</span>
-        </div>
-      </footer>
     </div>
   );
 }
+
+export default App;

@@ -104,6 +104,22 @@
           "type": "array",
           "description": "Optional list of specific student IDs assigned to receive this exam package."
         },
+        "isDeleted": {
+          "type": "boolean",
+          "description": "Soft-delete flag marking exam as archived pending 30-day TTL purge."
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp when exam was soft-deleted.",
+          "maxLength": 64
+        },
+        "purgeAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp scheduled for permanent deletion (deletedAt + 30 days).",
+          "maxLength": 64
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
@@ -217,6 +233,29 @@
           "type": "number",
           "description": "Maximum point weight for the question."
         },
+        "version": {
+          "type": "number",
+          "description": "Immutable question version number."
+        },
+        "parent_question_id": {
+          "type": "number",
+          "description": "ID of previous question version when edited during active/historical exam."
+        },
+        "is_archived_version": {
+          "type": "boolean",
+          "description": "True when superseded by a newer version while preserved for historical scoring."
+        },
+        "archived_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp when this version was superseded.",
+          "maxLength": 64
+        },
+        "version_label": {
+          "type": "string",
+          "description": "Human readable version tag such as soal_v2.",
+          "maxLength": 32
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
@@ -310,6 +349,122 @@
         }
       },
       "required": ["lastSyncedAt", "lastEvent", "totalExams", "totalStudents", "totalQuestions", "totalResults"]
+    },
+    "LiveSession": {
+      "title": "LiveSession",
+      "description": "Singleton aggregated live monitoring document per active exam session for 1-read supervisor listening.",
+      "type": "object",
+      "properties": {
+        "exam_id": {
+          "type": "number",
+          "description": "Exam package ID."
+        },
+        "judul_ujian": {
+          "type": "string",
+          "description": "Exam title.",
+          "maxLength": 200
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of latest participant update.",
+          "maxLength": 64
+        },
+        "activeCount": {
+          "type": "number",
+          "description": "Count of active exam takers."
+        },
+        "finishedCount": {
+          "type": "number",
+          "description": "Count of finished exam takers."
+        },
+        "blockedCount": {
+          "type": "number",
+          "description": "Count of blocked exam takers."
+        },
+        "notStartedCount": {
+          "type": "number",
+          "description": "Count of registered students not yet started."
+        },
+        "totalViolations": {
+          "type": "number",
+          "description": "Aggregated anti-cheat violations."
+        },
+        "participants": {
+          "type": "object",
+          "description": "Map of studentId string to LiveSessionParticipant summary."
+        }
+      },
+      "required": ["exam_id", "updatedAt"]
+    },
+    "ExamArchive": {
+      "title": "ExamArchive",
+      "description": "30-day soft-deleted exam archive snapshot with TTL expiration before permanent cleanup.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Archive document identifier.",
+          "maxLength": 128
+        },
+        "exam_id": {
+          "type": "number",
+          "description": "Archived exam ID."
+        },
+        "judul_ujian": {
+          "type": "string",
+          "description": "Archived exam title.",
+          "maxLength": 200
+        },
+        "exam_data": {
+          "type": "object",
+          "description": "Full snapshot of archived ExamItem."
+        },
+        "questions_data": {
+          "type": "array",
+          "description": "Snapshot of archived exam questions."
+        },
+        "results_data": {
+          "type": "array",
+          "description": "Snapshot of archived exam results."
+        },
+        "deletedBy": {
+          "type": "string",
+          "description": "Admin identifier who deleted the exam.",
+          "maxLength": 120
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp when soft-deleted.",
+          "maxLength": 64
+        },
+        "purgeAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp scheduled for permanent deletion.",
+          "maxLength": 64
+        },
+        "expireAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore TTL policy field (+30 days).",
+          "maxLength": 64
+        },
+        "restoredAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional ISO timestamp if restored.",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last update.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "exam_id", "judul_ujian", "deletedAt", "purgeAt", "expireAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -332,6 +487,14 @@
     "/cbt_sync/{syncId}": {
       "schema": { "$ref": "#/entities/CbtSyncPulse" },
       "description": "Real-time synchronization pulse document for live cross-client updates."
+    },
+    "/live_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/LiveSession" },
+      "description": "Aggregated singleton live session state per exam for 1-read proctor monitoring."
+    },
+    "/exams_archive/{archiveId}": {
+      "schema": { "$ref": "#/entities/ExamArchive" },
+      "description": "30-day soft-deleted exam snapshots for audit recovery prior to TTL purge."
     }
   }
 }

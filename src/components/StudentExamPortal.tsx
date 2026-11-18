@@ -44,6 +44,7 @@ import {
   clearLocalStudentAnswers,
   autoSaveStudentAnswersToFirestoreCbt,
   safeApiJson,
+  stripQuestionKeysForStudent,
 } from '../lib/cbtFirestoreService';
 import {
   getStudentLoginClasses,
@@ -125,7 +126,13 @@ const HISTORY_KEY_PREFIX = 'cbt_history_student_';
 function saveLocalProgress(token: string, data: StudentExamProgress) {
   try {
     const cleanToken = token.toUpperCase().trim();
-    const serialized = JSON.stringify(data);
+    const safeData: StudentExamProgress = data.preparedQuestions
+      ? {
+          ...data,
+          preparedQuestions: stripQuestionKeysForStudent(data.preparedQuestions),
+        }
+      : data;
+    const serialized = JSON.stringify(safeData);
     localStorage.setItem(PROGRESS_KEY_PREFIX + cleanToken, serialized);
     if (data.examId) {
       localStorage.setItem(
@@ -282,7 +289,11 @@ export interface ActiveStudentSessionData {
 
 function saveActiveStudentSession(session: ActiveStudentSessionData) {
   try {
-    localStorage.setItem(ACTIVE_STUDENT_SESSION_KEY, JSON.stringify(session));
+    const safeSession: ActiveStudentSessionData = {
+      ...session,
+      questions: stripQuestionKeysForStudent(session.questions || []),
+    };
+    localStorage.setItem(ACTIVE_STUDENT_SESSION_KEY, JSON.stringify(safeSession));
   } catch (e) {
     console.error('Failed to save active student session', e);
   }
@@ -453,10 +464,16 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
   });
   const [examQuestions, setExamQuestions] = useState<QuestionItem[]>(() => {
     if (initialSession?.questions && initialSession.questions.length > 0) {
-      return initialSession.questions;
+      return stripQuestionKeysForStudent(
+        initialSession.questions.filter((q) => !q.is_archived_version)
+      );
     }
     if (initialSession?.exam?.id) {
-      return getCachedExamQuestionsLocal(initialSession.exam.id) || [];
+      return stripQuestionKeysForStudent(
+        (getCachedExamQuestionsLocal(initialSession.exam.id) || []).filter(
+          (q) => !q.is_archived_version
+        )
+      );
     }
     return [];
   });
@@ -910,13 +927,16 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         preferredExamIdToUse
       );
 
-      const rawExamQuestions =
+      const rawExamQuestions = (
         preCachedQuestions && preCachedQuestions.length > 0
           ? preCachedQuestions
-          : session.questions || [];
+          : session.questions || []
+      ).filter((q) => !q.is_archived_version);
 
-      if (session.exam?.id && rawExamQuestions.length > 0) {
-        saveCachedExamQuestionsLocal(session.exam.id, rawExamQuestions);
+      const safeClientQuestions = stripQuestionKeysForStudent(rawExamQuestions);
+
+      if (session.exam?.id && safeClientQuestions.length > 0) {
+        saveCachedExamQuestionsLocal(session.exam.id, safeClientQuestions);
       }
 
       const savedProgress = isFreshRescheduledRetake
@@ -967,14 +987,16 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       setLoggedInAccount(updatedStudent);
       saveLoggedInStudentAccount(updatedStudent);
 
+      const clientPreparedQuestions = stripQuestionKeysForStudent(prepared.questions);
+
       setActiveStudent(updatedStudent);
       setActiveExam(session.exam);
-      setExamQuestions(prepared.questions);
+      setExamQuestions(clientPreparedQuestions);
 
       saveActiveStudentSession({
         student: updatedStudent,
         exam: session.exam,
-        questions: prepared.questions,
+        questions: clientPreparedQuestions,
       });
 
       const fullExamDurationSecs = (session.exam?.durasi_menit || 60) * 60;
@@ -2843,9 +2865,15 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   const activeAbsenInfo = getStudentAbsenInfoInClass(activeStudent, students);
   const activeMataPelajaran = getEffectiveMataPelajaran(activeExam);
+  const currentWacana = currentQuestion?.data_opsi?.wacana || '';
+  const hasRichStimulus = Boolean(
+    currentWacana &&
+      (currentWacana.length > 120 ||
+        /<table|<img|\[IMG:/i.test(currentWacana))
+  );
 
   return (
-    <div className="max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 space-y-4 select-none">
+    <div className="cbt-exam-locked max-w-7xl mx-auto w-full py-6 px-4 sm:px-6 space-y-4 select-none">
       {/* Clean Institutional Exam Status Header */}
       <div className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-2xs">
         <div className="space-y-1">
@@ -3178,99 +3206,115 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                 </div>
               </div>
 
-              {currentQuestion.data_opsi?.wacana && (
-                <div className="bg-gradient-to-br from-indigo-50/60 via-blue-50/40 to-amber-50/30 border border-indigo-200/80 rounded-xl p-5 sm:p-6 space-y-2.5">
-                  <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold uppercase tracking-wider text-indigo-800">
-                    <BookOpen className="w-4 h-4 text-indigo-600" />
-                    <span>Wacana &amp; Stimulus Soal ({activeMataPelajaran})</span>
-                  </div>
-                  <div
-                    className={`text-slate-800 leading-relaxed ${
-                      fontScale === 'xlarge'
-                        ? 'text-lg sm:text-xl'
-                        : fontScale === 'large'
-                          ? 'text-base sm:text-lg'
-                          : 'text-sm sm:text-base'
-                    }`}
-                  >
-                    <MathAndTableRenderer content={currentQuestion.data_opsi.wacana} />
-                  </div>
-                </div>
-              )}
-
               <div
-                className={`font-bold text-slate-900 leading-relaxed tracking-normal ${
-                  fontScale === 'xlarge'
-                    ? 'text-xl sm:text-2xl md:text-[26px]'
-                    : fontScale === 'large'
-                      ? 'text-lg sm:text-xl md:text-2xl'
-                      : 'text-base sm:text-lg'
-                }`}
+                className={
+                  hasRichStimulus
+                    ? 'grid grid-cols-1 lg:grid-cols-12 gap-5 items-start'
+                    : 'space-y-5'
+                }
               >
-                <MathAndTableRenderer content={currentQuestion.teks_soal} />
-              </div>
-
-              <div className="space-y-3.5 pt-2">
-                {(['A', 'B', 'C', 'D', 'E'] as const).map((optKey) => {
-                  const optText = currentQuestion.data_opsi?.opsi?.[optKey];
-                  if (!optText) return null;
-                  const isSelected = selectedOptions.includes(optKey);
-
-                  const badgeColors: Record<string, string> = {
-                    A: 'bg-blue-100 text-blue-800 border-blue-300',
-                    B: 'bg-indigo-100 text-indigo-800 border-indigo-300',
-                    C: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-                    D: 'bg-amber-100 text-amber-800 border-amber-300',
-                    E: 'bg-violet-100 text-violet-800 border-violet-300',
-                  };
-
-                  return (
-                    <label
-                      key={optKey}
-                      className={`flex items-start gap-4 p-4 sm:p-5 rounded-xl border-2 transition-all cursor-pointer select-none ${
-                        isSelected
-                          ? 'bg-blue-50/90 border-blue-600 text-slate-900 shadow-xs'
-                          : 'bg-white border-slate-200 hover:border-blue-300 hover:bg-slate-50/80 text-slate-800'
+                {currentQuestion.data_opsi?.wacana && (
+                  <div
+                    className={
+                      hasRichStimulus
+                        ? 'lg:col-span-6 lg:sticky lg:top-20 max-h-[70vh] overflow-y-auto bg-gradient-to-br from-indigo-50/60 via-blue-50/40 to-amber-50/30 border border-indigo-200/80 rounded-xl p-5 sm:p-6 space-y-2.5'
+                        : 'bg-gradient-to-br from-indigo-50/60 via-blue-50/40 to-amber-50/30 border border-indigo-200/80 rounded-xl p-5 sm:p-6 space-y-2.5'
+                    }
+                  >
+                    <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold uppercase tracking-wider text-indigo-800">
+                      <BookOpen className="w-4 h-4 text-indigo-600" />
+                      <span>Wacana &amp; Stimulus Soal ({activeMataPelajaran})</span>
+                    </div>
+                    <div
+                      className={`text-slate-800 leading-relaxed ${
+                        fontScale === 'xlarge'
+                          ? 'text-lg sm:text-xl'
+                          : fontScale === 'large'
+                            ? 'text-base sm:text-lg'
+                            : 'text-sm sm:text-base'
                       }`}
                     >
-                      <input
-                        type={isKompleks ? 'checkbox' : 'radio'}
-                        name={`question-${currentQuestion.id}`}
-                        value={optKey}
-                        checked={isSelected}
-                        disabled={isStudentBlocked}
-                        onChange={() =>
-                          handleSelectOption(
-                            currentQuestion.id,
-                            optKey,
-                            currentQuestion.tipe_soal
-                          )
-                        }
-                        className="sr-only"
-                      />
-                      <span
-                        className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl font-mono text-sm sm:text-base font-extrabold flex items-center justify-center shrink-0 border transition-colors ${
-                          isSelected
-                            ? 'bg-blue-600 text-white border-blue-600'
-                            : badgeColors[optKey] || 'bg-slate-100 text-slate-700 border-slate-300'
-                        }`}
-                      >
-                        {optKey}
-                      </span>
-                      <div
-                        className={`flex-1 font-medium leading-relaxed pt-1 ${
-                          fontScale === 'xlarge'
-                            ? 'text-lg sm:text-xl'
-                            : fontScale === 'large'
-                              ? 'text-base sm:text-lg'
-                              : 'text-sm sm:text-base'
-                        }`}
-                      >
-                        <MathAndTableRenderer content={optText} inline />
-                      </div>
-                    </label>
-                  );
-                })}
+                      <MathAndTableRenderer content={currentQuestion.data_opsi.wacana} />
+                    </div>
+                  </div>
+                )}
+
+                <div className={hasRichStimulus ? 'lg:col-span-6 space-y-5' : 'space-y-5'}>
+                  <div
+                    className={`font-bold text-slate-900 leading-relaxed tracking-normal ${
+                      fontScale === 'xlarge'
+                        ? 'text-xl sm:text-2xl md:text-[26px]'
+                        : fontScale === 'large'
+                          ? 'text-lg sm:text-xl md:text-2xl'
+                          : 'text-base sm:text-lg'
+                    }`}
+                  >
+                    <MathAndTableRenderer content={currentQuestion.teks_soal} />
+                  </div>
+
+                  <div className="space-y-3.5 pt-2">
+                    {(['A', 'B', 'C', 'D', 'E'] as const).map((optKey) => {
+                      const optText = currentQuestion.data_opsi?.opsi?.[optKey];
+                      if (!optText) return null;
+                      const isSelected = selectedOptions.includes(optKey);
+
+                      const badgeColors: Record<string, string> = {
+                        A: 'bg-blue-100 text-blue-800 border-blue-300',
+                        B: 'bg-indigo-100 text-indigo-800 border-indigo-300',
+                        C: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                        D: 'bg-amber-100 text-amber-800 border-amber-300',
+                        E: 'bg-violet-100 text-violet-800 border-violet-300',
+                      };
+
+                      return (
+                        <label
+                          key={optKey}
+                          className={`flex items-start gap-4 p-4 sm:p-5 rounded-xl border-2 transition-all cursor-pointer select-none ${
+                            isSelected
+                              ? 'bg-blue-50/90 border-blue-600 text-slate-900 shadow-xs'
+                              : 'bg-white border-slate-200 hover:border-blue-300 hover:bg-slate-50/80 text-slate-800'
+                          }`}
+                        >
+                          <input
+                            type={isKompleks ? 'checkbox' : 'radio'}
+                            name={`question-${currentQuestion.id}`}
+                            value={optKey}
+                            checked={isSelected}
+                            disabled={isStudentBlocked}
+                            onChange={() =>
+                              handleSelectOption(
+                                currentQuestion.id,
+                                optKey,
+                                currentQuestion.tipe_soal
+                              )
+                            }
+                            className="sr-only"
+                          />
+                          <span
+                            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl font-mono text-sm sm:text-base font-extrabold flex items-center justify-center shrink-0 border transition-colors ${
+                              isSelected
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : badgeColors[optKey] || 'bg-slate-100 text-slate-700 border-slate-300'
+                            }`}
+                          >
+                            {optKey}
+                          </span>
+                          <div
+                            className={`flex-1 font-medium leading-relaxed pt-1 ${
+                              fontScale === 'xlarge'
+                                ? 'text-lg sm:text-xl'
+                                : fontScale === 'large'
+                                  ? 'text-base sm:text-lg'
+                                  : 'text-sm sm:text-base'
+                            }`}
+                          >
+                            <MathAndTableRenderer content={optText} inline />
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
               <div className="pt-6 border-t border-slate-200 flex items-center justify-between gap-4">

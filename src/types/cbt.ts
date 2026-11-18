@@ -83,6 +83,9 @@ export interface ExamItem {
     | 'MANUAL_SISWA'
     | string; // Mode pembagian paket soal ke siswa
   target_siswa_ids?: number[]; // Daftar ID siswa spesifik jika didistribusikan ke siswa tertentu
+  isDeleted?: boolean; // Soft-delete flag before 30-day TTL purge
+  deletedAt?: string;
+  purgeAt?: string;
   created_at?: string;
   authorUid?: string;
   updatedAt?: string;
@@ -108,6 +111,62 @@ export interface QuestionItem {
   };
   kunci_jawaban: string[];
   bobot: number;
+  version?: number;
+  parent_question_id?: number;
+  is_archived_version?: boolean;
+  archived_at?: string;
+  version_label?: string;
+}
+
+export type StudentQuestionItem = Omit<QuestionItem, 'kunci_jawaban'> & {
+  kunci_jawaban?: string[];
+};
+
+export interface ArchivedExamRecord {
+  id: string;
+  exam_id: number;
+  judul_ujian: string;
+  exam_data: ExamItem;
+  questions_data: QuestionItem[];
+  results_data: ResultItem[];
+  deletedBy?: string;
+  deletedAt: string;
+  purgeAt: string;
+  expireAt?: string;
+  restoredAt?: string;
+  updatedAt?: string;
+}
+
+export interface LiveSessionParticipant {
+  student_id: number;
+  nama: string;
+  kelas: string;
+  kode_paket: string;
+  status_ujian: StudentExamStatus | string;
+  current_question_no: number;
+  answered_count: number;
+  total_questions: number;
+  remaining_seconds: number;
+  is_fullscreen: boolean;
+  is_focused: boolean;
+  devtools_open: boolean;
+  tab_violations: number;
+  inspect_attempts: number;
+  last_action: string;
+  last_active_at: string;
+}
+
+export interface LiveSessionSingleton {
+  exam_id: number;
+  judul_ujian: string;
+  updatedAt: string;
+  activeCount: number;
+  finishedCount: number;
+  blockedCount: number;
+  notStartedCount: number;
+  totalViolations: number;
+  participants: Record<string, LiveSessionParticipant>;
+  authorUid?: string;
 }
 
 export interface AnalisisAI {

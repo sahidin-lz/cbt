@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   Search,
@@ -27,7 +27,13 @@ import {
   Minimize2,
   Maximize2,
 } from 'lucide-react';
-import { ExamItem, QuestionItem, StudentItem, ResultItem } from '../types/cbt';
+import {
+  ExamItem,
+  QuestionItem,
+  StudentItem,
+  ResultItem,
+  LiveSessionSingleton,
+} from '../types/cbt';
 import {
   calculateExamScore,
   classifyQuestionCognitiveLevel,
@@ -40,6 +46,7 @@ import {
 import {
   batchAssignPackageVariantsCbt,
   forceFinishStudentExamByProctorCbt,
+  subscribeToExamLiveSessionSingleton,
 } from '../lib/cbtFirestoreService';
 import {
   downloadStudentTokenCardsPdf,
@@ -145,12 +152,6 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     setPackageFilter('ALL');
   };
 
-  // Filter students by selected class
-  const classStudents = useMemo(() => {
-    if (selectedClass === 'ALL') return students;
-    return students.filter((s) => s.kelas.trim() === selectedClass.trim());
-  }, [students, selectedClass]);
-
   // Find exams matched with this class & selected Mapel
   const matchedExams = useMemo(() => {
     const byMapel =
@@ -180,6 +181,54 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     }
     return matchedExams[0];
   }, [matchedExams, selectedExamId]);
+
+  // Singleton document listener (1 Firestore read per update across all students)
+  const [liveSessionData, setLiveSessionData] = useState<LiveSessionSingleton | null>(null);
+
+  useEffect(() => {
+    setLiveSessionData(null);
+    if (!activeExam?.id) return;
+    const unsub = subscribeToExamLiveSessionSingleton(activeExam.id, (session) => {
+      setLiveSessionData(session);
+    });
+    return () => {
+      unsub();
+    };
+  }, [activeExam?.id]);
+
+  // Filter students by selected class and merge 1-read live_sessions singleton telemetry
+  const classStudents = useMemo(() => {
+    const scoped =
+      selectedClass === 'ALL'
+        ? students
+        : students.filter((s) => s.kelas.trim() === selectedClass.trim());
+    if (!liveSessionData?.participants) return scoped;
+    return scoped.map((s) => {
+      const p = liveSessionData.participants[String(s.id)];
+      if (!p) return s;
+      const pTime = new Date(p.last_active_at || 0).getTime();
+      const sTime = new Date(s.live_telemetry?.last_active_at || 0).getTime();
+      const hasNewerSingleton = pTime >= sTime;
+      if (!hasNewerSingleton) return s;
+      return {
+        ...s,
+        status_ujian: (p.status_ujian || s.status_ujian) as StudentItem['status_ujian'],
+        live_telemetry: {
+          current_question_no: p.current_question_no,
+          answered_count: p.answered_count,
+          total_questions: p.total_questions,
+          remaining_seconds: p.remaining_seconds,
+          is_fullscreen: p.is_fullscreen,
+          is_focused: p.is_focused,
+          devtools_open: p.devtools_open,
+          tab_violations: p.tab_violations,
+          inspect_attempts: p.inspect_attempts,
+          last_action: p.last_action,
+          last_active_at: p.last_active_at,
+        },
+      };
+    });
+  }, [students, selectedClass, liveSessionData]);
 
   // Questions belonging to the active exam
   const examQuestions = useMemo(() => {
