@@ -1912,7 +1912,12 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
 
   const handleSubmitExam = useCallback(
     async (forceByTimeout = false) => {
-      if (!activeStudent || !activeExam || isSubmitting || isStudentBlocked)
+      if (
+        !activeStudent ||
+        !activeExam ||
+        isSubmitting ||
+        (isStudentBlocked && !forceByTimeout)
+      )
         return;
 
       if (!forceByTimeout && remainingSeconds > 1 && remainingMinSubmitLockSeconds > 0) {
@@ -1923,7 +1928,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         return;
       }
 
-      // Cek apakah siswa sudah menjawab minimal 1 soal (Cegah submit kosong & data dumi AI)
+      // Cek apakah siswa sudah menjawab minimal 1 soal (Cegah submit kosong & data dumi AI kecuali waktu habis otomatis)
       const currentAnsweredCount = Object.keys(answers).filter(
         (k) => answers[k] && answers[k].length > 0
       ).length;
@@ -1946,6 +1951,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           questions: examQuestions,
           jawabanSiswa: answers,
           pelanggaranTab: tabViolations,
+          forceByTimeout,
         });
         if (document.fullscreenElement && document.exitFullscreen) {
           document.exitFullscreen().catch(() => {});
@@ -1966,9 +1972,13 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
           {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             action: 'submit',
-            detail: `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100 (Durasi pengerjaan: ${Math.floor(
-              elapsedExamSeconds / 60
-            )} menit, Pelanggaran: ${tabViolations}x).`,
+            detail: forceByTimeout
+              ? `Waktu ujian habis / ditinggalkan — Ujian otomatis diselesaikan sistem dengan skor ${outcome.skor}/100 (Terjawab: ${currentAnsweredCount}/${examQuestions.length}, Durasi: ${Math.floor(
+                  elapsedExamSeconds / 60
+                )} menit).`
+              : `Ujian berhasil dikumpulkan dengan skor ${outcome.skor}/100 (Durasi pengerjaan: ${Math.floor(
+                  elapsedExamSeconds / 60
+                )} menit, Pelanggaran: ${tabViolations}x).`,
           },
         ];
 
@@ -2039,22 +2049,48 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
     ]
   );
 
-  // Countdown Timer Effect
+  // Countdown Timer Effect (Berbasis Wall-Clock Date.now() agar tetap akurat & otomatis submit walau tab/komputer ditinggalkan idle)
   useEffect(() => {
     if (!activeStudent || submittedSummary) return;
 
-    const timer = setInterval(() => {
+    let lastTickMs = Date.now();
+    let hasTriggeredAutoSubmit = false;
+
+    const tickWallClock = () => {
+      const now = Date.now();
+      const elapsedSec = Math.max(1, Math.round((now - lastTickMs) / 1000));
+      lastTickMs = now;
+
       setRemainingSeconds((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          handleSubmitExam(true);
+        if (prev <= elapsedSec) {
+          if (!hasTriggeredAutoSubmit) {
+            hasTriggeredAutoSubmit = true;
+            setTimeout(() => {
+              handleSubmitExam(true);
+            }, 0);
+          }
           return 0;
         }
-        return prev - 1;
+        return prev - elapsedSec;
       });
-    }, 1000);
+    };
 
-    return () => clearInterval(timer);
+    const timer = setInterval(tickWallClock, 1000);
+
+    const handleWakeOrVisibility = () => {
+      if (Date.now() - lastTickMs >= 1000) {
+        tickWallClock();
+      }
+    };
+
+    window.addEventListener('focus', handleWakeOrVisibility);
+    document.addEventListener('visibilitychange', handleWakeOrVisibility);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', handleWakeOrVisibility);
+      document.removeEventListener('visibilitychange', handleWakeOrVisibility);
+    };
   }, [activeStudent, submittedSummary, handleSubmitExam]);
 
   const formatTimer = (secs: number) => {

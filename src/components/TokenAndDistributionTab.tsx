@@ -29,6 +29,7 @@ import {
   getStudentAbsenInfoInClass,
   getStudentLoginClasses,
   resolveStudentExamPackagesBySubject,
+  rotateStudentPackagesForRetake,
 } from '../utils/cbtLogic';
 import {
   downloadStudentTokenCardsPdf,
@@ -395,6 +396,57 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
       await onRefreshData();
       setDistFeedback(
         `Berhasil menyinkronkan distribusi Ganjil-Genap / Paket Soal ke database ${updatedList.length} siswa di kelas ${previewKelas || classOptions[0]?.kelas}!`
+      );
+    } finally {
+      setIsSyncingClassPackages(false);
+    }
+  };
+
+  const handleRotateRetakePackagesForPreviewClass = async (
+    mode: 'swap_cross' | 'random_distinct'
+  ) => {
+    if (previewClassStudents.length === 0) return;
+    setIsSyncingClassPackages(true);
+    setDistFeedback(null);
+    try {
+      const targetClassVal =
+        previewKelas === 'SEMUA'
+          ? undefined
+          : previewKelas || classOptions[0]?.kelas;
+      const targetSubjectVal =
+        previewMapel === 'SEMUA' ? undefined : previewMapel;
+
+      const rotationResult = rotateStudentPackagesForRetake({
+        students,
+        exams: previewFilteredExams.length > 0 ? previewFilteredExams : exams,
+        questions,
+        results,
+        targetClass: targetClassVal,
+        targetSubject: targetSubjectVal,
+        mode,
+      });
+
+      if (rotationResult.updatedStudents.length === 0) {
+        setDistFeedback('Tidak ada siswa pada filter kelas ini untuk diacak paket ujian ulangnya.');
+        return;
+      }
+
+      await batchAssignPackageVariantsCbt(rotationResult.updatedStudents);
+      await onRefreshData();
+      const sampleLogs = rotationResult.rotationSummary
+        .slice(0, 4)
+        .map((s) => `${s.nama} (${s.previousPackage} → ${s.newPackage})`)
+        .join(', ');
+      setDistFeedback(
+        `Ujian Ulang — Berhasil ${
+          mode === 'swap_cross'
+            ? 'Menukar Silang Paket (A ↔ B)'
+            : 'Mengacak Paket Berbeda (100% Beda dari Ujian Awal)'
+        } untuk ${rotationResult.updatedStudents.length} siswa di ${
+          targetClassVal ? `Kelas ${targetClassVal}` : 'Semua Kelas'
+        }! Contoh: ${sampleLogs}${
+          rotationResult.rotationSummary.length > 4 ? ', dst.' : '.'
+        }`
       );
     } finally {
       setIsSyncingClassPackages(false);
@@ -1199,7 +1251,7 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
               </select>
             </div>
 
-            <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-600">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-600">
               <span className="px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 font-bold">
                 Absen Ganjil (1, 3, 5...) → Paket 1 (A)
               </span>
@@ -1208,6 +1260,54 @@ export const TokenAndDistributionTab: React.FC<TokenAndDistributionTabProps> = (
               </span>
             </div>
           </div>
+
+          {/* Panel Khusus Pengacakan / Rotasi Paket Ujian Ulang (Dijamin Berbeda dengan Ujian Sebelumnya) */}
+          <div className="px-6 py-3 bg-gradient-to-r from-indigo-50/90 via-amber-50/60 to-emerald-50/70 border-b border-indigo-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="space-y-0.5">
+              <div className="font-extrabold text-indigo-950 flex items-center gap-1.5">
+                <Shuffle className="w-3.5 h-3.5 text-indigo-700" />
+                <span>
+                  Rotasi / Acak Paket Khusus Ujian Ulang (Otomatis Berbeda dari Paket Ujian Pertama):
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600">
+                Gunakan tombol di samping saat mengadakan <strong>Ujian Ulang</strong> pada kelas ini agar siswa yang sebelumnya mendapat <strong>PAKET-A</strong> otomatis bertukar menjadi <strong>PAKET-B</strong> (dan sebaliknya) sehingga soal tidak sama dengan ujian awal.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={isSyncingClassPackages || previewClassStudents.length === 0}
+                onClick={() => handleRotateRetakePackagesForPreviewClass('swap_cross')}
+                className="px-3 py-1.5 rounded-xl text-xs font-extrabold bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-2xs"
+              >
+                <Shuffle className="w-3.5 h-3.5" />
+                <span>Tukar Silang Paket Ujian Ulang (A ↔ B)</span>
+              </button>
+              <button
+                type="button"
+                disabled={isSyncingClassPackages || previewClassStudents.length === 0}
+                onClick={() => handleRotateRetakePackagesForPreviewClass('random_distinct')}
+                className="px-3 py-1.5 rounded-xl text-xs font-extrabold bg-amber-500 hover:bg-amber-600 text-slate-950 cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-2xs"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Acak Paket Ujian Ulang (100% Beda dari Awal)</span>
+              </button>
+            </div>
+          </div>
+
+          {distFeedback && (
+            <div className="mx-6 mt-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-900 flex items-center justify-between gap-2">
+              <span>{distFeedback}</span>
+              <button
+                type="button"
+                onClick={() => setDistFeedback(null)}
+                className="text-[11px] underline text-emerald-700 cursor-pointer shrink-0"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
 
           <div className="overflow-x-auto max-h-[540px] overflow-y-auto">
             <table className="w-full text-left border-collapse">

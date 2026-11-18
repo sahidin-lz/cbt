@@ -2031,6 +2031,292 @@ export function assignPackageVariantsToStudents<T extends {
 }
 
 /**
+ * Computes a guaranteed-different package (`kode_soal` & `variasi_paket`) for a single student
+ * when scheduled for a Retake (Ujian Ulang), compared to their previous exam attempt or current package.
+ */
+export function getRotatedSingleStudentPackageForRetake<
+  TStudent extends {
+    id: number | string;
+    nama: string;
+    kelas: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  },
+  TExam extends {
+    id: number | string;
+    judul_ujian: string;
+    mata_pelajaran?: string;
+    target_tingkat?: string;
+    target_kelas?: string;
+    target_rombel?: string[];
+    status_ujian?: string;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+  }
+>(params: {
+  student: TStudent;
+  allStudents: TStudent[];
+  exams?: TExam[];
+  questions?: any[];
+  results?: { student_id: number | string; exam_id?: number | string; kode_soal?: string }[];
+  previousPackageCode?: string | null;
+}): {
+  kode_soal: string;
+  variasi_paket: string;
+  previousKode: string;
+  nextKodeSoal: string;
+  nextVariasiPaket: string;
+  previousKodeSoal: string;
+} {
+  const { student, allStudents, exams = [], results = [], previousPackageCode } = params;
+  const absenInfo = getStudentAbsenInfoInClass(student, allStudents);
+
+  const matchedForClass = exams
+    .filter((ex) =>
+      isExamMatchedForStudentClass(ex, student.kelas, { requireActive: false })
+    )
+    .sort((a, b) => {
+      const cA = (a.kode_paket || '').trim().toUpperCase();
+      const cB = (b.kode_paket || '').trim().toUpperCase();
+      if (cA && cB && cA !== cB) return cA.localeCompare(cB, undefined, { numeric: true });
+      return Number(a.id) - Number(b.id);
+    });
+
+  let availableCodes: string[] = [];
+  if (matchedForClass.length > 1) {
+    const distinctCodes = Array.from(
+      new Set(
+        matchedForClass
+          .map((e, idx) =>
+            (e.kode_paket || `PAKET-${String.fromCharCode(65 + (idx % 26))}`)
+              .trim()
+              .toUpperCase()
+          )
+          .filter(Boolean)
+      )
+    );
+    availableCodes =
+      distinctCodes.length > 1
+        ? distinctCodes
+        : matchedForClass.map((_, idx) => `PAKET-${String.fromCharCode(65 + (idx % 26))}`);
+  } else if (matchedForClass.length === 1 && matchedForClass[0].mode_multi_paket) {
+    const count = Math.max(2, matchedForClass[0].jumlah_paket || 2);
+    availableCodes = Array.from({ length: count }, (_, idx) =>
+      `PAKET-${String.fromCharCode(65 + (idx % 26))}`
+    );
+  } else {
+    availableCodes = ['PAKET-A', 'PAKET-B'];
+  }
+
+  const defaultByAbsen =
+    availableCodes[absenInfo.rankIndex % availableCodes.length] ||
+    (absenInfo.isGanjil ? 'PAKET-A' : 'PAKET-B');
+
+  const studentPrevResults = results.filter(
+    (r) => Number(r.student_id) === Number(student.id) && r.kode_soal
+  );
+  const latestResultKode =
+    studentPrevResults.length > 0
+      ? studentPrevResults[studentPrevResults.length - 1].kode_soal
+      : null;
+
+  const prevKode = (
+    previousPackageCode ||
+    latestResultKode ||
+    student.kode_soal ||
+    defaultByAbsen
+  )
+    .trim()
+    .toUpperCase();
+
+  const currentIdx = availableCodes.findIndex((c) => c === prevKode);
+  const nextIdx =
+    currentIdx >= 0
+      ? (currentIdx + 1) % availableCodes.length
+      : (absenInfo.rankIndex + 1) % availableCodes.length;
+
+  const nextKode =
+    availableCodes[nextIdx] !== prevKode
+      ? availableCodes[nextIdx]
+      : prevKode === 'PAKET-A'
+        ? 'PAKET-B'
+        : 'PAKET-A';
+
+  const letter =
+    nextKode.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z0-9]/gi, '') ||
+    (nextKode.endsWith('B') ? 'B' : 'A');
+
+  return {
+    kode_soal: nextKode,
+    variasi_paket: letter,
+    previousKode: prevKode,
+    nextKodeSoal: nextKode,
+    nextVariasiPaket: letter,
+    previousKodeSoal: prevKode,
+  };
+}
+
+/**
+ * Rotates or randomly shuffles exam packages for a class/list of students for Retake (Ujian Ulang),
+ * guaranteeing 100% that every student receives a DIFFERENT package from their previous exam.
+ * - mode === 'swap_cross': Swaps A <-> B (or shifts +1 across available packages) deterministically.
+ * - mode === 'random_distinct': Randomly shuffles packages while strictly avoiding each student's previous package.
+ */
+export function rotateStudentPackagesForRetake<
+  TStudent extends {
+    id: number | string;
+    nama: string;
+    kelas: string;
+    kode_soal?: string;
+    variasi_paket?: string;
+  },
+  TExam extends {
+    id: number | string;
+    judul_ujian: string;
+    mata_pelajaran?: string;
+    target_tingkat?: string;
+    target_kelas?: string;
+    target_rombel?: string[];
+    status_ujian?: string;
+    kode_paket?: string;
+    mode_multi_paket?: boolean;
+    jumlah_paket?: number;
+  }
+>(params: {
+  students: TStudent[];
+  allStudents?: TStudent[];
+  exams?: TExam[];
+  questions?: any[];
+  results?: { student_id: number | string; exam_id?: number | string; kode_soal?: string }[];
+  targetClass?: string;
+  targetSubject?: string;
+  mode?: 'swap_cross' | 'random_distinct';
+}): {
+  updatedStudents: TStudent[];
+  rotationSummary: {
+    studentId: number | string;
+    nama: string;
+    kelas: string;
+    previousPackage: string;
+    newPackage: string;
+  }[];
+} {
+  const {
+    students,
+    allStudents = students,
+    exams = [],
+    results = [],
+    targetClass,
+    targetSubject,
+    mode = 'swap_cross',
+  } = params;
+
+  const filteredTargetStudents = targetClass
+    ? students.filter(
+        (s) => s.kelas.trim().toLowerCase() === targetClass.trim().toLowerCase()
+      )
+    : students;
+
+  const filteredExams = targetSubject
+    ? exams.filter(
+        (e) =>
+          getEffectiveMataPelajaran(e).toUpperCase() ===
+          targetSubject.trim().toUpperCase()
+      )
+    : exams;
+
+  const effectiveExams = filteredExams.length > 0 ? filteredExams : exams;
+
+  const rotationSummary: {
+    studentId: number | string;
+    nama: string;
+    kelas: string;
+    previousPackage: string;
+    newPackage: string;
+  }[] = [];
+
+  const updatedStudents = filteredTargetStudents.map((st, idx) => {
+    const baseRotated = getRotatedSingleStudentPackageForRetake({
+      student: st,
+      allStudents,
+      exams: effectiveExams,
+      results,
+    });
+
+    if (mode === 'swap_cross') {
+      rotationSummary.push({
+        studentId: st.id,
+        nama: st.nama,
+        kelas: st.kelas,
+        previousPackage: baseRotated.previousKode,
+        newPackage: baseRotated.kode_soal,
+      });
+      return {
+        ...st,
+        kode_soal: baseRotated.kode_soal,
+        variasi_paket: baseRotated.variasi_paket,
+      };
+    }
+
+    const matchedForClass = effectiveExams.filter((ex) =>
+      isExamMatchedForStudentClass(ex, st.kelas, { requireActive: false })
+    );
+    const multiCount =
+      matchedForClass.length > 2
+        ? matchedForClass.length
+        : matchedForClass.length === 1 &&
+            matchedForClass[0].mode_multi_paket &&
+            (matchedForClass[0].jumlah_paket || 2) > 2
+          ? matchedForClass[0].jumlah_paket || 2
+          : 2;
+
+    if (multiCount <= 2) {
+      rotationSummary.push({
+        studentId: st.id,
+        nama: st.nama,
+        kelas: st.kelas,
+        previousPackage: baseRotated.previousKode,
+        newPackage: baseRotated.kode_soal,
+      });
+      return {
+        ...st,
+        kode_soal: baseRotated.kode_soal,
+        variasi_paket: baseRotated.variasi_paket,
+      };
+    }
+
+    const poolCodes = Array.from({ length: multiCount }, (_, i) =>
+      `PAKET-${String.fromCharCode(65 + (i % 26))}`
+    ).filter((c) => c !== baseRotated.previousKode);
+
+    const pickIdx = (Date.now() + idx * 17 + Number(st.id || 0)) % poolCodes.length;
+    const chosenCode = poolCodes[pickIdx] || baseRotated.kode_soal;
+    const chosenLetter =
+      chosenCode.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z0-9]/gi, '') || 'B';
+
+    rotationSummary.push({
+      studentId: st.id,
+      nama: st.nama,
+      kelas: st.kelas,
+      previousPackage: baseRotated.previousKode,
+      newPackage: chosenCode,
+    });
+
+    return {
+      ...st,
+      kode_soal: chosenCode,
+      variasi_paket: chosenLetter,
+    };
+  });
+
+  return {
+    updatedStudents,
+    rotationSummary,
+  };
+}
+
+/**
  * Proportionally and deterministically resolves which Exam Package (ExamItem) and
  * Package Code (`kode_soal`) a student receives based on the student's position
  * within their class (`kelas`) and grade level (`angkatan`).
@@ -2232,6 +2518,20 @@ export function resolveStudentExamPackagesBySubject<
     let chosenIdx = 0;
     let distributionReason = '';
 
+    // Check if student has an explicit rotated/assigned package code (e.g. from Ujian Ulang / Tukar Silang Paket)
+    const rawStudentKodeUpper = (student?.kode_soal || '').trim().toUpperCase();
+    const rawStudentVarUpper = (student?.variasi_paket || '').trim().toUpperCase();
+    const activePool = eligibleAutoPool.length > 0 ? eligibleAutoPool : pool;
+
+    let explicitStudentKodePoolIdx = -1;
+    if (rawStudentKodeUpper && activePool.length > 1) {
+      explicitStudentKodePoolIdx = activePool.findIndex(
+        (ex, idx) =>
+          (ex.kode_paket || '').trim().toUpperCase() === rawStudentKodeUpper ||
+          `PAKET-${String.fromCharCode(65 + (idx % 26))}` === rawStudentKodeUpper
+      );
+    }
+
     if (explicitManualMatch) {
       chosenExam = explicitManualMatch;
       chosenIdx = Math.max(0, pool.findIndex((e) => e.id === explicitManualMatch.id));
@@ -2240,8 +2540,15 @@ export function resolveStudentExamPackagesBySubject<
       chosenExam = explicitParityMatch;
       chosenIdx = Math.max(0, pool.findIndex((e) => e.id === explicitParityMatch.id));
       distributionReason = `Distribusi Khusus Absen ${absenInfo.ganjilGenapLabel} (No. Urut ${absenInfo.noAbsen})`;
+    } else if (explicitStudentKodePoolIdx >= 0) {
+      chosenIdx = explicitStudentKodePoolIdx;
+      chosenExam = activePool[chosenIdx];
+      const defaultIdx = absenInfo.rankIndex % activePool.length;
+      distributionReason =
+        chosenIdx !== defaultIdx
+          ? `Rotasi / Acak Paket Ujian Ulang (Absen #${absenInfo.noAbsen} → ${rawStudentKodeUpper})`
+          : `Otomatis Ganjil-Genap Kelas (Absen #${absenInfo.noAbsen} ${absenInfo.ganjilGenapLabel} → Paket ${chosenIdx + 1})`;
     } else {
-      const activePool = eligibleAutoPool.length > 0 ? eligibleAutoPool : pool;
       chosenIdx = absenInfo.rankIndex % activePool.length;
       chosenExam = activePool[chosenIdx];
       if (activePool.length === 2) {
@@ -2267,11 +2574,26 @@ export function resolveStudentExamPackagesBySubject<
           ? Math.max(2, chosenExam.jumlah_paket || 2)
           : 1;
 
+    let explicitMultiVariantIdx = -1;
+    if (pool.length === 1 && chosenExam.mode_multi_paket && (rawStudentKodeUpper || rawStudentVarUpper)) {
+      const letterMatch =
+        rawStudentKodeUpper.replace(/^PAKET[-_\s]*/i, '').replace(/[^A-Z]/g, '') ||
+        rawStudentVarUpper.replace(/[^A-Z]/g, '');
+      if (letterMatch.length === 1) {
+        const idxFromLetter = letterMatch.charCodeAt(0) - 65;
+        if (idxFromLetter >= 0 && idxFromLetter < totalPackages) {
+          explicitMultiVariantIdx = idxFromLetter;
+        }
+      }
+    }
+
     const variantIdx =
       pool.length > 1
         ? chosenIdx
         : chosenExam.mode_multi_paket
-          ? absenInfo.rankIndex % totalPackages
+          ? explicitMultiVariantIdx >= 0
+            ? explicitMultiVariantIdx
+            : absenInfo.rankIndex % totalPackages
           : 0;
 
     const letter = String.fromCharCode(65 + (variantIdx % 26));

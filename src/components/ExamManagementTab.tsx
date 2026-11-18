@@ -35,7 +35,12 @@ import {
   isExamMatchedForStudentClass,
   resolveSyncedStudentAnswersForExam,
   resolveProportionalStudentExamPackage,
+  rotateStudentPackagesForRetake,
 } from '../utils/cbtLogic';
+import {
+  batchAssignPackageVariantsCbt,
+  forceFinishStudentExamByProctorCbt,
+} from '../lib/cbtFirestoreService';
 import {
   downloadStudentTokenCardsPdf,
   downloadSingleStudentResultPdf,
@@ -429,13 +434,92 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
       await onUpdateStudentStatus(student, nextStatus);
       setActionFeedback({
         type: 'success',
-        message: `Status siswa "${student.nama}" berhasil diubah menjadi "${nextStatus}".`,
+        message:
+          nextStatus === 'Belum Mulai'
+            ? `Siswa "${student.nama}" berhasil dijadwalkan ulang (Belum Mulai) dan paket soalnya otomatis diputar ke paket berbeda untuk Ujian Ulang.`
+            : `Status siswa "${student.nama}" berhasil diubah menjadi "${nextStatus}".`,
       });
     } catch {
       setActionFeedback({
         type: 'error',
         message: `Gagal memperbarui status siswa "${student.nama}".`,
       });
+    }
+  };
+
+  // Selesaikan otomatis ujian siswa yang ditinggalkan / habis waktu dari meja pengawas
+  const handleForceFinishStudentExam = async (student: StudentItem) => {
+    setActionFeedback(null);
+    try {
+      const outcome = await forceFinishStudentExamByProctorCbt({
+        student,
+        exams: matchedExams.length > 0 ? matchedExams : exams,
+        questions,
+        preferredExam: activeExam,
+      });
+      await onRefreshData();
+      setActionFeedback({
+        type: 'success',
+        message: `Ujian siswa "${student.nama}" (${student.kelas}) otomatis diselesaikan dengan Nilai: ${outcome.skor}/100 (${outcome.kategori}).`,
+      });
+    } catch (err: any) {
+      setActionFeedback({
+        type: 'error',
+        message:
+          err?.message ||
+          `Gagal menyelesaikan ujian siswa "${student.nama}" secara otomatis.`,
+      });
+    }
+  };
+
+  // Acak / Tukar Silang Paket Ujian Ulang agar berbeda dengan paket ujian sebelumnya
+  const handleRotateRetakePackages = async (
+    mode: 'swap_cross' | 'random_distinct'
+  ) => {
+    setIsDistributing(true);
+    setActionFeedback(null);
+    try {
+      const targetClassVal =
+        selectedClass !== 'ALL' ? selectedClass : undefined;
+      const targetSubjectVal =
+        selectedMapel !== 'ALL' ? selectedMapel : undefined;
+      const rotation = rotateStudentPackagesForRetake({
+        students,
+        exams: matchedExams.length > 0 ? matchedExams : exams,
+        questions,
+        results,
+        targetClass: targetClassVal,
+        targetSubject: targetSubjectVal,
+        mode,
+      });
+      if (rotation.updatedStudents.length === 0) {
+        setActionFeedback({
+          type: 'error',
+          message: 'Tidak ada siswa pada filter kelas ini untuk diacak paket ujian ulangnya.',
+        });
+        return;
+      }
+      await batchAssignPackageVariantsCbt(rotation.updatedStudents);
+      await onRefreshData();
+      const previewText = rotation.rotationSummary
+        .slice(0, 3)
+        .map((r) => `${r.nama} (${r.previousPackage} → ${r.newPackage})`)
+        .join(', ');
+      setActionFeedback({
+        type: 'success',
+        message: `Paket Ujian Ulang berhasil ${
+          mode === 'swap_cross' ? 'ditukar silang (A ↔ B)' : 'diacak berbeda dari ujian awal'
+        } untuk ${rotation.updatedStudents.length} siswa (${
+          targetClassVal ? `Kelas ${targetClassVal}` : 'Semua Kelas'
+        }). Contoh: ${previewText}.`,
+      });
+    } catch {
+      setActionFeedback({
+        type: 'error',
+        message: 'Gagal mengacak / menukar paket soal ujian ulang.',
+      });
+    } finally {
+      setIsDistributing(false);
     }
   };
 
@@ -1239,42 +1323,55 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 </select>
               </div>
 
-              {onBatchDistributePackages && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {onBatchDistributePackages && (
+                  <button
+                    type="button"
+                    disabled={isDistributing || classStudents.length === 0}
+                    onClick={async () => {
+                      setIsDistributing(true);
+                      try {
+                        await onBatchDistributePackages(
+                          selectedClass !== 'ALL' ? selectedClass : undefined
+                        );
+                        setActionFeedback({
+                          type: 'success',
+                          message: `Berhasil membagi kode soal berselang-seling (Paket A / B) untuk ${
+                            selectedClass === 'ALL'
+                              ? 'seluruh kelas'
+                              : `kelas ${selectedClass}`
+                          }.`,
+                        });
+                      } catch {
+                        setActionFeedback({
+                          type: 'error',
+                          message: 'Gagal mendistribusikan paket soal ke siswa.',
+                        });
+                      } finally {
+                        setIsDistributing(false);
+                      }
+                    }}
+                    title="Bagi paket soal berselang-seling (A/B) untuk siswa kelas ini"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-800 bg-indigo-100/80 hover:bg-indigo-200/80 border border-indigo-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <Shuffle className="w-3.5 h-3.5" />
+                    <span>
+                      {isDistributing ? 'Memproses...' : 'Bagi Multi-Paket (A/B)'}
+                    </span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   disabled={isDistributing || classStudents.length === 0}
-                  onClick={async () => {
-                    setIsDistributing(true);
-                    try {
-                      await onBatchDistributePackages(
-                        selectedClass !== 'ALL' ? selectedClass : undefined
-                      );
-                      setActionFeedback({
-                        type: 'success',
-                        message: `Berhasil membagi kode soal berselang-seling (Paket A / B) untuk ${
-                          selectedClass === 'ALL'
-                            ? 'seluruh kelas'
-                            : `kelas ${selectedClass}`
-                        }.`,
-                      });
-                    } catch {
-                      setActionFeedback({
-                        type: 'error',
-                        message: 'Gagal mendistribusikan paket soal ke siswa.',
-                      });
-                    } finally {
-                      setIsDistributing(false);
-                    }
-                  }}
-                  title="Bagi paket soal berselang-seling (A/B) untuk siswa kelas ini"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-800 bg-indigo-100/80 hover:bg-indigo-200/80 border border-indigo-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                  onClick={() => handleRotateRetakePackages('swap_cross')}
+                  title="Tukar silang paket soal untuk Ujian Ulang agar 100% berbeda dari paket yang diterima saat Ujian Awal (A <-> B)"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold text-amber-950 bg-amber-300/90 hover:bg-amber-400 border border-amber-400 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                 >
-                  <Shuffle className="w-3.5 h-3.5" />
-                  <span>
-                    {isDistributing ? 'Membagi Paket...' : 'Bagi Multi-Paket (A/B)'}
-                  </span>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Acak Paket Ujian Ulang (Beda dari Awal)</span>
                 </button>
-              )}
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1548,11 +1645,24 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                 </button>
                               ) : null}
 
+                              {/* Selesaikan Otomatis (jika siswa meninggalkan komputer / waktu habis) */}
+                              {(isOngoing || isBlocked) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleForceFinishStudentExam(st)}
+                                  title="Selesaikan otomatis ujian siswa ini (simpan jawaban yang sudah dikerjakan menjadi Selesai)"
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-emerald-900 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded transition-colors cursor-pointer"
+                                >
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-700" />
+                                  <span>Selesaikan</span>
+                                </button>
+                              )}
+
                               {/* Reset / Reschedule Session Button */}
                               <button
                                 type="button"
                                 onClick={() => handleStatusChange(st, 'Belum Mulai')}
-                                title="Jadwalkan Ulang / Reset ke Belum Mulai (Nilai ujian pertama tetap tersimpan, nilai ujian ulang akan ditambahkan sesuai waktu ujian)"
+                                title="Jadwalkan Ulang / Reset ke Belum Mulai (Otomatis menukar paket soal agar berbeda dari ujian awal & menyimpan kedua nilai Sebelum/Sesudah)"
                                 className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded transition-colors cursor-pointer"
                               >
                                 <RotateCcw className="w-3 h-3" />

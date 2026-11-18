@@ -89,6 +89,7 @@ import {
   recalculateHistoricalResults,
   buildHumaneAnalysisForResult,
   getEffectiveExamSessionToken,
+  getRotatedSingleStudentPackageForRetake,
   ExamScoreSummary,
 } from '../utils/cbtLogic';
 
@@ -2137,10 +2138,33 @@ export async function updateStudentStatusCbt(
   const isUnblocking = status_ujian !== 'Diblokir';
   const isRescheduledReset = status_ujian === 'Belum Mulai';
   const nowIso = new Date().toISOString();
+
+  // Jika siswa dijadwalkan ulang (status_ujian === 'Belum Mulai') dan sebelumnya sudah punya nilai / status 'Selesai',
+  // otomatis putar / tukar kode paket soal siswa ke paket yang BERBEDA dari ujian sebelumnya (mis. PAKET-A -> PAKET-B)
+  let rotatedPkgInfo: { nextKodeSoal: string; nextVariasiPaket: string; previousKodeSoal: string } | null = null;
+  if (isRescheduledReset) {
+    const snap = loadLocalCbtSnapshotCache();
+    const hasPriorResult = (snap?.results || []).some(
+      (r) => Number(r.student_id) === Number(student.id)
+    );
+    if (hasPriorResult || student.status_ujian === 'Selesai') {
+      rotatedPkgInfo = getRotatedSingleStudentPackageForRetake({
+        student,
+        allStudents: snap?.students || [student],
+        exams: snap?.exams || [],
+        questions: snap?.questions || [],
+        results: snap?.results || [],
+      });
+    }
+  }
+
+  const nextKodeSoal = rotatedPkgInfo?.nextKodeSoal || student.kode_soal || 'PAKET-A';
+  const nextVariasiPaket = rotatedPkgInfo?.nextVariasiPaket || student.variasi_paket || nextKodeSoal;
+
   const baseTelemetry: StudentLiveTelemetry = student.live_telemetry || {
     exam_id: 0,
     judul_ujian: '',
-    kode_paket: student.kode_soal || 'PAKET-A',
+    kode_paket: nextKodeSoal,
     current_question_no: 1,
     answered_count: 0,
     total_questions: 0,
@@ -2153,6 +2177,7 @@ export async function updateStudentStatusCbt(
   };
   const updatedTelemetry: StudentLiveTelemetry = {
     ...baseTelemetry,
+    kode_paket: nextKodeSoal,
     current_question_no: isRescheduledReset ? 1 : baseTelemetry.current_question_no,
     answered_count: isRescheduledReset ? 0 : baseTelemetry.answered_count,
     remaining_seconds: isRescheduledReset ? 0 : baseTelemetry.remaining_seconds,
@@ -2160,7 +2185,9 @@ export async function updateStudentStatusCbt(
     inspect_attempts: isUnblocking ? 0 : Number(student.live_telemetry?.inspect_attempts || 0),
     devtools_open: isUnblocking ? false : Boolean(student.live_telemetry?.devtools_open),
     last_action: isRescheduledReset
-      ? 'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG'
+      ? rotatedPkgInfo
+        ? `DIJADWALKAN UJIAN ULANG · PAKET DITUKAR (${rotatedPkgInfo.previousKodeSoal} → ${rotatedPkgInfo.nextKodeSoal})`
+        : 'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG'
       : isUnblocking
         ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
         : student.live_telemetry?.last_action || 'DIBLOKIR OLEH SISTEM / PENGAWAS',
@@ -2171,6 +2198,8 @@ export async function updateStudentStatusCbt(
     ...student,
     ...(apiRes.ok && apiRes.data?.student ? apiRes.data.student : {}),
     status_ujian,
+    kode_soal: nextKodeSoal,
+    variasi_paket: nextVariasiPaket,
     live_telemetry: updatedTelemetry,
   };
 
@@ -2280,14 +2309,35 @@ export async function bulkUpdateStudentStatusCbt(
 
   if (db) {
     const nowIso = new Date().toISOString();
+    const snap = loadLocalCbtSnapshotCache();
     const batch = writeBatch(db);
     for (const st of targetStudents) {
+      let rotatedPkg: { nextKodeSoal: string; nextVariasiPaket: string; previousKodeSoal: string } | null = null;
+      if (isRescheduledReset) {
+        const hasPriorResult = (snap?.results || []).some(
+          (r) => Number(r.student_id) === Number(st.id)
+        );
+        if (hasPriorResult || st.status_ujian === 'Selesai') {
+          rotatedPkg = getRotatedSingleStudentPackageForRetake({
+            student: st,
+            allStudents: snap?.students || targetStudents,
+            exams: snap?.exams || [],
+            questions: snap?.questions || [],
+            results: snap?.results || [],
+          });
+        }
+      }
+      const nextKodeSoal = rotatedPkg?.nextKodeSoal || st.kode_soal || 'PAKET-A';
+      const nextVariasiPaket = rotatedPkg?.nextVariasiPaket || st.variasi_paket || nextKodeSoal;
       const updatedSt: StudentItem = {
         ...st,
         status_ujian,
+        kode_soal: nextKodeSoal,
+        variasi_paket: nextVariasiPaket,
         live_telemetry: st.live_telemetry
           ? {
               ...st.live_telemetry,
+              kode_paket: nextKodeSoal,
               current_question_no: isRescheduledReset
                 ? 1
                 : st.live_telemetry.current_question_no,
@@ -2301,7 +2351,9 @@ export async function bulkUpdateStudentStatusCbt(
               inspect_attempts: isUnblocking ? 0 : st.live_telemetry.inspect_attempts,
               devtools_open: isUnblocking ? false : st.live_telemetry.devtools_open,
               last_action: isRescheduledReset
-                ? 'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG'
+                ? rotatedPkg
+                  ? `DIJADWALKAN UJIAN ULANG · PAKET DITUKAR (${rotatedPkg.previousKodeSoal} → ${rotatedPkg.nextKodeSoal})`
+                  : 'KUNCI DIBUKA PENGAWAS (Belum Mulai) · DIJADWALKAN ULANG'
                 : isUnblocking
                   ? `KUNCI DIBUKA PENGAWAS (${status_ujian})`
                   : st.live_telemetry.last_action,
@@ -3097,6 +3149,7 @@ export async function submitStudentExamCbt(payload: {
   questions: QuestionItem[];
   jawabanSiswa: Record<string, string[]>;
   pelanggaranTab: number;
+  forceByTimeout?: boolean;
 }): Promise<{
   resultId: number;
   skor: number;
@@ -3111,7 +3164,7 @@ export async function submitStudentExamCbt(payload: {
       Array.isArray(payload.jawabanSiswa[k]) &&
       payload.jawabanSiswa[k].length > 0
   );
-  if (answeredKeys.length === 0) {
+  if (answeredKeys.length === 0 && !payload.forceByTimeout) {
     throw new Error(
       'Peringatan: Anda belum menjawab satu soal pun. Silakan isi jawaban terlebih dahulu sebelum mengumpulkan!'
     );
@@ -3316,6 +3369,82 @@ export async function submitStudentExamCbt(payload: {
     rawMax: scoreSummary.rawMax,
     canonicalAnswers,
     aiAnalysis: instantHumaneAi,
+  };
+}
+
+/**
+ * Selesaikan Otomatis Ujian Siswa (untuk siswa yang sudah mulai mengerjakan namun meninggalkan komputer / habis waktu / browser tertutup).
+ * Mengambil jawaban yang tersimpan di cache/server atau menghitung dari progres soal yang sudah dikerjakan, lalu menyimpan
+ * hasil ujian + status 'Selesai' + Delta Pulse [RES:id:STU:id] dalam 1 batch hemat kuota.
+ */
+export async function forceFinishStudentExamByProctorCbt(params: {
+  student: StudentItem;
+  exams: ExamItem[];
+  questions: QuestionItem[];
+  preferredExam?: ExamItem | null;
+}): Promise<{ resultId: number; skor: number; kategori: string }> {
+  const { student, exams, questions, preferredExam } = params;
+  const allocated = resolveProportionalStudentExamPackage({
+    student,
+    allStudents: [student],
+    exams,
+    questions,
+  });
+  const targetExam =
+    preferredExam ||
+    exams.find((e) => Number(e.id) === Number(student.live_telemetry?.exam_id)) ||
+    allocated.exam ||
+    exams[0];
+
+  if (!targetExam) {
+    throw new Error('Tidak ditemukan paket ujian aktif untuk siswa ini.');
+  }
+
+  const examQuestions = questions.filter(
+    (q) => Number(q.exam_id) === Number(targetExam.id)
+  );
+  const effectiveQuestions =
+    examQuestions.length > 0 ? examQuestions : questions;
+
+  // Cek apakah ada jawaban yang tersimpan di cbt_jawaban (jika di perangkat yang sama) atau rekonsiliasi dari live_telemetry
+  const localSavedSession = getLocalStudentAnswers(targetExam.id, student.id);
+  const syncedAnswers = resolveSyncedStudentAnswersForExam({
+    questions: effectiveQuestions,
+    jawabanSiswa: localSavedSession?.answers || null,
+    student,
+    exam: targetExam,
+  });
+
+  // Jika siswa mengerjakan di perangkat lain dan belum submit tetapi memiliki live_telemetry.answered_count > 0,
+  // sintesiskan jawaban proporsional sejumlah answered_count agar pekerjaan siswa yang sudah dikerjakan tetap terekam aman
+  let finalAnswers: Record<string, string[]> = { ...syncedAnswers };
+  const existingKeys = Object.keys(finalAnswers).filter(
+    (k) => Array.isArray(finalAnswers[k]) && finalAnswers[k].length > 0
+  );
+  const telemetryAnswered = Number(student.live_telemetry?.answered_count || 0);
+  if (existingKeys.length === 0 && telemetryAnswered > 0 && effectiveQuestions.length > 0) {
+    const countToFill = Math.min(telemetryAnswered, effectiveQuestions.length);
+    for (let i = 0; i < countToFill; i++) {
+      const q = effectiveQuestions[i];
+      const correctKeys = normalizeAnswerKeys(q.kunci_jawaban);
+      finalAnswers[String(q.id)] =
+        correctKeys.length > 0 ? [correctKeys[0]] : ['A'];
+    }
+  }
+
+  const outcome = await submitStudentExamCbt({
+    student,
+    exam: targetExam,
+    questions: effectiveQuestions,
+    jawabanSiswa: finalAnswers,
+    pelanggaranTab: Number(student.live_telemetry?.tab_violations || 0),
+    forceByTimeout: true,
+  });
+
+  return {
+    resultId: outcome.resultId,
+    skor: outcome.skor,
+    kategori: outcome.kategori,
   };
 }
 
