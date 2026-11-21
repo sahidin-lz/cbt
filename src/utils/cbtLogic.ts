@@ -1379,7 +1379,8 @@ export function computeClassAnalytics(
     analisis_ai?: unknown | null;
   }[],
   extraClassNames: string[] = [],
-  questionsList: CognitiveQuestionInput[] = []
+  questionsList: CognitiveQuestionInput[] = [],
+  kkmConfig: Record<string, number> | number = 70
 ): {
   perClass: ClassAnalyticsItem[];
   overall: ClassAnalyticsItem;
@@ -1412,7 +1413,17 @@ export function computeClassAnalytics(
       resultCount > 0 ? Math.round((sum / resultCount) * 10) / 10 : 0;
     const highestScore = resultCount > 0 ? Math.max(...scores) : 0;
     const lowestScore = resultCount > 0 ? Math.min(...scores) : 0;
-    const passCount = scores.filter((sc) => sc >= 70).length;
+    const passCount = groupResults.filter((r) => {
+      const sc = Number(r.skor_angka) || 0;
+      const st = studentById.get(r.student_id);
+      const kls = st?.kelas || labelKelas;
+      const tkt = extractTingkatFromKelas(kls);
+      const threshold =
+        typeof kkmConfig === 'object' && kkmConfig !== null
+          ? (kkmConfig[tkt] ?? kkmConfig['DEFAULT'] ?? 70)
+          : Number(kkmConfig) || 70;
+      return sc >= threshold;
+    }).length;
     const passRate =
       resultCount > 0 ? Math.round((passCount / resultCount) * 100) : 0;
 

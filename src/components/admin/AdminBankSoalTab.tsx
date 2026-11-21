@@ -172,7 +172,7 @@ export const AdminBankSoalTab: React.FC = () => {
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-xs font-extrabold text-indigo-700 uppercase tracking-wider">
               <BookOpen className="w-4 h-4" />
-              <span>05. Bank Soal Modular, Impor Word/Excel &amp; Versioning Aman</span>
+              <span>06. Bank Soal Modular, Impor Word/Excel &amp; Versioning Aman</span>
             </div>
             <h2 className="text-lg font-extrabold text-slate-900">
               Kelola Paket Bank Soal ({exams.length} Paket · {activeBankQuestions.length} Butir Aktif)

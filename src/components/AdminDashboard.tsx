@@ -10,7 +10,8 @@ import { AdminLayout } from './admin/AdminLayout';
 const AdminUjianTab = lazy(() => import('./admin/AdminUjianTab'));
 const AdminDistribusiTab = lazy(() => import('./admin/AdminDistribusiTab'));
 const AdminLiveMonitorTab = lazy(() => import('./admin/AdminLiveMonitorTab'));
-const AdminSiswaTab = lazy(() => import('./admin/AdminSiswaTab'));
+const AdminStatusSiswaTab = lazy(() => import('./admin/AdminStatusSiswaTab'));
+const AdminProfilKelasTab = lazy(() => import('./admin/AdminProfilKelasTab'));
 const AdminBankSoalTab = lazy(() => import('./admin/AdminBankSoalTab'));
 const AdminLaporanTab = lazy(() => import('./admin/AdminLaporanTab'));
 const AdminAnBusoTab = lazy(() => import('./admin/AdminAnBusoTab'));
@@ -55,10 +56,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
             }
           />
           <Route
-            path="siswa"
+            path="status-siswa"
             element={
               <Suspense fallback={<TabSuspenseFallback />}>
-                <AdminSiswaTab />
+                <AdminStatusSiswaTab />
+              </Suspense>
+            }
+          />
+          <Route
+            path="profil-kelas"
+            element={
+              <Suspense fallback={<TabSuspenseFallback />}>
+                <AdminProfilKelasTab />
               </Suspense>
             }
           />

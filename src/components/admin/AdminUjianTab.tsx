@@ -22,20 +22,15 @@ import {
   getEffectiveExamSessionToken,
   generateExamToken,
 } from '../../utils/cbtLogic';
-import { ClassPerformanceLotsHotsChart } from '../ClassPerformanceLotsHotsChart';
 import { useAdminDashboard } from '../../context/AdminDashboardContext';
 
 export const AdminUjianTab: React.FC = () => {
   const {
     exams,
-    questions,
     activeBankQuestions,
     filteredExams,
     uniqueClasses,
     availableMataPelajaran,
-    classAnalyticsData,
-    filterResultKelas,
-    setFilterResultKelas,
     setActiveTab,
     isSubMenuBarMinimized,
     setIsSubMenuBarMinimized,
@@ -43,8 +38,6 @@ export const AdminUjianTab: React.FC = () => {
     setIsUjianFormMinimized,
     isUjianTableMinimized,
     setIsUjianTableMinimized,
-    isUjianChartMinimized,
-    setIsUjianChartMinimized,
     editingExamId,
     setEditingExamId,
     newExamTitle,
@@ -126,7 +119,6 @@ export const AdminUjianTab: React.FC = () => {
               onClick={() => {
                 setIsUjianTableMinimized(false);
                 setIsUjianFormMinimized(true);
-                setIsUjianChartMinimized(true);
               }}
               className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
                 !isUjianTableMinimized
@@ -134,14 +126,13 @@ export const AdminUjianTab: React.FC = () => {
                   : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
               }`}
             >
-              01-1. Tabel Distribusi Paket ({filteredExams.length})
+              01-1. Daftar Paket Ujian ({filteredExams.length})
             </button>
             <button
               type="button"
               onClick={() => {
                 setIsUjianTableMinimized(true);
                 setIsUjianFormMinimized(false);
-                setIsUjianChartMinimized(true);
               }}
               className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
                 !isUjianFormMinimized
@@ -153,18 +144,14 @@ export const AdminUjianTab: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setIsUjianTableMinimized(true);
-                setIsUjianFormMinimized(true);
-                setIsUjianChartMinimized(false);
-              }}
+              onClick={() => setIsArchivePanelOpen((p) => !p)}
               className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border cursor-pointer transition-all ${
-                !isUjianChartMinimized
-                  ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                isArchivePanelOpen
+                  ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
                   : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
               }`}
             >
-              01-3. Visualisasi Performa Kelas: LOTS vs HOTS
+              01-3. Arsip 30 Hari ({archivedExams.length})
             </button>
           </div>
         ) : (
@@ -1058,7 +1045,6 @@ export const AdminUjianTab: React.FC = () => {
                                         setEditingExamId(ex.id);
                                         setIsUjianFormMinimized(false);
                                         setIsUjianTableMinimized(true);
-                                        setIsUjianChartMinimized(true);
                                         setNewExamTitle(ex.judul_ujian);
                                         setNewExamDuration(String(ex.durasi_menit));
                                         setNewExamTargetTingkat(ex.target_tingkat || 'SEMUA');
@@ -1223,36 +1209,6 @@ export const AdminUjianTab: React.FC = () => {
             </div>
           )}
         </div>
-
-        {/* Visualisasi Performa Kelas: Komparasi LOTS vs HOTS (Eksklusif Sub-Tab 01-3) */}
-        {!isUjianChartMinimized && (
-          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-            <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
-              <span className="text-xs font-extrabold text-slate-800">
-                Sub-Panel 01A-3 · Visualisasi Performa Kelas (Komparasi LOTS vs HOTS)
-              </span>
-            </div>
-            <div className="p-4">
-              <ClassPerformanceLotsHotsChart
-                classAnalytics={classAnalyticsData}
-                questions={questions}
-                exams={exams}
-                selectedClassFilter={filterResultKelas}
-                isMinimized={false}
-                onToggleMinimize={() => {
-                  setIsUjianChartMinimized(true);
-                  setIsUjianTableMinimized(false);
-                }}
-                onSelectClass={(kls) => {
-                  setFilterResultKelas(kls);
-                  if (kls !== 'SEMUA') {
-                    setActiveTab('laporan');
-                  }
-                }}
-              />
-            </div>
-          </div>
-        )}
       </div>
     </>
   );

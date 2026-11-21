@@ -1340,8 +1340,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       const eventStr = String(pulseData?.lastEvent || '');
       if (
         eventStr.includes(`[STU:${targetId}]`) ||
-        eventStr.includes('[BULK_STU]') ||
-        eventStr.includes('Status')
+        eventStr.includes('[BULK_STU]')
       ) {
         handleCheckStudentStatusManual();
       }
@@ -1544,14 +1543,29 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          studentId: activeStudent.id,
-          nama: activeStudent.nama,
-          kelas: activeStudent.kelas,
-          pelanggaranTab: nextCount,
-          inspectAttempts: nextInspectCount,
-          answeredCount: currentAnsCount,
-          status: nextStatus,
-          reason: `[${nextCount}/${MAX_TAB_VIOLATIONS}] ${reason}`,
+          examId: activeExam?.id || 0,
+          judul_ujian: activeExam?.judul_ujian || 'Ujian CBT',
+          participant: {
+            student_id: activeStudent.id,
+            nama: activeStudent.nama,
+            kelas: activeStudent.kelas,
+            kode_paket:
+              activeStudent.kode_soal || activeExam?.kode_paket || 'PAKET-A',
+            status_ujian: nextStatus,
+            current_question_no: currentIndex + 1,
+            answered_count: currentAnsCount,
+            total_questions: examQuestions.length,
+            remaining_seconds: remainingSeconds,
+            is_fullscreen: Boolean(document.fullscreenElement),
+            is_focused: false,
+            devtools_open: devToolsDetected || isDevToolsOpen,
+            tab_violations: nextCount,
+            inspect_attempts: nextInspectCount,
+            last_action:
+              updatedStudentObj.live_telemetry?.last_action ||
+              `[${nextCount}/${MAX_TAB_VIOLATIONS}] ${reason}`,
+            last_active_at: new Date().toISOString(),
+          },
         }),
       });
     },
@@ -1722,14 +1736,16 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
       }
     };
 
-    // Sensitive Active Polling: Check window focus, visibility, split-screen, AND Docked DevTools panel every 1000ms
+    // Sensitive Active Polling: Check sustained window focus loss (4s interval) AND Docked DevTools panel every 1000ms
     const focusCheckInterval = setInterval(() => {
       if (isStudentBlocked) return;
 
       if (!document.hasFocus() || document.visibilityState === 'hidden') {
-        triggerViolation(
-          'Terdeteksi kehilangan fokus jendela ujian (Membuka aplikasi lain / Taskbar / Layar ganda)'
-        );
+        if (Date.now() - lastViolationTimestampRef.current >= 4000) {
+          triggerViolation(
+            'Terdeteksi tetap berada di luar jendela ujian (Membuka aplikasi lain / Taskbar / Layar ganda)'
+          );
+        }
         return;
       }
 
@@ -3604,7 +3620,7 @@ export const StudentExamPortal: React.FC<StudentExamPortalProps> = ({
                     Anda <strong>TIDAK DAPAT MEMBUKA KUNCI SENDIRI</strong> sampai Guru Pengawas mengizinkan. Silakan lapor kepada Guru Pengawas di ruang kelas.
                   </p>
                   <div className="p-2 bg-white/70 rounded border border-red-200 font-mono text-[11px] text-red-800">
-                    Guru membuka via: Konsol Guru → Modul 03 (Live Monitor) atau Modul 04 (Database Siswa) → Klik [Buka Kunci]
+                    Guru membuka via: Konsol Guru → Modul 03 (Live Monitor) atau Modul 04 (Status Siswa &amp; Blokir) → Klik [Buka Blokir]
                   </div>
                 </div>
 

@@ -75,7 +75,8 @@ export type AdminTabId =
   | 'ujian'
   | 'token_distribusi'
   | 'manajemen'
-  | 'siswa'
+  | 'status_siswa'
+  | 'profil_kelas'
   | 'soal'
   | 'laporan'
   | 'anbuso';
@@ -84,7 +85,8 @@ export const ADMIN_TAB_ROUTES: Record<AdminTabId, string> = {
   ujian: '/admin/ujian',
   token_distribusi: '/admin/distribusi',
   manajemen: '/admin/live-monitor',
-  siswa: '/admin/siswa',
+  status_siswa: '/admin/status-siswa',
+  profil_kelas: '/admin/profil-kelas',
   soal: '/admin/bank-soal',
   laporan: '/admin/laporan',
   anbuso: '/admin/anbuso',
@@ -94,7 +96,8 @@ export function resolveAdminTabFromPathname(pathname: string): AdminTabId {
   const clean = pathname.toLowerCase();
   if (clean.includes('/distribusi')) return 'token_distribusi';
   if (clean.includes('/live-monitor')) return 'manajemen';
-  if (clean.includes('/siswa')) return 'siswa';
+  if (clean.includes('/status-siswa')) return 'status_siswa';
+  if (clean.includes('/profil-kelas')) return 'profil_kelas';
   if (clean.includes('/bank-soal')) return 'soal';
   if (clean.includes('/laporan')) return 'laporan';
   if (clean.includes('/anbuso')) return 'anbuso';
@@ -396,6 +399,11 @@ interface AdminDashboardContextValue extends AdminDashboardProps {
   countStatusSelesai: number;
   countStatusDiblokir: number;
   activeStudentsCount: number;
+
+  kkmConfig: Record<string, number>;
+  updateKkmConfig: (tingkat: string, value: number) => void;
+  getKkmForTingkat: (tingkat: string) => number;
+  getKkmForKelas: (kelasName: string) => number;
 
   handleSaveExam: (e: React.FormEvent) => Promise<void>;
   handleUpdateExamSessionToken: (exam: ExamItem, customToken?: string) => Promise<void>;
@@ -816,6 +824,32 @@ export const AdminDashboardProvider: React.FC<
             filterResultMapel.toUpperCase()
         );
 
+  const [kkmConfig, setKkmConfig] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem('cbt_kkm_config');
+      return saved ? JSON.parse(saved) : { '10': 75, '11': 70, '12': 75, 'DEFAULT': 70 };
+    } catch {
+      return { '10': 75, '11': 70, '12': 75, 'DEFAULT': 70 };
+    }
+  });
+
+  const updateKkmConfig = (tingkat: string, value: number) => {
+    const next = { ...kkmConfig, [tingkat]: Number(value) || 70 };
+    setKkmConfig(next);
+    try {
+      localStorage.setItem('cbt_kkm_config', JSON.stringify(next));
+    } catch {}
+  };
+
+  const getKkmForTingkat = (tingkat: string): number => {
+    return kkmConfig[tingkat] ?? kkmConfig['DEFAULT'] ?? 70;
+  };
+
+  const getKkmForKelas = (kelasName: string): number => {
+    const tkt = extractTingkatFromKelas(kelasName);
+    return getKkmForTingkat(tkt);
+  };
+
   const resultScopedListForAnalytics = results.filter((resItem) => {
     const ex = exams.find((e) => Number(e.id) === Number(resItem.exam_id));
     const resMapel = getEffectiveMataPelajaran(ex);
@@ -832,7 +866,8 @@ export const AdminDashboardProvider: React.FC<
     students,
     resultScopedListForAnalytics,
     customClasses,
-    questions
+    questions,
+    kkmConfig
   );
 
   const filteredResults = results.filter((resItem) => {
@@ -1933,12 +1968,16 @@ export const AdminDashboardProvider: React.FC<
           })
         : null;
       const ai = resItem.analisis_ai;
-      const ketuntasan = resItem.skor_angka >= 70 ? 'Tuntas (>=70)' : 'Belum Tuntas (<70)';
+      const studentKkm = getKkmForKelas(st?.kelas || '');
+      const ketuntasan =
+        resItem.skor_angka >= studentKkm
+          ? `Tuntas (>=${studentKkm})`
+          : `Belum Tuntas (<${studentKkm})`;
       const baseKategori =
         ai?.kategori_nilai ||
         (resItem.skor_angka >= 85
           ? 'Sangat Baik (A)'
-          : resItem.skor_angka >= 70
+          : resItem.skor_angka >= studentKkm
             ? 'Baik (B)'
             : resItem.skor_angka >= 55
               ? 'Cukup (C)'
@@ -2472,6 +2511,10 @@ export const AdminDashboardProvider: React.FC<
     countStatusSelesai,
     countStatusDiblokir,
     activeStudentsCount,
+    kkmConfig,
+    updateKkmConfig,
+    getKkmForTingkat,
+    getKkmForKelas,
     handleSaveExam,
     handleUpdateExamSessionToken,
     handleToggleExamStatus,

@@ -11,6 +11,7 @@ export const AdminLiveMonitorTab: React.FC = () => {
     onRefreshData,
     handleUpdateStudentStatus,
     handleBatchDistributePackages,
+    getKkmForKelas,
   } = useAdminDashboard();
 
   return (
@@ -22,6 +23,7 @@ export const AdminLiveMonitorTab: React.FC = () => {
       onRefreshData={onRefreshData}
       onUpdateStudentStatus={handleUpdateStudentStatus}
       onBatchDistributePackages={handleBatchDistributePackages}
+      getKkmForKelas={getKkmForKelas}
     />
   );
 };

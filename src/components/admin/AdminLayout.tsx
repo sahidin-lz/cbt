@@ -14,6 +14,7 @@ import {
   PanelLeftOpen,
   BarChart3,
   KeyRound,
+  BookOpen,
   ChevronDown,
   ChevronUp,
   ChevronRight,
@@ -63,6 +64,7 @@ export const AdminLayout: React.FC = () => {
     setSelectedAiModal,
     dryRunExam,
     setDryRunExam,
+    uniqueClasses,
   } = useAdminDashboard();
 
   // Separate Teacher Login Page
@@ -203,12 +205,12 @@ export const AdminLayout: React.FC = () => {
           : 'bg-indigo-600 text-white',
     },
     {
-      id: 'siswa' as const,
-      to: ADMIN_TAB_ROUTES.siswa,
-      matchIds: ['siswa'],
+      id: 'status_siswa' as const,
+      to: ADMIN_TAB_ROUTES.status_siswa,
+      matchIds: ['status_siswa'],
       num: '04',
-      title: 'Database Siswa & Rombel',
-      subtitle: 'Data Peserta & Kartu Login PDF',
+      title: 'Status Siswa & Blokir',
+      subtitle: 'Buka Blokir, Reset Token & Rombel',
       badge: `${students.length}`,
       icon: Users,
       activeClass:
@@ -219,10 +221,26 @@ export const AdminLayout: React.FC = () => {
       badgeIdle: 'bg-emerald-50 text-emerald-800 border border-emerald-200/70',
     },
     {
+      id: 'profil_kelas' as const,
+      to: ADMIN_TAB_ROUTES.profil_kelas,
+      matchIds: ['profil_kelas'],
+      num: '05',
+      title: 'Profil Kelas & Rekap',
+      subtitle: 'Ujian, Token Sesi & Nilai per Kelas',
+      badge: `${uniqueClasses.length} KLS`,
+      icon: BookOpen,
+      activeClass:
+        'bg-gradient-to-r from-teal-600 to-cyan-700 text-white border-teal-500 shadow-xs ring-2 ring-teal-300/60',
+      iconBoxActive: 'bg-white/20 text-amber-300',
+      iconBoxIdle: 'bg-teal-50 text-teal-700 border border-teal-200/70',
+      badgeActive: 'bg-white/20 text-white',
+      badgeIdle: 'bg-teal-50 text-teal-800 border border-teal-200/70',
+    },
+    {
       id: 'soal' as const,
       to: ADMIN_TAB_ROUTES.soal,
       matchIds: ['soal'],
-      num: '05',
+      num: '06',
       title: 'Bank Soal & Upload Word',
       subtitle: 'Kelola Soal, Rumus & Gambar',
       badge: `${activeBankQuestions.length}`,
@@ -238,7 +256,7 @@ export const AdminLayout: React.FC = () => {
       id: 'laporan' as const,
       to: ADMIN_TAB_ROUTES.laporan,
       matchIds: ['laporan'],
-      num: '06',
+      num: '07',
       title: 'Laporan & Rekap Nilai',
       subtitle: 'Nilai Humanis, LOTS/HOTS & PDF',
       badge: `${results.length}`,
@@ -254,7 +272,7 @@ export const AdminLayout: React.FC = () => {
       id: 'anbuso' as const,
       to: ADMIN_TAB_ROUTES.anbuso,
       matchIds: ['anbuso'],
-      num: '07',
+      num: '08',
       title: 'Analisis AnBuso & Remedial',
       subtitle: 'Daya Beda, Pengecoh & Remedial',
       badge: 'ANBUSO',
@@ -290,7 +308,7 @@ export const AdminLayout: React.FC = () => {
                     Menu Utama Guru
                   </div>
                   <div className="text-xs font-bold text-white truncate">
-                    7 Menu Mandiri CBT
+                    8 Menu Mandiri CBT
                   </div>
                 </div>
               )}

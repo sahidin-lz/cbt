@@ -49,6 +49,7 @@ export function App() {
 
   const { data: dashboardData } = useQuery<CbtSnapshotData>({
     queryKey: CBT_DASHBOARD_QUERY_KEY,
+    queryFn: async () => loadUnifiedDashboardData(),
     initialData: getInitialDashboardSnapshot,
     staleTime: 60_000,
     gcTime: 1000 * 60 * 30,
@@ -180,8 +181,15 @@ export function App() {
   }, []);
 
   // Ultra-lightweight 1-document real-time pulse listener with DELTA-ONLY sync:
-  // Saves 90-99% daily Firestore reads for hundreds of concurrent students!
+  // Saves 99% daily Firestore reads for hundreds of concurrent students:
+  // - Active exam students DO NOT listen to global pulse (0 reads while working; blocked students use targeted unblock listener).
+  // - Student dashboard only reacts to exam/token/question changes or their OWN student ID.
+  // - Teacher console receives full real-time delta sync (1-2 reads/event).
   useEffect(() => {
+    if (portalView === 'student' && isStudentInExam) {
+      return;
+    }
+
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = subscribeToCbtSyncPulse((pulse) => {
       setSyncPulse(pulse);
@@ -189,9 +197,30 @@ export function App() {
         const prevSeenAt = lastSeenPulseAtRef.current;
         lastSeenPulseAtRef.current = pulse.lastSyncedAt;
 
+        if (!prevSeenAt) return;
+
+        // On Student Portal (outside active exam), ignore other students' [STU:x] / [RES:...] events to save 99% quota
+        if (portalView === 'student') {
+          const ev = String(pulse.lastEvent || '');
+          let loggedInStudentId = 0;
+          try {
+            const rawAcc = localStorage.getItem('cbt_logged_in_student_account');
+            if (rawAcc) loggedInStudentId = Number(JSON.parse(rawAcc)?.id || 0);
+          } catch {}
+          const isExamOrTokenOrQuestionEvent =
+            ev.includes('[EXM:') ||
+            ev.includes('[BULK_EXM]') ||
+            ev.includes('[Q_EXM:') ||
+            ev.includes('[BULK_STU]');
+          const isMyOwnStudentEvent =
+            loggedInStudentId > 0 && ev.includes(`[STU:${loggedInStudentId}]`);
+          if (!isExamOrTokenOrQuestionEvent && !isMyOwnStudentEvent) {
+            return;
+          }
+        }
+
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
-          if (!prevSeenAt) return;
           const snap = snapshotRef.current;
           syncDeltaFromPulseOnce({
             currentExams: snap.exams,
@@ -221,7 +250,7 @@ export function App() {
       if (debounceTimer) clearTimeout(debounceTimer);
       unsubscribe();
     };
-  }, [applyData, syncDashboardFromLocalCache]);
+  }, [portalView, isStudentInExam, applyData, syncDashboardFromLocalCache]);
 
   const handlePortalSwitch = (target: 'student' | 'teacher') => {
     if (isStudentInExam && target === 'teacher') {
@@ -240,10 +269,28 @@ export function App() {
 
   // Expose ONLY active (non-archived) questions for new student exams; keep full `questions` for Admin reports & historical review
   const activeQuestions = questions.filter((q) => !q.is_archived_version);
-  // Strict Server-Side Security: never expose `kunci_jawaban` to client React tree during active student exam
-  const studentPortalQuestions = isStudentInExam
-    ? stripQuestionKeysForStudent(activeQuestions)
-    : activeQuestions;
+  // Strict Server-Side Security: never expose `kunci_jawaban` to client React tree for any uncompleted exam on Student Portal
+  const studentPortalQuestions = (() => {
+    if (isStudentInExam) {
+      return stripQuestionKeysForStudent(activeQuestions);
+    }
+    let loggedInId = 0;
+    try {
+      const rawAcc = localStorage.getItem('cbt_logged_in_student_account');
+      if (rawAcc) loggedInId = Number(JSON.parse(rawAcc)?.id || 0);
+    } catch {}
+    if (!loggedInId) {
+      return stripQuestionKeysForStudent(activeQuestions);
+    }
+    const completedExamIds = new Set<number>(
+      results
+        .filter((r) => Number(r.student_id) === loggedInId)
+        .map((r) => Number(r.exam_id))
+    );
+    return activeQuestions.map((q) =>
+      completedExamIds.has(Number(q.exam_id)) ? q : { ...q, kunci_jawaban: [] }
+    );
+  })();
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">

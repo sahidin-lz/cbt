@@ -63,6 +63,7 @@ interface ExamManagementTabProps {
   onRefreshData: () => Promise<void>;
   onUpdateStudentStatus: (student: StudentItem, nextStatus: string) => Promise<void>;
   onBatchDistributePackages?: (targetClass?: string) => Promise<void>;
+  getKkmForKelas?: (kelas: string) => number;
 }
 
 export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
@@ -72,8 +73,9 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
   results,
   onRefreshData,
   onUpdateStudentStatus,
-  onBatchDistributePackages,
+  getKkmForKelas,
 }) => {
+  const resolveKkm = (kelas?: string) => (getKkmForKelas ? getKkmForKelas(kelas || '') : 70);
   // Extract distinct class list sorted alphabetically
   const uniqueClasses = useMemo(() => {
     const set = new Set<string>();
@@ -133,14 +135,14 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
     message: string;
   } | null>(null);
 
-  // Sub-panel exclusive tab states for Modul 04 (only 1 sub-tab open at a time)
+  // Sub-panel exclusive tab states for Modul 03 (opens directly on 1-read Live Radar & Anti-Cheat)
   const [isSubMenuMinimized, setIsSubMenuMinimized] = useState(false);
   const [isClassKpiMinimized, setIsClassKpiMinimized] = useState(true);
-  const [isLiveRadarMinimized, setIsLiveRadarMinimized] = useState(true);
-  const [isStudentTableMinimized, setIsStudentTableMinimized] = useState(false);
+  const [isLiveRadarMinimized, setIsLiveRadarMinimized] = useState(false);
+  const [isStudentTableMinimized, setIsStudentTableMinimized] = useState(true);
   const [isQuestionAnalysisMinimized, setIsQuestionAnalysisMinimized] = useState(true);
 
-  // Per-question number & difficulty filter inside Modul 04 Question Analysis
+  // Per-question number & difficulty filter inside Modul 03
   const [analysisQuestionNumFilter, setAnalysisQuestionNumFilter] = useState<string>('ALL');
   const [analysisDifficultyFilter, setAnalysisDifficultyFilter] = useState<string>('ALL');
 
@@ -589,10 +591,10 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
               </span>
             </div>
             <h2 className="text-base sm:text-lg font-extrabold text-white tracking-tight leading-snug">
-              Manajemen Ujian, Live Radar Siswa &amp; Analisis Butir Soal Kelas
+              03. Live Monitor Sesi Ujian &amp; Sensor Anti-Cheat Real-Time
             </h2>
             <p className="text-xs text-blue-200/90 leading-relaxed max-w-3xl">
-              Pantau aktivitas web siswa yang sedang ujian secara real-time, evaluasi nilai akhir, serta analisis ketuntasan setiap butir soal yang dijawab benar vs salah per kelas.
+              Pantau aktivitas layar siswa yang sedang ujian secara real-time (1-Read Singleton Hemat Kuota), deteksi keluar layar penuh / pindah tab / Inspect Element, serta kontrol cepat sesi aktif.
             </p>
           </div>
         </div>
@@ -603,8 +605,26 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             {!isSubMenuMinimized ? (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs font-extrabold text-indigo-950 mr-1">
-                  Pilih Sub-Tab Monitor:
+                  Sub-Tab Modul 03:
                 </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode('cards');
+                    setIsLiveRadarMinimized(false);
+                    setIsStudentTableMinimized(true);
+                    setIsQuestionAnalysisMinimized(true);
+                    setIsClassKpiMinimized(true);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
+                    viewMode === 'cards' && !isLiveRadarMinimized
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
+                  }`}
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                  <span>03A. Live Radar &amp; Sensor Anti-Cheat ({kpiStats.sedangUjian})</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -621,43 +641,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                   }`}
                 >
                   <Users className="w-3.5 h-3.5" />
-                  <span>04A. Tabel Peserta &amp; Kunci Sesi ({filteredStudents.length})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewMode('cards');
-                    setIsStudentTableMinimized(true);
-                    setIsLiveRadarMinimized(false);
-                    setIsQuestionAnalysisMinimized(true);
-                    setIsClassKpiMinimized(true);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
-                    viewMode === 'cards' && !isLiveRadarMinimized
-                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
-                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
-                  }`}
-                >
-                  <Monitor className="w-3.5 h-3.5" />
-                  <span>04B. Live Radar Web Siswa</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewMode('cards');
-                    setIsStudentTableMinimized(true);
-                    setIsLiveRadarMinimized(true);
-                    setIsQuestionAnalysisMinimized(false);
-                    setIsClassKpiMinimized(true);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
-                    viewMode === 'cards' && !isQuestionAnalysisMinimized
-                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
-                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
-                  }`}
-                >
-                  <Award className="w-3.5 h-3.5" />
-                  <span>04C. Analisis Ketuntasan Soal</span>
+                  <span>03B. Kontrol Cepat Sesi Aktif ({filteredStudents.length})</span>
                 </button>
                 <button
                   type="button"
@@ -675,30 +659,12 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                   }`}
                 >
                   <Table className="w-3.5 h-3.5" />
-                  <span>04D. Matriks Siswa × Soal</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewMode('cards');
-                    setIsStudentTableMinimized(true);
-                    setIsLiveRadarMinimized(true);
-                    setIsQuestionAnalysisMinimized(true);
-                    setIsClassKpiMinimized(false);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
-                    viewMode === 'cards' && !isClassKpiMinimized
-                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-indigo-600 shadow-2xs'
-                      : 'bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50/70'
-                  }`}
-                >
-                  <LayoutList className="w-3.5 h-3.5" />
-                  <span>04E. Ringkasan KPI Kelas</span>
+                  <span>03C. Matriks Live Jawaban × Soal</span>
                 </button>
               </div>
             ) : (
               <span className="text-xs font-extrabold text-indigo-950">
-                Sub-Menu Modul 04 (Mode Tab Terpisah)
+                Sub-Menu Modul 03 Live Monitor (Mode Tab Terpisah)
               </span>
             )}
 
@@ -720,32 +686,6 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                   </>
                 )}
               </button>
-            <button
-              type="button"
-              disabled={classStudents.length === 0}
-              onClick={() =>
-                downloadStudentTokenCardsPdf(classStudents, {
-                  kelasLabel:
-                    selectedClass === 'ALL'
-                      ? 'Semua Kelas'
-                      : `Kelas ${selectedClass}`,
-                  exams: matchedExams.length > 0 ? matchedExams : exams,
-                  questions,
-                  results,
-                  allStudents: students,
-                  preferredExamId: activeExam?.id,
-                  includeSummaryPage: true,
-                })
-              }
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-950 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 rounded-xl transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>
-                {selectedClass === 'ALL'
-                  ? 'Kartu Token & Nilai (.PDF)'
-                  : `Kartu & Nilai Kelas ${selectedClass} (.PDF)`}
-              </span>
-            </button>
 
             <button
               type="button"
@@ -792,7 +732,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
             <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-2xs">
               <Users className="w-3.5 h-3.5" />
             </span>
-            <span>Sub-Panel 04-1 · Pilih Kelas / Rombel &amp; Ringkasan KPI:</span>
+            <span>Sub-Panel 03-1 · Filter Kelas / Rombel untuk Live Monitoring:</span>
           </span>
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-1 rounded-md bg-white/90 border border-indigo-200 font-mono tabular-nums font-bold text-indigo-800 text-[11px]">
@@ -1264,7 +1204,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 <div>
                   <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
                     <Users className="w-4 h-4 text-amber-300" />
-                    <span>Sub-Panel 04-3 · Daftar Siswa, Monitoring Web Live &amp; Nilai Akhir</span>
+                    <span>Sub-Panel 03-2 · Kontrol Cepat Sesi Aktif, Force Finish &amp; Kunci Anti-Cheat</span>
                   </h3>
                   <p className="text-xs text-blue-200/90 mt-0.5">
                     Menampilkan status real-time siswa kelas{' '}
@@ -1372,55 +1312,9 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                 </select>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5">
-                {onBatchDistributePackages && (
-                  <button
-                    type="button"
-                    disabled={isDistributing || classStudents.length === 0}
-                    onClick={async () => {
-                      setIsDistributing(true);
-                      try {
-                        await onBatchDistributePackages(
-                          selectedClass !== 'ALL' ? selectedClass : undefined
-                        );
-                        setActionFeedback({
-                          type: 'success',
-                          message: `Berhasil membagi kode soal berselang-seling (Paket A / B) untuk ${
-                            selectedClass === 'ALL'
-                              ? 'seluruh kelas'
-                              : `kelas ${selectedClass}`
-                          }.`,
-                        });
-                      } catch {
-                        setActionFeedback({
-                          type: 'error',
-                          message: 'Gagal mendistribusikan paket soal ke siswa.',
-                        });
-                      } finally {
-                        setIsDistributing(false);
-                      }
-                    }}
-                    title="Bagi paket soal berselang-seling (A/B) untuk siswa kelas ini"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-800 bg-indigo-100/80 hover:bg-indigo-200/80 border border-indigo-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    <Shuffle className="w-3.5 h-3.5" />
-                    <span>
-                      {isDistributing ? 'Memproses...' : 'Bagi Multi-Paket (A/B)'}
-                    </span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  disabled={isDistributing || classStudents.length === 0}
-                  onClick={() => handleRotateRetakePackages('swap_cross')}
-                  title="Tukar silang paket soal untuk Ujian Ulang agar 100% berbeda dari paket yang diterima saat Ujian Awal (A <-> B)"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold text-amber-950 bg-amber-300/90 hover:bg-amber-400 border border-amber-400 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Acak Paket Ujian Ulang (Beda dari Awal)</span>
-                </button>
-              </div>
+              <span className="text-[11px] font-semibold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">
+                Distribusi &amp; rotasi paket dikelola terpisah di Modul 02 (Token &amp; Distribusi)
+              </span>
             </div>
 
             <div className="overflow-x-auto">
@@ -1610,7 +1504,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                   className={`inline-flex items-center justify-center px-2.5 py-1 rounded-lg font-mono text-sm font-black border ${
                                     res.skor_angka >= 85
                                       ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                      : res.skor_angka >= 70
+                                      : res.skor_angka >= resolveKkm(st.kelas)
                                         ? 'bg-blue-50 text-blue-800 border-blue-200'
                                         : res.skor_angka >= 55
                                           ? 'bg-amber-50 text-amber-800 border-amber-200'
@@ -1628,13 +1522,15 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                             )}
                           </td>
                           <td className="py-3 px-4 text-center">
-                            {res ? (
+                            {res ? (() => {
+                              const stKkm = resolveKkm(st.kelas);
+                              return (
                               <div className="flex flex-col items-center gap-0.5">
                                 <span
                                   className={`px-2 py-0.5 rounded text-[11px] font-bold ${
                                     res.skor_angka >= 85
                                       ? 'text-emerald-800 bg-emerald-100/70'
-                                      : res.skor_angka >= 70
+                                      : res.skor_angka >= stKkm
                                         ? 'text-blue-800 bg-blue-100/70'
                                         : res.skor_angka >= 55
                                           ? 'text-amber-800 bg-amber-100/70'
@@ -1644,7 +1540,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                   {res.analisis_ai?.kategori_nilai ||
                                     (res.skor_angka >= 85
                                       ? 'Sangat Baik (A)'
-                                      : res.skor_angka >= 70
+                                      : res.skor_angka >= stKkm
                                         ? 'Baik (B)'
                                         : res.skor_angka >= 55
                                           ? 'Cukup (C)'
@@ -1652,12 +1548,14 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                 </span>
                                 <span
                                   className={`text-[10px] font-semibold ${
-                                    res.skor_angka >= 70
+                                    res.skor_angka >= stKkm
                                       ? 'text-emerald-700'
                                       : 'text-rose-600'
                                   }`}
                                 >
-                                  {res.skor_angka >= 70 ? 'Tuntas (≥70)' : 'Remedial (<70)'}
+                                  {res.skor_angka >= stKkm
+                                    ? `Tuntas (≥${stKkm})`
+                                    : `Remedial (<${stKkm})`}
                                 </span>
                                 {rec.hasRetakeHistory && (
                                   <span className="text-[9px] font-mono font-bold text-indigo-800 bg-indigo-100 px-1.5 py-0.5 rounded">
@@ -1665,7 +1563,8 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                                   </span>
                                 )}
                               </div>
-                            ) : (
+                              );
+                            })() : (
                               <span className="text-slate-400">-</span>
                             )}
                           </td>
@@ -2438,7 +2337,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                         {selectedStudentForModal.result.analisis_ai?.kategori_nilai ||
                           (selectedStudentForModal.result.skor_angka >= 85
                             ? 'Sangat Baik (A)'
-                            : selectedStudentForModal.result.skor_angka >= 70
+                            : selectedStudentForModal.result.skor_angka >= resolveKkm(selectedStudentForModal.student.kelas)
                             ? 'Baik (B)'
                             : selectedStudentForModal.result.skor_angka >= 55
                             ? 'Cukup (C)'
@@ -2570,7 +2469,7 @@ export const ExamManagementTab: React.FC<ExamManagementTabProps> = ({
                           selectedStudentForModal.result!.analisis_ai?.kategori_nilai ||
                           (selectedStudentForModal.result!.skor_angka >= 85
                             ? 'Sangat Baik (A)'
-                            : selectedStudentForModal.result!.skor_angka >= 70
+                            : selectedStudentForModal.result!.skor_angka >= resolveKkm(selectedStudentForModal.student.kelas)
                               ? 'Baik (B)'
                               : selectedStudentForModal.result!.skor_angka >= 55
                                 ? 'Cukup (C)'

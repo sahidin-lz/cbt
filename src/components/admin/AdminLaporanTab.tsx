@@ -67,12 +67,13 @@ export const AdminLaporanTab: React.FC = () => {
     handleExportClassSummaryExcel,
     handleGenerateAiAnalysis,
     handleBatchAiAnalysisForList,
+    getKkmForKelas,
   } = useAdminDashboard();
 
   return (
     <>
       {/* ===================================================================== */}
-      {/* KONTROL SUB-TAB EKSKLUSIF MENU 06: LAPORAN & REKAP NILAI KELAS         */}
+      {/* KONTROL SUB-TAB EKSKLUSIF MENU 07: LAPORAN & REKAP NILAI KELAS         */}
       {/* ===================================================================== */}
       <div className="bg-white border border-purple-200/80 rounded-2xl p-2.5 shadow-2xs space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -96,7 +97,7 @@ export const AdminLaporanTab: React.FC = () => {
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                6A. Daftar Nilai &amp; Evaluasi Siswa ({filteredResults.length})
+                7A. Daftar Nilai &amp; Evaluasi Siswa ({filteredResults.length})
               </button>
               <button
                 type="button"
@@ -113,7 +114,7 @@ export const AdminLaporanTab: React.FC = () => {
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                6B. Statistik Sekolah &amp; Export
+                7B. Statistik Sekolah &amp; Export
               </button>
               <button
                 type="button"
@@ -130,7 +131,7 @@ export const AdminLaporanTab: React.FC = () => {
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                6C. Visualisasi Performa Kelas: LOTS vs HOTS
+                7C. Visualisasi Performa Kelas: LOTS vs HOTS
               </button>
               <button
                 type="button"
@@ -147,7 +148,7 @@ export const AdminLaporanTab: React.FC = () => {
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                6D. Rekapitulasi Per Kelas ({classAnalyticsData.perClass.length})
+                7D. Rekapitulasi Per Kelas ({classAnalyticsData.perClass.length})
               </button>
               <button
                 type="button"
@@ -164,12 +165,12 @@ export const AdminLaporanTab: React.FC = () => {
                     : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                6E. Analisis Per Kelas &amp; Per Soal
+                7E. Analisis Per Kelas &amp; Per Soal
               </button>
             </div>
           ) : (
             <span className="text-xs font-extrabold text-purple-950 px-2">
-              Sub-Tab Menu 06 Laporan &amp; Rekap Nilai
+              Sub-Tab Menu 07 Laporan &amp; Rekap Nilai
             </span>
           )}
           <div className="flex items-center gap-2">
@@ -198,10 +199,10 @@ export const AdminLaporanTab: React.FC = () => {
       </div>
 
       {/* ===================================================================== */}
-      {/* TAB 4: ANALISIS & DOWNLOAD HASIL UJIAN SISWA PER KELAS DAN SEMUANYA    */}
+      {/* TAB 7: ANALISIS & DOWNLOAD HASIL UJIAN SISWA PER KELAS DAN SEMUANYA    */}
       {/* ===================================================================== */}
       <div className="space-y-6">
-        {/* Panel Rekapitulasi Analisis & Download Per Kelas dan Semua Kelas (tampil hanya untuk sub-tab 6B/6C/6D) */}
+        {/* Panel Rekapitulasi Analisis & Download Per Kelas dan Semua Kelas (tampil hanya untuk sub-tab 7B/7C/7D) */}
         {(!isReportSummaryMinimized ||
           !isReportLotsHotsMinimized ||
           !isReportClassTableMinimized) && (
@@ -209,7 +210,7 @@ export const AdminLaporanTab: React.FC = () => {
             <div className="bg-gradient-to-r from-indigo-950 via-blue-900 to-slate-900 px-6 py-4 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                  Sub-Modul 5A &amp; 5B · Pusat Pelaporan &amp; Evaluasi Akademik Per Kelas
+                  Sub-Modul 7B–7D · Pusat Pelaporan &amp; Evaluasi Akademik Per Kelas
                 </div>
                 <h2 className="text-lg font-extrabold text-white mt-0.5">
                   Analisis Statistik, Grafik LOTS/HOTS &amp; Rekapitulasi Per Kelas
@@ -1022,7 +1023,7 @@ export const AdminLaporanTab: React.FC = () => {
                                       className={`inline-flex items-center px-2.5 py-1 rounded-lg border text-sm font-extrabold ${
                                         resItem.skor_angka >= 85
                                           ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                          : resItem.skor_angka >= 70
+                                          : resItem.skor_angka >= getKkmForKelas(st?.kelas || '')
                                             ? 'bg-blue-50 text-blue-800 border-blue-200'
                                             : resItem.skor_angka >= 55
                                               ? 'bg-amber-50 text-amber-800 border-amber-200'
@@ -1058,27 +1059,34 @@ export const AdminLaporanTab: React.FC = () => {
                                   )}
                                 </td>
                                 <td className="py-3.5 px-4 text-xs">
-                                  <div className="font-bold text-slate-800">
-                                    {resItem.analisis_ai?.kategori_nilai ||
-                                      (resItem.skor_angka >= 85
-                                        ? 'Sangat Baik (A)'
-                                        : resItem.skor_angka >= 70
-                                          ? 'Baik (B)'
-                                          : resItem.skor_angka >= 55
-                                            ? 'Cukup (C)'
-                                            : 'Perlu Bimbingan (D)')}
-                                  </div>
-                                  {hasAi ? (
-                                    <span className="text-[11px] text-emerald-700 font-semibold">
-                                      Evaluasi LOTS/HOTS Tersedia
-                                    </span>
-                                  ) : (
-                                    <span className="text-[11px] text-slate-500">
-                                      {resItem.skor_angka >= 70
-                                        ? 'Tuntas (≥70)'
-                                        : 'Perlu Remedial (<70)'}
-                                    </span>
-                                  )}
+                                  {(() => {
+                                    const rowKkm = getKkmForKelas(st?.kelas || '');
+                                    return (
+                                      <>
+                                        <div className="font-bold text-slate-800">
+                                          {resItem.analisis_ai?.kategori_nilai ||
+                                            (resItem.skor_angka >= 85
+                                              ? 'Sangat Baik (A)'
+                                              : resItem.skor_angka >= rowKkm
+                                                ? 'Baik (B)'
+                                                : resItem.skor_angka >= 55
+                                                  ? 'Cukup (C)'
+                                                  : 'Perlu Bimbingan (D)')}
+                                        </div>
+                                        {hasAi ? (
+                                          <span className="text-[11px] text-emerald-700 font-semibold">
+                                            Evaluasi LOTS/HOTS Tersedia
+                                          </span>
+                                        ) : (
+                                          <span className="text-[11px] text-slate-500">
+                                            {resItem.skor_angka >= rowKkm
+                                              ? `Tuntas (≥${rowKkm})`
+                                              : `Perlu Remedial (<${rowKkm})`}
+                                          </span>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
                                 </td>
                                 <td className="py-3.5 px-4 text-right">
                                   <div className="inline-flex items-center justify-end gap-2">
@@ -1126,7 +1134,7 @@ export const AdminLaporanTab: React.FC = () => {
                                               resItem.analisis_ai?.kategori_nilai ||
                                               (resItem.skor_angka >= 85
                                                 ? 'Sangat Baik (A)'
-                                                : resItem.skor_angka >= 70
+                                                : resItem.skor_angka >= getKkmForKelas(st?.kelas || '')
                                                   ? 'Baik (B)'
                                                   : resItem.skor_angka >= 55
                                                     ? 'Cukup (C)'

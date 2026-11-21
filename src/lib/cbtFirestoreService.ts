@@ -3674,11 +3674,6 @@ export async function upsertExamLiveSessionParticipantCbt(params: {
           exam_id: numExamId,
           judul_ujian: String(params.judulUjian || `Ujian #${numExamId}`).slice(0, 200),
           updatedAt: nowIso,
-          activeCount: 0,
-          finishedCount: 0,
-          blockedCount: 0,
-          notStartedCount: 0,
-          totalViolations: 0,
           participants: {
             [String(params.participant.student_id)]: params.participant,
           },
